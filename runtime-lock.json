@@ -1,0 +1,13 @@
+{
+  "electronVersion": "44.9.0",
+  "archive": "electron-v44.9.0-win32-x64.zip",
+  "sha256": "88e08039d0ef359bab9f674e8051fa103bd8628ea7c5a5e1daaa610a8a0c6931",
+  "releaseUrl": "https://github.com/electron/electron/releases/tag/v44.9.0",
+  "platform": "win32-x64",
+  "verificationEnvironment": {
+    "node": "24.19.0",
+    "powershell": "7.6.5",
+    "playwright": "1.62.1"
+  },
+  "note": "Runtime archive is not stored in the repository. GUI verification uses an external Playwright installation; no npm dependencies are needed by application or core tests."
+}

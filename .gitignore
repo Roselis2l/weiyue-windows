@@ -1,0 +1,27 @@
+# Local user data and credentials
+**/data/
+**/.local-data/
+**/credentials/
+**/account-*.json
+**/cookies*.json
+**/tokens*.json
+**/credentials*.json
+**/.env
+**/.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+# Build inputs, outputs, local test evidence and backups
+/vendor/
+/node_modules/
+/dist/
+/dist-*/
+/artifacts/
+/reference-weiyue/
+**/*backup*/
+*.log
+*.dmp
+Thumbs.db
+Desktop.ini
+.DS_Store

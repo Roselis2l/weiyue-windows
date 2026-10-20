@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' app://media data:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>微阅</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="reading-state.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside class="sidebar" aria-label="工作区与群聊">
+      <div class="brand"><div class="brand-name">微阅</div><div class="brand-tagline">让有价值的对话留下来</div></div>
+      <div id="account-area" class="account-area"></div>
+      <nav id="navigation" class="navigation" aria-label="主导航"></nav>
+      <div class="sidebar-section-heading"><span>我的群聊</span><button id="manage-groups" class="icon-button" title="选择同步群聊" aria-label="选择同步群聊">＋</button></div>
+      <div id="group-list" class="group-list"></div>
+      <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span>本地优先 · 保留阅读位置</div><p>已登录群聊默认每 60 秒更新。<br>AI 和 Notion 仍由你主动确认。</p><button id="settings-button" class="settings-button">⚙<span>设置与连接</span><span class="trailing">↗</span></button></div>
+    </aside>
+    <main id="workspace" class="workspace" aria-label="群聊阅读工作台">
+      <header id="workspace-header" class="workspace-header"></header>
+      <div id="workspace-content" class="workspace-content"></div>
+    </main>
+    <aside id="inspector" class="inspector" aria-label="收藏与摘要工具"></aside>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="modal" class="modal" aria-labelledby="modal-title"></dialog>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "weiyue-windows",
+  "version": "1.1.8",
+  "description": "本地优先的 Windows 微博群聊阅读、收藏与时段摘要应用",
+  "main": "app/main.cjs",
+  "author": "WeiYue Windows contributors",
+  "license": "MIT",
+  "scripts": {"test": "node --test tests/*.test.cjs", "start": "electron ."},
+  "engines": {"node": ">=22"}
+}
