@@ -7,7 +7,7 @@ const {_electron}=require(playwrightPath);
 const root=path.resolve(__dirname,'..');
 const executablePath=process.argv[2]?path.resolve(process.argv[2]):path.join(root,'vendor/runtime/electron.exe');
 const packaged=!!process.argv[2];
-const evidence=path.join(root,'artifacts');fs.mkdirSync(evidence,{recursive:true});
+const evidence=path.resolve(process.env.WEIYUE_UI_OUTPUT||path.join(root,'artifacts'));fs.mkdirSync(evidence,{recursive:true});
 const dataDir=path.join(evidence,'ui-profile-'+Date.now());
 const readerAnchor=page=>page.evaluate(()=>{
  const scroll=document.querySelector('#message-scroll'),top=scroll.getBoundingClientRect().top;
@@ -54,10 +54,16 @@ const waitAnchorAtTop=(page,id)=>page.waitForFunction(id=>{
   await page.locator('#message-search').fill('不存在的验收关键词XYZ');await page.locator('#message-search').press('Enter');
   await page.waitForFunction(()=>document.querySelectorAll('article[data-message-id]').length===0);
   await page.locator('#message-search').fill('');await page.locator('#message-search').press('Enter');await page.waitForSelector('article[data-message-id]');
-  const member=await page.locator('#member-filter option').nth(1).getAttribute('value');await page.locator('#member-filter').selectOption(member);
+   await page.locator('#member-filter .member-picker-toggle').click();
+   const member=await page.locator('#member-filter input[type=checkbox]').first().inputValue();
+   assert.ok(member&&member!=='on','Member checkbox must expose the stable member ID as its value');
+   const memberValue=await page.evaluate(value=>CSS.escape(value),member);
+   const memberCheckbox=page.locator(`#member-filter input[type=checkbox][value="${memberValue}"]`);
+   await memberCheckbox.check();
   await page.waitForFunction(()=>document.querySelector('.read-meta')?.textContent.includes('已筛选'));
   const senders=await page.locator('article[data-message-id] .sender-name').allTextContents();assert.equal(new Set(senders).size,1);checks.push('Keyword and member filters');
-  await page.locator('#member-filter').selectOption('');await page.waitForFunction(()=>!document.querySelector('.read-meta')?.textContent.includes('已筛选'));
+   await memberCheckbox.uncheck();await page.waitForFunction(()=>!document.querySelector('.read-meta')?.textContent.includes('已筛选'));
+   await page.locator('#member-filter .member-picker-toggle').click();
   const beforeProgrammatic=(await page.evaluate(()=>window.api.call('state'))).readStates[state.groups[0].id].readThroughId;
   await page.locator('#message-scroll').evaluate(el=>el.scrollTop=600);await page.waitForTimeout(850);
   const readState=await page.evaluate(()=>window.api.call('state'));assert.ok(readState.readPositions[state.groups[0].id]);
@@ -83,8 +89,8 @@ const waitAnchorAtTop=(page,id)=>page.waitForFunction(id=>{
   checks.push('UI settings saved as encrypted credentials, no secret echo in IPC state');
   await application.evaluate(({net,dialog,ipcMain})=>{
     globalThis.__mockCalls=[];globalThis.__mockConfirms=[];globalThis.__mockViolations=[];globalThis.__mockNotionExports=[];
-    // Explicit decisions: AI cancel, AI 400, AI success, Notion export, Notion repeat.
-    globalThis.__mockDecisions=[0,1,1,1,1];
+    // AI retains native confirmation. Notion submits directly from its editor.
+    globalThis.__mockDecisions=[0,1,1];
     const ensure=(condition,label)=>{if(!condition){globalThis.__mockViolations.push(label);throw Error('Mock request contract: '+label);}};
     // Observation-only wrapper delegates the exact existing handler and response.
     // Capture the real first export snapshot, so the repeated-export assertion
@@ -193,7 +199,7 @@ const waitAnchorAtTop=(page,id)=>page.waitForFunction(id=>{
   await page.waitForSelector('#view-ai-summary');await page.locator('#view-ai-summary').click();await page.waitForSelector('#notion-load-targets');
   const afterAI=await page.evaluate(()=>window.api.call('summary.list'));assert.equal(afterAI.length,summariesBeforeAI+1);assert.equal(afterAI[0].mode,'ai');
   audit=await mockState();assert.equal(audit.confirms.length,3);assert.equal(audit.confirms[2].response,1);
-  assert.match(audit.confirms[2].detail,/实际模型 ID：gpt-6-astra/);assert.match(audit.confirms[2].detail,/每块生成上限：4096 token/);
+   assert.match(audit.confirms[2].detail,/实际模型 ID：gpt-6-astra/);assert.match(audit.confirms[2].detail,/每段生成上限：4096 token/);
   assert.match(audit.confirms[2].detail,/https:\/\/api\.openai\.com\/v1\/chat\/completions/);
   assert.equal(audit.calls.filter(call=>call.url==='http://127.0.0.1:9999/v1/chat/completions').length,1);
   assert.equal(audit.calls.filter(call=>call.url==='https://api.openai.com/v1/chat/completions').length,aiChunkCount);assert.deepEqual(audit.violations,[]);
@@ -201,9 +207,10 @@ const waitAnchorAtTop=(page,id)=>page.waitForFunction(id=>{
   checks.push('AI sends only after UI consent plus native confirmation (local mocked response)');
   checks.push('Explicitly renewed consent uses official resolved model and 4096-token budget without temperature, preserving the configured display name');
   aiAudit={summariesBeforeAI,summariesAfterAI:afterAI.length,aiChunkCount,safeAiError,requests:audit.calls,nativeConfirmations:audit.confirms,violations:audit.violations};
-  await page.locator('#notion-load-targets').click();await page.waitForSelector('#notion-target');await page.locator('#notion-preview').click();await page.waitForSelector('#notion-consent');
+  await page.locator('#notion-load-targets').click();await page.waitForSelector('#notion-target');await page.locator('#notion-preview').click();await page.waitForSelector('#notion-edit-body');
+  assert.equal(await page.locator('#notion-consent').count(),0);assert.equal(await page.locator('#notion-confirm-export').isDisabled(),false);
   let calls=await application.evaluate(()=>globalThis.__mockCalls);assert.equal(calls.filter(c=>c.url.endsWith('/pages')).length,0);
-  await page.screenshot({path:path.join(evidence,'notion-preview.png')});await page.locator('#notion-consent').check();await page.locator('#notion-confirm-export').click();await page.waitForFunction(()=>document.querySelector('#modal-title')?.textContent==='Notion 导出结果');
+  await page.screenshot({path:path.join(evidence,'notion-preview.png')});await page.locator('#notion-confirm-export').click();await page.waitForFunction(()=>document.querySelector('#modal-title')?.textContent==='Notion 导出结果');
   await page.getByRole('button',{name:'完成',exact:true}).click();
   const newest=(await page.evaluate(()=>window.api.call('summary.list')))[0];
   audit=await mockState();assert.equal(audit.notionExports.length,1);
@@ -211,10 +218,10 @@ const waitAnchorAtTop=(page,id)=>page.waitForFunction(id=>{
   assert.equal(originalNotionExport.confirmed,true);assert.match(originalNotionExport.sourceHash,/^[a-f0-9]{64}$/);
   assert.equal(originalNotionExport.draft.body,newest.body);assert.equal(originalNotionExport.draft.includeReferences,true);
   await page.evaluate(p=>window.api.call('notion.export',p),originalNotionExport);
-  calls=await application.evaluate(()=>globalThis.__mockCalls);assert.equal(calls.filter(c=>c.url.endsWith('/pages')).length,1);checks.push('Notion target selection, preview, consent and repeated-export idempotency (local mock)');
-  audit=await mockState();assert.equal(audit.confirms.length,5);assert.equal(audit.decisionsLeft,0);assert.deepEqual(audit.violations,[]);
+  calls=await application.evaluate(()=>globalThis.__mockCalls);assert.equal(calls.filter(c=>c.url.endsWith('/pages')).length,1);checks.push('Notion target selection, editable preview, direct submit and repeated-export idempotency (local mock)');
+  audit=await mockState();assert.equal(audit.confirms.length,3);assert.equal(audit.decisionsLeft,0);assert.deepEqual(audit.violations,[]);
   assert.equal(audit.notionExports.length,2);assert.deepEqual(audit.notionExports[1],originalNotionExport);
-  assert.ok(audit.confirms.slice(3).every(confirm=>confirm.response===1&&confirm.message==='向所选 Notion 页面导出编辑内容'&&confirm.detail.includes(originalNotionExport.targetId)&&confirm.detail.includes(originalNotionExport.draft.title)));
+  assert.ok(audit.confirms.every(confirm=>!confirm.message.includes('Notion')),'Notion must not request a second native confirmation');
   aiAudit.totalNativeConfirmations=audit.confirms.length;aiAudit.totalMockRequests=audit.calls.length;
   const fixture=path.join(evidence,'ui-import.json');fs.writeFileSync(fixture,JSON.stringify({groups:[{id:'custom-group',name:'注入测试（虚构）',selected:true}],messages:[{id:'custom-id',groupId:'custom-group',senderId:'u',senderName:'Mock',time:Date.now()-1000,text:'<img src=x onerror="window.injected=true">'}]}));
   await application.evaluate(({dialog},file)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[file]});},fixture);

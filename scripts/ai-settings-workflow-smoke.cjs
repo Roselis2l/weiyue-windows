@@ -67,6 +67,7 @@ function boot(fixtures) {
   ipcMain.handle = (channel, handler) => originalHandle(channel, (event, action, payload) => {
     if (channel === 'weiyue:call' && ['settings.save', 'settings.ai.save', 'ai.providers', 'summary.ai'].includes(action)) {
       audit.actions.push({ action, providerId: payload?.providerId, keyAction: payload?.keyAction,
+        aiVisionMode: payload?.aiVisionMode,
         hasTypedKey: !!payload?.aiKey, includesAiFields: ['endpoint', 'model', 'aiKey'].some(key => Object.hasOwn(payload || {}, key)) });
     }
     return handler(event, action, payload);
@@ -133,7 +134,7 @@ async function screenshotLayouts(label) {
     });
     assert.ok(geometry.documentWidth <= geometry.viewport.width + 2);
     assert.ok(geometry.modal.left >= -2 && geometry.modal.right <= geometry.viewport.width + 2);
-    for (const selector of ['#ai-provider', '#ai-key', '#ai-model', '#save-ai-config']) {
+    for (const selector of ['#ai-provider', '#ai-key', '#ai-model', '#ai-vision-mode', '#save-ai-config']) {
       await page.locator(selector).scrollIntoViewIfNeeded();
       assert.ok(await page.locator(selector).evaluate(element => {
         const r = element.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(15, r.height / 2));
@@ -177,6 +178,26 @@ async function screenshotLayouts(label) {
     }), 'Provider, API key and model fields must follow the requested order');
     check('Eight offline provider presets plus custom retain the required order and destinations; legacy settings open as custom without rewriting values');
 
+    assert.equal(await page.locator('#ai-vision-mode').inputValue(), 'auto');
+    assert.deepEqual(await page.locator('#ai-vision-mode option').evaluateAll(options => options.map(option => option.value)), ['auto', 'enabled', 'disabled']);
+    await page.locator('#ai-vision-mode').selectOption('enabled');
+    await page.locator('#ai-model').fill('different/vision-model');
+    assert.equal(await page.locator('#ai-vision-mode').inputValue(), 'auto', 'A visual declaration must not follow an edited model');
+    await page.locator('#ai-model').fill(fixture.legacyModel);
+    await page.locator('#ai-vision-mode').selectOption('enabled');
+    await page.locator('#ai-endpoint').fill('https://different-vision.example/v1');
+    assert.equal(await page.locator('#ai-vision-mode').inputValue(), 'auto', 'A visual declaration must not follow an edited endpoint');
+    await page.locator('#ai-endpoint').fill(fixture.legacyEndpoint);
+    await page.locator('#ai-vision-mode').selectOption('enabled');
+    await page.locator('#ai-provider').selectOption('openai');
+    assert.equal(await page.locator('#ai-vision-mode').inputValue(), 'auto', 'A visual declaration must not follow a different provider');
+    await page.locator('#ai-provider').selectOption('custom');
+    assert.equal(await page.locator('#ai-endpoint').inputValue(), fixture.legacyEndpoint);
+    assert.equal(await page.locator('#ai-model').inputValue(), fixture.legacyModel);
+    assert.deepEqual((await state()).settings, initial.settings);
+    observations.push({ kind: 'vision-reset', changedFields: ['model', 'endpoint', 'provider'], declarationBefore: 'enabled', declarationAfter: 'auto', storageUntouched: true });
+    check('Real vision selector defaults legacy settings to auto and resets enabled on every model, endpoint and provider change without changing storage');
+
     assert.equal(await page.locator('#ai-key').inputValue(), ''); assert.equal(await page.locator('#ai-key').getAttribute('type'), 'password');
     assert.equal(await page.locator('#toggle-ai-key').isDisabled(), true);
     await page.locator('#ai-key').fill('AI-SETTINGS-TYPED-ONLY-DUMMY'); await page.locator('#toggle-ai-key').click();
@@ -213,11 +234,14 @@ async function screenshotLayouts(label) {
     await page.locator('#ai-model').fill(''); assert.equal(await page.locator('#save-ai-config').isDisabled(), true);
     await page.locator('#ai-model').fill('any/vendor-model:2026.10');
     assert.equal(await page.locator('#save-ai-config').isDisabled(), false);
+    await page.locator('#ai-vision-mode').selectOption('enabled');
     await screenshotLayouts('legacy-custom-editor');
     await page.locator('#save-ai-config').click(); await page.waitForSelector('#notion-token');
     assert.equal(await page.locator('#notion-token').inputValue(), fixture.draftNotion);
     let configured = await state(); assert.equal(configured.settings.model, 'any/vendor-model:2026.10'); assert.equal(configured.settings.aiProviderId, 'custom');
+    assert.equal(configured.settings.aiVisionMode, 'enabled');
     audit = await safeAudit(); assert.equal(audit.vault.legacyKeyUnchanged, true); assert.equal(audit.vault.savedNotionUnchanged, true);
+    assert.equal(audit.actions.filter(item => item.action === 'settings.ai.save').at(-1).aiVisionMode, 'enabled');
     assert.deepEqual(audit.vault.scope, { providerId: 'custom', endpoint: 'https://legacy-ai.example/v1/chat/completions' });
     check('Explicit same-scope AI save accepts a freely entered model, binds the legacy key only then, and leaves unsaved Notion text uncommitted');
     const aiSettings = configured.settings;
@@ -228,6 +252,7 @@ async function screenshotLayouts(label) {
     check('Saving outer Notion-only settings preserves all AI fields and submits no accidental blank AI values');
 
     await openSettings(); await openAI(); await page.locator('#ai-provider').selectOption('openai');
+    assert.equal(await page.locator('#ai-vision-mode').inputValue(), 'auto');
     await page.locator('#ai-model').fill('gpt-6-astra');
     assert.equal(await page.locator('#save-ai-config').isDisabled(), true);
     await rejected('settings.ai.save', { providerId: 'openai', endpoint: providers[0].endpoint, model: 'gpt-6-astra', keyAction: 'keep' });
@@ -255,11 +280,24 @@ async function screenshotLayouts(label) {
     // existing key without making a service request.
     await api('settings.ai.save', { providerId: 'custom', endpoint: 'https://custom-one.example/v1/chat/completions/',
       model: 'unlisted/free-model:final', keyAction: 'keep' });
+    assert.equal((await state()).settings.aiVisionMode, 'auto');
+    await openSettings(); await openAI();
+    assert.equal(await page.locator('#ai-vision-mode').inputValue(), 'auto');
+    // The direct IPC normalization assertion above intentionally does not drive
+    // the renderer's local model. Enter the final model through the UI before
+    // declaring its vision capability, exactly as a user would.
+    await page.locator('#ai-model').fill('unlisted/free-model:final');
+    assert.equal(await page.locator('#ai-vision-mode').inputValue(), 'auto');
+    await page.locator('#ai-vision-mode').selectOption('enabled');
+    await page.locator('#save-ai-config').click(); await page.waitForSelector('#notion-token');
+    await closeSettings();
     const finalSettings = (await state()).settings, finalVault = (await safeAudit()).vault;
+    assert.equal(finalSettings.aiVisionMode, 'enabled');
     assert.deepEqual(finalVault.scope, { providerId: 'custom', endpoint: 'https://custom-one.example/v1/chat/completions' });
     assert.equal(finalVault.ciphertextContainsDummyText, false); assert.equal(finalVault.draftNotionSaved, true);
     assert.ok(!JSON.stringify(await state()).includes('AI-SETTINGS-'));
     check('Equivalent normalized completion URL retains the same scoped key; credentials remain encrypted with no IPC secret echo');
+    check('Explicit vision declaration is saved through actual UI and IPC only for the currently selected model after model edits reset to auto');
 
     // Tamper only the synthetic fixture's stored destination to verify generation
     // validates encrypted key scope before any native consent or network.
@@ -280,8 +318,9 @@ async function screenshotLayouts(label) {
     await openSettings(); await openAI();
     assert.equal(await page.locator('#ai-key').inputValue(), ''); assert.equal(await page.locator('#toggle-ai-key').isDisabled(), true);
     assert.equal(await page.locator('#ai-model').inputValue(), 'unlisted/free-model:final');
+    assert.equal(await page.locator('#ai-vision-mode').inputValue(), 'enabled');
     await backToSettings(); await closeSettings();
-    check('Actual restart preserves explicit model, endpoint, encrypted key scope and Notion token without revealing the saved key');
+    check('Actual restart preserves explicit model, endpoint, vision declaration, encrypted key scope and Notion token without revealing the saved key');
     assert.deepEqual(errors, []);
     assert.equal((await safeAudit()).networkAttempts.length, 0);
   } catch (error) {

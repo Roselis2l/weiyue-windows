@@ -5,20 +5,26 @@
 // All account content is rendered as text. Only the isolated preload can call the host.
 const $ = (id) => document.getElementById(id);
 const reading = window.WeiyueReading;
+const links = window.WeiyueLinks;
+const emoticons = window.WeiyueEmoticons.create({manifest:window.WeiyueEmoticonManifest,links});
+emoticons.installCopyHandler(document);
+const filters = window.WeiyueFilters;
+const syncDisplay = window.WeiyueSyncStatus;
+function emptyFilters() {return {keyword:'',senderIds:[],start:'',end:'',importantOnly:false};}
 const model = {
   state: { accounts: [], groups: [], stats: {}, readPositions: {}, importantMembers: [], settings: {}, credentials: {} },
   view: 'read', groupId: null, messages: [], total: 0, offset: 0, limit: 160,
   members: [], selected: new Set(), inspected: null, bookmarks: [], summaries: [],
-  summary: null, preview: null, targets: [], targetId: '', bookmarkQuery: '', bookmarkSelected: new Set(), aiRequest: null, aiRequestSequence: 0,
-  filters: { keyword: '', senderId: '', start: '', end: '', importantOnly: false },
-  searchEditor: null, filterReturn: null,
+  summary: null, summaryDeletion: null, preview: null, targets: [], targetId: '', bookmarkQuery: '', bookmarkSelected: new Set(), aiRequest: null, aiRequestSequence: 0,
+  filters: emptyFilters(),
+  searchEditor: null, filterReturn: null, readNavigation: null,
   advanced: false, range: todayRange(), busy: 0, readTimer: null, queryVersion: 0,
   pending: new Set(), toastTimer: null, saveNote: '', saveTags: '', accountEpoch: 0, switching: false,
   modalCloseHandler: null, viewport: null, restoring: false, restoreFrame: null,
   renderedReading: null, readBoundary: null, layoutVersion: 0, intentVersion: 0, scrollTop: 0, pointerScrolling: false, touchY: null,
   pointerReading: null, readingActivity: null, readingCommits: new Map(), pendingReadingRefresh: null, pendingReadingTimer: null,
   messageObserver: null, drafts: new Map(), readWrite: Promise.resolve(), lastReadPayload: '',
-  syncStatus: null, syncRevision: null, polling: false, pollTimer: null, refreshRunning: false,
+  syncStatus: null, syncRevision: null, polling: false, pollTimer: null, refreshRunning: false, manualSync: false,
   messageSignatures: new Map(), closing: false, enrichmentAttempted: new Set(), enrichmentErrors: new Map(), enriching: false, enrichmentRetryTimer: null
 };
 const readIntent = reading.createReadIntentGate();
@@ -66,6 +72,41 @@ function currentGroup() { return model.state.groups.find(g => String(g.id) === S
 function groupName(id) { return model.state.groups.find(g => String(g.id) === String(id))?.name || '群聊'; }
 function accountKind() { return model.state.account?.kind; }
 function isImportant(id) { return (model.state.importantMembers || []).some(x => String(typeof x === 'object' ? x.id : x) === String(id)); }
+const avatarStates=new WeakMap();
+const AVATAR_FAILURE_COOLDOWN_MS=60000;
+function safeAvatarSource(value,kind,id) {
+  // Chromium may canonicalize away userinfo on a registered custom scheme.
+  if(typeof value!=='string' || !value.startsWith('app://avatar/') || value.length>4096 || /[\s\\\u0000-\u001f\u007f]/.test(value))return '';
+  try{
+    const url=new URL(value),parts=url.pathname.split('/').slice(1);
+    if(url.protocol!=='app:' || url.hostname!=='avatar' || url.username || url.password || url.port || url.search || url.hash)return '';
+    return parts.length===4 && parts.every(Boolean) && parts[1]===kind && String(id??'') && decodeURIComponent(parts[2])===String(id)?url.href:'';
+  }catch{return '';}
+}
+function avatarIdentity(kind,id) {return JSON.stringify([model.accountEpoch,model.state.account?.id,kind,kind==='member'?model.groupId:null,String(id??'')]);}
+function updateAvatar(host,{kind,id,name,source}) {
+  const owner=avatarIdentity(kind,id),src=safeAvatarSource(source,kind,id);
+  let letter=host.querySelector('.avatar-letter');
+  if(!letter){letter=node('span',{class:'avatar-letter'});host.append(letter);}
+  letter.textContent=Array.from(String(name|| (kind==='group'?'群':'?')))[0];
+  host.dataset.avatarId=String(id??'');host.dataset.avatarKind=kind;
+  const previous=avatarStates.get(host);
+  if(previous?.owner===owner && previous.source===src && (!previous.retryAt || Date.now()<previous.retryAt))return;
+  previous?.image?.remove();host.classList.remove('has-image');
+  const state={owner,source:src,image:null,retryAt:0};avatarStates.set(host,state);
+  if(!src)return;
+  const image=node('img',{class:'avatar-image',alt:'',width:kind==='group'?31:33,height:kind==='group'?31:33,loading:'lazy',decoding:'async',referrerpolicy:'no-referrer',draggable:'false'});
+  state.image=image;
+  const current=()=>avatarStates.get(host)===state && state.image===image;
+  image.addEventListener('load',()=>{if(current() && image.naturalWidth>0){image.classList.add('is-loaded');host.classList.add('has-image');}});
+  image.addEventListener('error',()=>{if(current()){image.remove();state.image=null;state.retryAt=Date.now()+AVATAR_FAILURE_COOLDOWN_MS;host.classList.remove('has-image');}});
+  host.append(image);image.src=src;
+}
+function avatarNode(className,options) {const host=node('span',{class:className,'aria-hidden':'true'});updateAvatar(host,options);return host;}
+function updateMessageAvatar(card,message) {
+  const avatar=card.querySelector('.avatar');if(!avatar)return;
+  updateAvatar(avatar,{kind:'member',id:message.senderId,name:message.senderName,source:message.senderAvatarSrc});
+}
 function noteText(warning) { return Array.isArray(warning) ? warning.join('\n') : typeof warning === 'object' && warning ? JSON.stringify(warning) : String(warning || ''); }
 function toast(message, error = false) {
   if(error && $('modal')?.open){reportError({message});return;}
@@ -133,9 +174,32 @@ function renderSidebar() {
   $('account-area').replaceChildren(selector, node('div', { class:'account-meta' }, node('span', {class:`mode-label${kind === 'demo' ? ' demo' : ''}`}, kind === 'demo' ? '演示数据 · 仅本机' : kind === 'import' ? '导入数据 · 仅本机' : kind === 'weibo' ? '微博账号 · 本机隔离' : '尚未连接'), button('官方登录', showLogin, 'text small', {id:'login-button'})), node('div', { class:'account-actions' }, button('体验演示', loadDemo, 'text small', {id:'demo-button'}), button('导入记录', importData, 'text small', {id:'import-button'})));
   const navs = [ ['read','◫','专注阅读',state.stats.messages], ['bookmarks','☆','价值收藏',state.stats.bookmarks], ['summaries','◷','时段摘要',state.stats.summaries] ];
   $('navigation').replaceChildren(...navs.map(([view, icon, label, count]) => node('button', {class:`nav-button${model.view === view ? ' active' : ''}`, 'aria-current':model.view===view?'page':null, 'data-view':view, onclick:()=>void run(`view-${view}`,()=>setView(view))}, node('span',{class:'nav-symbol','aria-hidden':'true'},icon),node('span',{},label),node('span',{class:'nav-count'},count || '—'))));
-  const groups = state.groups.filter(g => g.selected !== false);
-  $('group-list').replaceChildren(...(groups.length ? groups.map(g => node('button', {class:`group-item${String(g.id)===String(model.groupId)?' active':''}`, 'data-group-id':g.id, onclick:()=>void run('choose-group',()=>selectGroup(g.id))},node('span',{class:'group-avatar','aria-hidden':'true'},String(g.name || '群').slice(0,1)),node('span',{class:'group-copy'},node('span',{class:'group-name'},g.name),node('span',{class:'group-meta'},g.coverage?.newest ? `${fmt(g.coverage.newest,true)} 更新` : '等待阅读')),node('span',{class:'unread-badge',hidden:!Number(g.unreadCount),'aria-label':`${Number(g.unreadCount)||0} 条未读`},reading.unreadLabel(g.unreadCount)),String(g.id)===String(model.groupId)?node('span',{class:'group-selected-dot'}):null)) : [node('p',{class:'empty-sidebar'},'选择你想读的群聊，\n让信息回到自己的节奏。')]));
+  renderGroupList(state.groups.filter(g=>g.selected!==false));
   $('manage-groups').disabled = !state.account;
+}
+function renderGroupList(groups) {
+  const host=$('group-list'),owner=avatarIdentity('groups','');
+  const existing=host.dataset.avatarOwner===owner?new Map([...host.querySelectorAll('.group-item')].map(item=>[item.dataset.groupId,item])):new Map();
+  const children=groups.map(group=>{
+    const id=String(group.id),active=id===String(model.groupId);
+    let item=existing.get(id);
+    if(!item){
+      item=node('button',{'data-group-id':id,onclick:()=>void run('choose-group',()=>selectGroup(id))},
+        avatarNode('group-avatar',{kind:'group',id,name:group.name,source:group.avatarSrc}),
+        node('span',{class:'group-copy'},node('span',{class:'group-name'}),node('span',{class:'group-meta'})),
+        node('span',{class:'unread-badge'}),node('span',{class:'group-selected-dot'}));
+    }
+    item.className='group-item'+(active?' active':'');
+    updateAvatar(item.querySelector('.group-avatar'),{kind:'group',id,name:group.name,source:group.avatarSrc});
+    item.querySelector('.group-name').textContent=group.name;
+    item.querySelector('.group-meta').textContent=group.coverage?.newest?fmt(group.coverage.newest,true)+' 更新':'等待阅读';
+    const badge=item.querySelector('.unread-badge'),count=Number(group.unreadCount)||0;
+    badge.hidden=count===0;badge.textContent=reading.unreadLabel(count);badge.setAttribute('aria-label',count+' 条未读');
+    item.querySelector('.group-selected-dot').hidden=!active;
+    return item;
+  });
+  if(!children.length)children.push(node('p',{class:'empty-sidebar'},'选择你关心的群聊，\n把消息读回自己的节奏。'));
+  host.dataset.avatarOwner=owner;reconcileChildren(host,children);
 }
 function renderHeader() {
   const isRead = model.view === 'read';
@@ -143,18 +207,18 @@ function renderHeader() {
   const actions = [];
   if (isRead && model.groupId && accountKind() === 'weibo') {
     actions.push(button(model.syncStatus?.enabled===false?'恢复自动更新':'暂停自动更新',toggleAutoSync,'text small',{id:'auto-sync-toggle'}));
-    actions.push(button('同步最新',()=>sync(false),'soft',{id:'sync-latest'}));
-    actions.push(button('更早记录',()=>sync(true),'',{id:'sync-history'}));
+    actions.push(button('同步最新',()=>sync(false),'soft',{id:'sync-latest',title:'检查新消息，并从已保存的位置继续补齐离线消息；不跳转阅读位置。'}));
+    actions.push(button('更早历史',()=>sync(true),'',{id:'sync-history',title:'读取本机最早记录之前的历史；中间的离线缺口由“补齐离线消息”继续读取。'}));
   }
   actions.push(button('工具栏',()=>{$('app').classList.toggle('show-inspector');},'mobile-panel-toggle'));
-  $('workspace-header').replaceChildren(node('div',{class:'header-title-row'},node('h1',{title},title),node('div',{class:'header-actions'},actions)),node('div',{class:'header-info-row'},node('span',{id:'header-status',class:'header-status'}),node('p',{id:'sync-status-line',class:'sync-status-line',hidden:accountKind()!=='weibo'})));
+  $('workspace-header').replaceChildren(node('div',{class:'header-title-row'},node('h1',{title},title),node('div',{class:'header-actions'},actions)),node('div',{class:'header-info-row'},node('span',{id:'header-status',class:'header-status'}),node('div',{class:'sync-status-stack',hidden:accountKind()!=='weibo'},node('p',{id:'sync-status-line',class:'sync-status-line'}),node('p',{id:'sync-gap-line',class:'sync-gap-line'}))));
   updateBusy();
   renderSyncStatus();renderAiRequestStatus();
 }
 async function switchAccount(id) {
   await activateAccount('account.switch',{id});
 }
-function clearContext() { disposeSearchEditor();invalidateReadingIntent();model.accountEpoch++; model.queryVersion++;model.selected.clear(); model.inspected=null; model.preview=null; model.summary=null; model.summaries=[]; model.bookmarks=[];model.bookmarkSelected.clear();model.bookmarkQuery='';model.targets=[]; model.targetId=''; model.groupId=null; model.filters={keyword:'',senderId:'',start:'',end:'',importantOnly:false}; model.offset=0; model.saveNote='';model.saveTags='';model.viewport=null;model.lastReadPayload='';model.syncRevision=null;model.syncStatus=null;model.messageObserver?.disconnect();clearTimeout(model.readTimer); }
+function clearContext() { if(model.summaryDeletion){model.summaryDeletion=null;if($('modal').dataset.context==='summary-delete')closeModal();}disposeSearchEditor();invalidateReadingIntent();model.accountEpoch++; model.queryVersion++;model.selected.clear(); model.inspected=null; model.preview=null; model.summary=null; model.summaries=[]; model.bookmarks=[];model.bookmarkSelected.clear();model.bookmarkQuery='';model.targets=[]; model.targetId=''; model.groupId=null; model.filters=emptyFilters(); model.offset=0; model.saveNote='';model.saveTags='';model.viewport=null;model.lastReadPayload='';model.syncRevision=null;model.syncStatus=null;model.messageObserver?.disconnect();clearTimeout(model.readTimer); }
 async function activateAccount(action,payload={}) {
   if(model.switching)throw new Error('另一个工作区切换正在进行，请稍候。');
   cancelSearchWork();await flushReading(false);stashReadingDraft();
@@ -176,13 +240,10 @@ async function setView(view) {
   else if(view==='bookmarks') await loadBookmarks();
   else {model.summaries=await api('summary.list');renderSummaries();renderInspector();}
 }
-async function selectGroup(id) { disposeSearchEditor();await flushReading(false);stashReadingDraft();model.groupId=String(id);model.view='read';model.filters={keyword:'',senderId:'',start:'',end:'',importantOnly:false};model.selected.clear();model.inspected=null;model.summary=null;model.preview=null;model.offset=0;model.viewport=null;model.lastReadPayload='';restoreReadingDraft();renderSidebar();renderHeader();await loadReading(true); }
+async function selectGroup(id) { disposeSearchEditor();await flushReading(false);stashReadingDraft();model.groupId=String(id);model.view='read';model.filters=emptyFilters();model.selected.clear();model.inspected=null;model.summary=null;model.preview=null;model.offset=0;model.viewport=null;model.lastReadPayload='';restoreReadingDraft();renderSidebar();renderHeader();await loadReading(true); }
 function queryPayload() {
-  const f=model.filters; const payload={groupId:model.groupId,keyword:f.keyword,senderId:f.senderId,importantOnly:f.importantOnly,limit:model.limit,offset:model.offset};
-  if(f.start) payload.start=new Date(`${f.start}T00:00:00`).getTime();
-  if(f.end) { const d=new Date(`${f.end}T00:00:00`);d.setDate(d.getDate()+1);payload.end=d.getTime(); }
-  if(payload.start && payload.end && payload.start>=payload.end)throw new Error('结束日期不能早于开始日期。');
-  return payload;
+  const f=model.filters;
+  return {groupId:model.groupId,keyword:f.keyword,senderIds:f.senderIds,importantOnly:f.importantOnly,limit:model.limit,offset:model.offset,...filters.parseChinaMinuteRange(f.start,f.end)};
 }
 async function loadReading(restore=false, targetId=null, request=null) {
   if(request && !request.active())return;
@@ -234,7 +295,7 @@ function measuredMessages() {
   const throughOffset=boundary?.groupId===model.groupId && boundary.id===state?.readThroughId?boundary.offset:-1;
   return elements.map((element,index)=>{
     const box=element.getBoundingClientRect(),id=element.dataset.messageId;
-    const loaded=[...element.querySelectorAll('img')].every(img=>img.complete && (img.naturalWidth>0 || img.hidden));
+    const loaded=[...element.querySelectorAll('img:not(.avatar-image):not(.emoticon-image)')].every(img=>img.complete && (img.naturalWidth>0 || img.hidden));
     const ready=reading.mediaReadyForRead({loaded,alreadyRead:throughIndex>=index || throughOffset>=model.offset+index});
     return{id,top:box.top,bottom:box.bottom,ready};
   });
@@ -252,7 +313,7 @@ function readingContext() {return JSON.stringify([model.accountEpoch,model.state
 function readingOwner() {return JSON.stringify([model.accountEpoch,model.state.account?.id,model.groupId,model.queryVersion,model.view]);}
 function readingBusy() {
   const owner=readingOwner();
-  return searchEditing() || model.readingActivity?.owner===owner || (model.readingCommits.get(owner)||0)>0 ||
+  return searchEditing() || model.searchEditor?.memberPicker?.isInteracting() || !!model.readNavigation || model.readingActivity?.owner===owner || (model.readingCommits.get(owner)||0)>0 ||
     (model.pointerScrolling && model.pointerReading?.owner===owner && model.pointerReading.scroll===$('message-scroll'));
 }
 function queueReadingRefresh(force=true) {
@@ -319,7 +380,11 @@ function watchMessageSizes() {
   model.messageObserver.observe(scroll);
   scroll.querySelectorAll('[data-message-id]').forEach(element=>model.messageObserver.observe(element));
 }
-function messageSignature(message) {return JSON.stringify([message,isImportant(message.senderId),model.enrichmentErrors.get(enrichmentKey(message))]);}
+function messageSignature(message) {
+  // Decorative avatar metadata never changes chat text, tools or reading layout.
+  const {senderAvatarSrc,senderAvatarUrl,...content}=message;
+  return JSON.stringify([content,isImportant(message.senderId),model.enrichmentErrors.get(enrichmentKey(message))]);
+}
 function reconcileChildren(parent,children) {
   const desired=new Set(children);let cursor=parent.firstChild;
   for(const child of children){if(child!==cursor)parent.insertBefore(child,cursor);cursor=child.nextSibling;}
@@ -337,6 +402,7 @@ function patchMessageList(messages,anchor) {
     if(next!==day){children.push(days.get(next)||node('div',{class:'day-divider','data-day':next},dateLabel(message.time)));day=next;}
     const id=String(message.id),signature=messageSignature(message),previous=existing.get(id);
     const element=previous && model.messageSignatures.get(id)===signature ? previous:messageCard(message);
+      updateMessageAvatar(element,message);
     if(previous?.classList.contains('target'))element.classList.add('target');
     model.messageSignatures.set(id,signature);children.push(element);
   }
@@ -367,7 +433,7 @@ async function refreshReadingIncrementally(force=false) {
     if(force){const members=await api('members.list',{groupId});if(version===model.queryVersion && groupId===model.groupId){
       if(readingBusy()){queueReadingRefresh(force);return;}
       const changed=JSON.stringify(model.members)!==JSON.stringify(members || []);model.members=members || [];
-      const filter=$('member-filter');if(changed && filter){filter.replaceChildren(node('option',{value:''},'全部成员'),...model.members.map(member=>node('option',{value:member.id,selected:String(member.id)===String(model.filters.senderId)},member.name)));filter.value=model.filters.senderId;}
+      if(changed && isSearchEditorCurrent(model.searchEditor))updateSearchMembers(model.searchEditor);
     }}
   }finally{model.refreshRunning=false;scheduleReadingRefresh();}
 }
@@ -380,7 +446,7 @@ function isSearchEditorCurrent(editor) {
 }
 function searchEditing() {
   const editor=model.searchEditor;
-  return isSearchEditorCurrent(editor) && (editor.composing || editor.timer!==null || editor.applying ||
+  return isSearchEditorCurrent(editor) && (editor.composing || editor.invalidRange || editor.timer!==null || editor.applying ||
     editor.draft!==model.filters.keyword);
 }
 function cancelSearchWork(editor=model.searchEditor) {
@@ -388,7 +454,7 @@ function cancelSearchWork(editor=model.searchEditor) {
   clearTimeout(editor.timer);editor.timer=null;editor.revision++;
 }
 function disposeSearchEditor() {
-  cancelSearchWork();model.searchEditor=null;model.filterReturn=null;
+  cancelSearchWork();model.searchEditor?.memberPicker?.destroy();model.searchEditor=null;model.filterReturn=null;
 }
 function rememberUnfilteredViewport() {
   if(model.filterReturn?.owner===searchOwner() || !isCurrentReadingRendered() || model.renderedReading.filtered)return;
@@ -429,17 +495,16 @@ function bindSearchEditor(input,filter) {
   return editor;
 }
 function updateSearchMembers(editor) {
-  const signature=JSON.stringify(model.members),select=editor.filter.querySelector('#member-filter');
-  if(signature===editor.members || !select)return;
-  // Reuse the select and its first "all members" option as well as the IME input.
-  select.replaceChildren(select.firstChild,...model.members.map(member=>node('option',{value:member.id},member.name)));
-  select.value=editor.filters.senderId;editor.members=signature;
+  const signature=JSON.stringify(model.members);
+  if(signature===editor.members || !editor.memberPicker)return;
+  editor.memberPicker.setMembers(model.members);editor.members=signature;
 }
 function resetFilterControls(editor) {
   editor.input.value='';editor.draft='';editor.composing=false;
-  editor.filters={keyword:'',senderId:'',start:'',end:'',importantOnly:false};
-  const member=editor.filter.querySelector('#member-filter');if(member)member.value='';
-  editor.filter.querySelectorAll('input[type="date"]').forEach(input=>input.value='');
+  editor.filters=emptyFilters();
+  editor.memberPicker?.setSelected([]);
+  editor.filter.querySelectorAll('input[type="datetime-local"]').forEach(input=>input.value='');
+  const error=editor.filter.querySelector('#reading-filter-error');if(error){error.hidden=true;error.textContent='';}
   const important=editor.filter.querySelector('#important-filter');if(important)important.checked=false;
 }
 async function clearReadingFilters() {
@@ -455,10 +520,11 @@ function renderReading() {
   if(!isSearchEditorCurrent(model.searchEditor) || filter.parentNode!==host){
   disposeSearchEditor();
   const search=node('input',{type:'search',id:'message-search',class:'search-input',placeholder:'搜索当前群的消息…',value:model.filters.keyword,'aria-label':'搜索消息'});
-  const member=node('select',{class:'member-select',id:'member-filter','aria-label':'筛选成员',value:model.filters.senderId,onchange:e=>{void applyFilters({senderId:e.target.value});}},node('option',{value:''},'全部成员'),...model.members.map(m=>node('option',{value:m.id,selected:String(m.id)===String(model.filters.senderId)},m.name)));
-  const advanced=node('div',{class:'filter-extra',hidden:!model.advanced},field('开始日期',node('input',{type:'date',value:model.filters.start,'aria-label':'阅读开始日期',onchange:e=>{void applyFilters({start:e.target.value});}})),field('结束日期（含当日）',node('input',{type:'date',value:model.filters.end,'aria-label':'阅读结束日期',onchange:e=>{void applyFilters({end:e.target.value});}})),node('div',{class:'filter-check'},check('只看重点成员',model.filters.importantOnly,v=>{void applyFilters({importantOnly:v});},{id:'important-filter'})));
-  filter=node('div',{class:'filter-area',id:'reading-filters'},node('div',{class:'filter-row'},node('div',{class:'search-wrap'},node('span',{class:'search-symbol','aria-hidden':'true'},'⌕'),search),member,button(model.advanced?'收起筛选':'更多筛选',()=>{model.advanced=!model.advanced;advanced.hidden=!model.advanced;const btn=$('filter-toggle');btn.textContent=model.advanced?'收起筛选':'更多筛选';},'text small',{id:'filter-toggle'})),advanced);
-  bindSearchEditor(search,filter);
+  const member=node('div',{id:'member-filter'});
+  const advanced=node('div',{class:'filter-extra',hidden:!model.advanced},field('开始时间 · 北京时间',node('input',{type:'datetime-local',step:60,id:'reading-start',value:model.filters.start,'aria-label':'阅读开始时间（北京时间）',onchange:e=>{void applyFilters({start:e.target.value});}})),field('结束时间 · 含整分钟',node('input',{type:'datetime-local',step:60,id:'reading-end',value:model.filters.end,'aria-label':'阅读结束时间（北京时间）',onchange:e=>{void applyFilters({end:e.target.value});}})),node('div',{class:'filter-check'},check('只看重点成员',model.filters.importantOnly,v=>{void applyFilters({importantOnly:v});},{id:'important-filter'})));
+  filter=node('div',{class:'filter-area',id:'reading-filters'},node('div',{class:'filter-row'},node('div',{class:'search-wrap'},node('span',{class:'search-symbol','aria-hidden':'true'},'⌕'),search),member,button(model.advanced?'收起筛选':'更多筛选',()=>{model.advanced=!model.advanced;advanced.hidden=!model.advanced;const btn=$('filter-toggle');btn.textContent=model.advanced?'收起筛选':'更多筛选';},'text small',{id:'filter-toggle'})),advanced,node('p',{id:'reading-filter-error',class:'filter-error',role:'alert',hidden:true}));
+  const editor=bindSearchEditor(search,filter);
+  editor.memberPicker=filters.createMemberPicker({container:member,members:model.members,selectedIds:model.filters.senderIds,onChange:ids=>{if(isSearchEditorCurrent(editor))void applyFilters({senderIds:ids});},onInteraction:active=>{if(active)invalidateReadingIntent();else scheduleReadingRefresh();}});
   }
   updateSearchMembers(model.searchEditor);
   const meta=node('div',{class:'read-meta'},node('span',{id:'read-count'},`${model.total.toLocaleString()} 条消息${hasFilters()?' · 已筛选':''} · 时间正序`),node('span',{},hasFilters()?button('清除筛选',clearReadingFilters,'text small'):node('span',{},'阅读位置自动保存')));
@@ -469,11 +535,12 @@ function renderReading() {
   scroll.append(node('div',{id:'reading-end-space','aria-hidden':'true'}));
   const pagination=node('div',{class:'pagination'},button('↑ 更早一页',async()=>{await flushReading(false);model.offset=Math.max(0,model.offset-model.limit);await loadReading();},'',{id:'previous-page',disabled:model.offset===0}),node('span',{id:'page-position'},model.total?`${model.offset+1}–${Math.min(model.offset+model.messages.length,model.total)} / ${model.total}`:'暂无记录'),button('更多消息 ↓',async()=>{await flushReading(false);model.offset+=model.limit;await loadReading();},'',{id:'next-page',disabled:model.offset+model.messages.length>=model.total}));
   const unread=node('div',{id:'new-messages-notice',class:'new-messages-notice','aria-live':'polite'},node('span',{id:'new-messages-count'}),button('加载到最新',jumpToLatest,'primary small',{id:'jump-latest'}));
-  reconcileChildren(host,[filter,meta,scroll,selectionBar(),node('footer',{class:'reading-footer','aria-label':'翻页与未读消息'},pagination,unread)]);
+  const navigation=node('div',{class:'reading-navigation'},unread,button('最新已读位置',jumpToLatestRead,'soft small',{id:'jump-latest-read',title:'回到本群最新读到的消息；不会将后面的未读消息标为已读'}));
+  reconcileChildren(host,[filter,meta,scroll,selectionBar(),node('footer',{class:'reading-footer','aria-label':'翻页与阅读位置'},pagination,navigation)]);
   model.renderedReading={accountId:model.state.account.id,epoch:model.accountEpoch,groupId:model.groupId,version:model.queryVersion,filtered:hasFilters()};
   updateReadingSpace();updateReadChrome();
 }
-function hasFilters() { return Object.values(model.filters).some(Boolean); }
+function hasFilters(value=model.filters) {return !!(value.keyword || value.senderIds?.length || value.start || value.end || value.importantOnly);}
 async function applyFilters(changes=null,request=null) {
   const editor=request?.editor || model.searchEditor;
   if(!isSearchEditorCurrent(editor) || request && request.revision!==editor.revision)return;
@@ -482,7 +549,12 @@ async function applyFilters(changes=null,request=null) {
   if(editor.composing)return;
   const revision=editor.revision,nextFilters={...editor.filters,keyword:editor.draft};
   const active=()=>isSearchEditorCurrent(editor) && revision===editor.revision && !editor.composing;
-  const filtered=Object.values(nextFilters).some(Boolean),token={revision};
+  const error=editor.filter.querySelector('#reading-filter-error');
+  try{filters.parseChinaMinuteRange(nextFilters.start,nextFilters.end);}
+  catch(problem){editor.invalidRange=true;invalidateReadingIntent();if(error){error.replaceChildren(document.createTextNode(`${problem.message} 当前仍显示上次查询结果。 `),button('清除筛选',clearReadingFilters,'text small'));error.hidden=false;}return;}
+  editor.invalidRange=false;
+  if(error){error.hidden=true;error.textContent='';}
+  const filtered=hasFilters(nextFilters),token={revision};
   editor.applying=token;
   try{
     await run(`filter-messages-${editor.owner}-${revision}`,async()=>{
@@ -504,7 +576,7 @@ function messageCard(m) {
   const card=node('article',{class:`message${selected?' chosen':''}`, 'data-message-id':m.id});
   const cb=node('input',{type:'checkbox',class:'message-check',checked:selected,'aria-label':`选择 ${m.senderName} ${fmt(m.time)} 的消息`,onchange:e=>{if(e.target.checked)model.selected.add(String(m.id));else model.selected.delete(String(m.id));card.classList.toggle('chosen',e.target.checked);model.inspected=m;updateSelection();}});
   const tools=node('div',{class:'message-tools'},button('☆ 收藏',()=>{model.selected=new Set([String(m.id)]);model.inspected=m;updateSelection();$('app').classList.add('show-inspector');$('bookmark-note')?.focus();},'text small',{'aria-label':`收藏 ${m.senderName} 的消息`}),button(important?'★ 取消重点':'☆ 设为重点',async()=>{await api('important.set',{senderId:m.senderId,enabled:!important});await refreshState({background:true});await refreshReadingIncrementally(true);},`text small${important?' active':''}`),node('span',{class:'message-id'},`#${String(m.id).slice(-6)}`));
-  card.append(cb,node('div',{class:`avatar tone-${tone}`,'aria-hidden':'true'},String(m.senderName||'?').slice(0,1)),node('div',{class:'message-copy'},node('div',{class:'message-top'},node('span',{class:'sender-name'},m.senderName),node('span',{class:'message-time'},fmt(m.time)),important?node('span',{class:'important-marker'},'★ 重点'):null),renderMessageContent(m),tools));
+  card.append(cb,avatarNode(`avatar tone-${tone}`,{kind:'member',id:m.senderId,name:m.senderName,source:m.senderAvatarSrc}),node('div',{class:'message-copy'},node('div',{class:'message-top'},node('span',{class:'sender-name'},m.senderName),node('span',{class:'message-time'},fmt(m.time)),important?node('span',{class:'important-marker'},'★ 重点'):null),renderMessageContent(m),tools));
   return card;
 }
 function safeMediaSource(value) {
@@ -524,21 +596,15 @@ function imageGallery(images,message,caption='群聊图片') {
     image.addEventListener('error',()=>{loading.hidden=true;image.hidden=true;failure.hidden=false;});
     const retry=()=>{if(!src)return;image.hidden=false;failure.hidden=true;loading.hidden=false;const url=new URL(src);url.searchParams.set('retry',String(Date.now()));image.src=url.href;};
     failure.append(button('重试',retry,'small',{disabled:!src}),officialChatButton());
-    const open=node('button',{type:'button',class:'image-button','aria-label':`查看${caption}${index+1}原图`,onclick:()=>{if(original)showOriginalImage(original,`${caption} ${index+1}`,message);else reportError(new Error('这张图片没有可用的本机代理地址，请在官方页面查看。'));}},image);
+    const open=node('button',{type:'button',class:'image-button','aria-label':`查看${caption}${index+1}原图`,onclick:()=>{if(original)void run('查看原图',()=>showOriginalImage(original,`${caption} ${index+1}`,message));else reportError(new Error('这张图片没有可用的本机代理地址，请在官方页面查看。'));}},image);
     cell.append(open,loading,failure,node('figcaption',{class:'image-caption'},'点击查看原图'));
     if(src)image.src=src;else{loading.hidden=true;image.hidden=true;failure.hidden=false;}
     return cell;
   }));
 }
-function showOriginalImage(source,title,message) {
+async function showOriginalImage(source,title,message) {
   const src=safeMediaSource(source);if(!src)throw new Error('图片地址未通过本机代理检查。');
-  const status=node('p',{class:'image-viewer-status',role:'status'},'正在加载原图…');
-  const image=node('img',{class:'image-original',alt:title,decoding:'async',referrerpolicy:'no-referrer'});
-  const retry=()=>{status.textContent='正在加载原图…';status.hidden=false;image.hidden=false;const url=new URL(src);url.searchParams.set('retry',String(Date.now()));image.src=url.href;};
-  image.addEventListener('load',()=>{status.hidden=true;});
-  image.addEventListener('error',()=>{image.hidden=true;status.hidden=false;status.textContent='原图加载失败，可重试或在官方页面查看。';});
-  const body=node('div',{},node('div',{class:'image-viewer-frame'},image),status,node('p',{class:'caption'},`${message.senderName || '群聊分享'} · ${fmt(message.time,true)}`));
-  const dialog=modal(title,body,[button('重新加载',retry),officialChatButton(),button('关闭原图',closeModal,'primary')]);dialog.classList.add('image-viewer');image.src=src;
+  await api('image.open',{source:src,title,caption:`${message.senderName || '群聊分享'} · ${fmt(message.time,true)}`});
 }
 function isNotificationOnly(message) {
   if(!/^我发布了新微博[，,]\s*快来围观吧[！!]?$/.test(String(message.text || '').trim()))return false;
@@ -548,20 +614,28 @@ function isNotificationOnly(message) {
     post.text==='' && Array.isArray(post.images) && post.images.length===0 &&
     [post.id,post.url,post.author].every(value=>value===undefined || value===null || value==='') && !post.truncated;
 }
-function isLegacyShare(message) {return !isNotificationOnly(message) && !message.mediaVersion && /分享.*图片|我发布了新微博|分享.*微博/.test(message.text || '');}
+function isLegacyShare(message) {return !isNotificationOnly(message) && ((!message.mediaVersion && /分享.*图片|我发布了新微博|分享.*微博/.test(message.text || '')) || (!message.attachmentVersion && /^(?:文件消息|分享视频)$/.test((message.text || '').trim())));}
 function enrichmentKey(message) {return `${model.state.account?.id || ''}\u0000${message.groupId}\u0000${message.id}`;}
 function renderMessageContent(message) {
-  const content=node('div',{class:'message-content'},node('div',{class:'message-text'},message.text || ''));
+  const openLink=url=>void run('open-external-link',()=>api('external.open',{url}));
+  const content=node('div',{class:'message-content'},emoticons.appendText(node('div',{class:'message-text'}),message.text || '',openLink));
   if(message.images?.length)content.append(imageGallery(message.images,message));
+  for(const attachment of message.attachments || []){
+    const type=attachment.kind==='video'?'视频':attachment.kind==='pdf'?'PDF 文件':'文件';
+    const action=attachment.kind==='video'?'播放视频':'预览文件';
+    const info=[type,attachment.size?((attachment.size/1024/1024).toFixed(2)+' MB'):'',attachment.state==='needs-metadata'?'点击读取文件信息':''].filter(Boolean).join(' · ');
+    content.append(node('section',{class:'attachment-card'},node('div',{class:'attachment-copy'},node('strong',{},attachment.name || type),node('small',{},info)),button(action,()=>api('attachment.open',{source:attachment.src}),'small attachment-open',{'aria-label':action+' '+(attachment.name || type)}),node('span',{class:'attachment-save-hint'},'预览窗口内可另存原文件')));
+  }
   const post=message.sharedPost;
   if(post && !isNotificationOnly(message)){
     const cached=post.state!=='ready' && !!(post.text || post.images?.length);
     const card=node('section',{class:'shared-post'},node('div',{class:'shared-post-title'},node('strong',{},post.author || '分享的微博'),node('span',{},cached?'本地缓存':post.state==='ready'?'微博内容':'内容暂不可用')));
-    if(post.text)card.append(node('div',{class:'shared-post-text'},post.text));
+    if(post.text)card.append(emoticons.appendText(node('div',{class:'shared-post-text'}),post.text,openLink));
     if(post.images?.length)card.append(imageGallery(post.images,message,'微博配图'));
     if(post.state!=='ready')card.append(node('p',{class:'shared-post-warning'},`${cached?'这里保留的是本地缓存内容，当前原帖未确认可用。\n':''}${post.reason || '当前无法取得原微博内容，请通过原链接或官方页面核对。'}`));
     if(post.truncated)card.append(node('p',{class:'shared-post-warning'},'当前返回的微博正文可能不完整，请打开原微博查看全文。'));
-    if(post.url)card.append(button('打开原微博 ↗',()=>api('external.open',{url:post.url}),'text small'));
+    const originalLink=links.createLink(document,post.url,'打开原微博 ↗',openLink);
+    if(originalLink){originalLink.classList.add('post-original-link');card.append(originalLink);}
     if(post.state!=='ready' && post.url && accountKind()==='weibo')card.append(button('重试读取原文',()=>enrichMessages([message],true),'text small'));
     content.append(card);
   }
@@ -649,7 +723,7 @@ function handleReadingScroll() {
   const candidate=canAdvanceRead() && !hasFilters()?readIntent.scroll(readingContext(),scroll.scrollTop,performance.now(),model.viewport?.readThroughId):null;
   model.scrollTop=scroll.scrollTop;updateReadChrome();scheduleRead(candidate);
 }
-function canAdvanceRead() {return isCurrentReadingRendered() && !searchEditing() && document.visibilityState==='visible' && document.hasFocus() && !$('modal').open && !model.switching;}
+function canAdvanceRead() {return isCurrentReadingRendered() && !searchEditing() && !model.searchEditor?.memberPicker?.isInteracting() && !model.readNavigation && document.visibilityState==='visible' && document.hasFocus() && !$('modal').open && !model.switching;}
 function scheduleRead(candidate=null) {
   clearTimeout(model.readTimer);
   model.readTimer=setTimeout(()=>{void flushReading(candidate).catch(()=>{});void enrichVisibleMessages();},500);
@@ -715,7 +789,39 @@ function updateReadChrome() {
   if($('previous-page'))$('previous-page').disabled=model.offset===0;
   if($('next-page'))$('next-page').disabled=model.offset+model.messages.length>=model.total;
   const unread=Number(currentGroup()?.unreadCount)||0;
-  const notice=$('new-messages-notice');if(notice){notice.hidden=false;$('new-messages-count').textContent=`${unread} 条未读消息`;}
+  const notice=$('new-messages-notice');if(notice){notice.hidden=false;$('new-messages-count').textContent=`${unread} 条未读`;}
+  const latestRead=$('jump-latest-read');if(latestRead){latestRead.disabled=!!model.readNavigation || !model.state.readStates?.[model.groupId]?.readThroughId;latestRead.title=latestRead.disabled && !model.readNavigation?'本群还没有已读位置；正常向下阅读后自动保存。':'回到本群最新读到的消息；不会将后面的未读消息标为已读';}
+}
+async function jumpToLatestRead(event) {
+  if(!event?.isTrusted || model.readNavigation)return;
+  const groupId=model.groupId,epoch=model.accountEpoch,accountId=model.state.account?.id,version=model.queryVersion;
+  const editor=model.searchEditor;cancelSearchWork(editor);
+  const revision=editor?.revision,token={groupId,epoch};model.readNavigation=token;
+  const ownerActive=()=>model.readNavigation===token && groupId===model.groupId && epoch===model.accountEpoch && accountId===model.state.account?.id && model.view==='read' && !model.switching && !model.closing;
+  const active=()=>ownerActive() && version===model.queryVersion && (!editor || editor===model.searchEditor && revision===editor.revision);
+  updateReadChrome();
+  try{
+    await flushReading(false);await model.readWrite;if(!active())return;
+    const state=await api('state');if(!active() || state.account?.id!==accountId)return;
+    const target=state.readStates?.[groupId]?.readThroughId;
+    if(!target){toast('本群还没有已读位置，正常向下阅读后会自动保存。');return;}
+    const located=await api('messages.locate',{groupId,messageId:String(target)});if(!active())return;
+    if(!located?.message)throw new Error('这条已读消息尚未保存在本机，请补充同步后再试。');
+    const cleared=hasFilters() || hasFilters(editor?.filters) || !!editor?.draft;
+    model.state=state;disposeSearchEditor();model.filters=emptyFilters();
+    model.offset=reading.chooseWindow({anchorIndex:Number(located.offset),limit:model.limit}).offset;
+    const loaded=await loadReading(false,String(target),{active:ownerActive});
+    if(!loaded || !ownerActive() || loaded!==model.queryVersion)return;
+    updateUnreadBadges();
+    // Restore both layout frames before persisting only the viewport anchor.
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(!ownerActive() || loaded!==model.queryVersion)return;
+    await flushReading(false);
+    if(ownerActive())toast(cleared?'已清除筛选，返回最新已读位置。':'已返回最新已读位置。');
+  }finally{
+    if(model.readNavigation===token)model.readNavigation=null;
+    updateReadChrome();scheduleReadingRefresh();
+  }
 }
 async function jumpToLatest(event) {
   if(!event?.isTrusted)return;
@@ -725,7 +831,7 @@ async function jumpToLatest(event) {
   // The count is a snapshot. Messages arriving after it are outside this action.
   const first=await api('messages.query',{groupId,limit:1,offset:0});if(!active())return;
   const total=Number(first.total)||0;
-  disposeSearchEditor();model.filters={keyword:'',senderId:'',start:'',end:'',importantOnly:false};
+  disposeSearchEditor();model.filters=emptyFilters();
   const offset=reading.chooseWindow({total,limit:model.limit,latestRequested:true}).offset;
   invalidateReadingIntent();const jumpVersion=++model.queryVersion;
   const current=()=>groupId===model.groupId && epoch===model.accountEpoch && jumpVersion===model.queryVersion && model.view==='read';
@@ -745,17 +851,34 @@ async function jumpToMessage(ref) {
   await flushReading(false);stashReadingDraft();
   const groupId=String(ref.groupId || model.summary?.groupId || model.groupId);const messageId=String(ref.messageId || ref.id);
   const result=await api('messages.locate',{groupId,messageId});if(!result?.message)throw new Error('原文暂未保存在本机，请同步该时段后重试。');
-  disposeSearchEditor();model.groupId=groupId;model.view='read';model.filters={keyword:'',senderId:'',start:'',end:'',importantOnly:false};model.offset=Math.max(0,Number(result.offset)-25);model.selected.clear();model.inspected=null;model.summary=null;renderSidebar();renderHeader();await loadReading(false,messageId);toast('已定位到本机保存的原始消息。');
+  disposeSearchEditor();model.groupId=groupId;model.view='read';model.filters=emptyFilters();model.offset=Math.max(0,Number(result.offset)-25);model.selected.clear();model.inspected=null;model.summary=null;renderSidebar();renderHeader();await loadReading(false,messageId);toast('已定位到本机保存的原始消息。');
 }
-async function sync(history) { const result=await api('sync',{groupId:model.groupId,history});await refreshState({background:true});await refreshReadingIncrementally(true);model.preview=null;toast(`同步完成${result?.messages?.length!==undefined?`，本次读取 ${result.messages.length} 条记录`:result?.count!==undefined?`，新增 ${result.count} 条记录`:''}。`); }
+async function sync(history) {
+  if(model.manualSync)return;
+  const groupId=model.groupId;model.manualSync=true;renderSyncStatus();
+  try {
+    const result=await api('sync',{groupId,history});
+    await refreshState({background:true});await refreshReadingIncrementally(true);model.preview=null;
+    toast(syncDisplay.manualResult({history,added:result?.count,group:model.state.groups.find(g=>String(g.id)===String(groupId))}));
+  } catch(error) {
+    // A failed later page can still have saved progress. Display that state,
+    // but preserve the original failure rather than announcing success.
+    await refreshState({background:true}).catch(()=>{});
+    await refreshReadingIncrementally(true).catch(()=>{});
+    throw error;
+  } finally {model.manualSync=false;renderSyncStatus();}
+}
 function renderSyncStatus() {
   const line=$('sync-status-line');if(!line || accountKind()!=='weibo')return;
-  const status=model.syncStatus;
-  line.textContent=!status?'自动更新默认每 60 秒运行，阅读位置保持不变。':status.running?'正在后台更新群聊，阅读位置保持不变。':status.error?`更新暂缓：${status.error}`:status.pausedReason?`自动更新已暂停：${status.pausedReason}`:status.enabled===false?'自动更新已暂停，仍可手动同步。':`每 ${Math.round((status.intervalMs || 60000)/1000)} 秒自动更新${status.lastSuccessAt?` · 上次 ${fmt(status.lastSuccessAt)}`:''}`;
-  line.classList.toggle('has-error',!!status?.error);
-  const toggle=$('auto-sync-toggle');if(toggle)toggle.textContent=status?.enabled===false?'恢复自动更新':'暂停自动更新';
+  const status=model.syncStatus,automatic=syncDisplay.automaticStatus(status,{formatTime:time=>fmt(time)}),group=syncDisplay.groupStatus(currentGroup());
+  line.textContent=automatic.text;line.title=automatic.text;line.classList.toggle('has-error',automatic.tone==='warning');
+  const gap=$('sync-gap-line');if(gap){gap.textContent=group.text;gap.title=group.text;gap.classList.toggle('has-error',group.tone==='warning');}
+  const toggle=$('auto-sync-toggle');if(toggle)toggle.textContent=automatic.toggleLabel;
+  const rateWait=status?.errorCode==='RATE_LIMIT'&&Number.isFinite(status?.nextRunAt)&&status.nextRunAt>Date.now();
+  const latest=$('sync-latest');if(latest){latest.textContent=group.actionLabel;latest.disabled=model.manualSync||!!status?.running||rateWait;}
+  const history=$('sync-history');if(history)history.disabled=model.manualSync||!!status?.running||rateWait;
 }
-async function toggleAutoSync() {model.syncStatus=await api('sync.configure',{enabled:model.syncStatus?.enabled===false});renderSyncStatus();}
+async function toggleAutoSync() {model.syncStatus=await api('sync.configure',{enabled:model.syncStatus?.enabled===false||!!model.syncStatus?.blocked});renderSyncStatus();}
 async function pollUpdates() {
   if(model.polling || model.switching || model.closing)return;
   model.polling=true;
@@ -807,7 +930,7 @@ function summaryComposer() {
   const range=node('div',{class:'range-stack'},field('开始时间',node('input',{type:'datetime-local',id:'summary-start',value:model.range.start,onchange:e=>{model.range.start=e.target.value;model.preview=null;renderInspector();}})),endField);
   const card=node('section',{class:'tool-card'},node('div',{class:'tool-card-heading'},node('span',{class:'tool-card-symbol'},'◷'),'按时段回顾'),node('p',{},model.groupId?`当前群聊 · ${groupName(model.groupId)}`:'先在左侧选择一个群聊'),range,node('div',{class:'range-presets'},...['今天','昨天','近 7 天'].map((text,i)=>node('button',{type:'button',class:'chip',onclick:()=>{const now=new Date();now.setHours(0,0,0,0);let a=new Date(now),b=new Date(now);b.setDate(b.getDate()+1);if(i===1){a.setDate(a.getDate()-1);b=new Date(now);}if(i===2)a.setDate(a.getDate()-6);model.range={start:localInput(a),end:localInput(b)};model.preview=null;renderInspector();}},text))),button('检查时段与内容',previewSummary,'full',{id:'preview-summary',disabled:!model.groupId}));
   if(model.preview){const p=model.preview;card.append(node('div',{class:'preview-stats'},node('div',{class:'preview-stat'},node('strong',{},p.messageCount ?? p.messages?.length ?? 0),node('span',{},'条消息')),node('div',{class:'preview-stat'},node('strong',{},p.chunkCount ?? p.chunks?.length ?? 0),node('span',{},'个分段')),node('div',{class:'preview-stat'},node('strong',{},new Set((p.messages||[]).map(m=>m.senderId)).size+(p.messageCount>(p.messages?.length||0)?'+':'')),node('span',{},'位参与者'))),p.warning?node('div',{class:'warning'},noteText(p.warning)):null,button('查看待处理内容',showSummaryPreview,'text small'));}
-  card.append(button('生成本地摘录',()=>generateSummary(false),'primary full',{id:'generate-local',disabled:!model.groupId}),button('使用 AI 总结…',confirmAI,'full',{id:'generate-ai',disabled:!model.groupId || model.aiRequest?.status==='running'}),node('p',{class:'caption'},'本地摘录不联网。AI 总结仅在你确认后，将选定时段的文本发送至所配置服务。'));
+  card.append(button('生成本地摘录',()=>generateSummary(false),'primary full',{id:'generate-local',disabled:!model.groupId}),button('使用 AI 总结…',confirmAI,'full',{id:'generate-ai',disabled:!model.groupId || model.aiRequest?.status==='running'}),node('p',{class:'caption'},'AI 先准备本时段可读正文与图片，显示实际范围和遗漏；只有确认后才发送到所选服务。图片需要支持视觉的模型，可能额外计费。'));
   return card;
 }
 async function previewSummary() { model.preview=await api('summary.preview',getRange());renderInspector();if(!model.preview.messageCount)toast('这个时段没有本地消息，可调整时段或先同步记录。'); }
@@ -823,6 +946,7 @@ function renderAiRequestStatus() {
   const here=aiRequestBelongsHere(request);
   const message=!here?'另一工作区的 AI 请求正在处理中，请等待完成。':running?'AI 请求处理中：等待发送确认或服务返回，可以继续阅读。':request.status==='complete'?'AI 摘要已保存。':request.status==='detached'?'请求期间工作区已切换，请回原账号查看结果；不会自动重试。':request.error || '本次 AI 请求未完成，不会自动重试。';
   const actions=[];
+  if(here&&running)actions.push(button('取消请求',async()=>{await api('summary.ai.cancel',{requestId:request.requestId,previewId:request.previewId});toast('已请求取消；服务已接收的内容和费用无法撤回。');},'text small',{id:'cancel-ai-request'}));
   if(here && request.status==='complete')actions.push(button('查看摘要',async()=>{
     const epoch=model.accountEpoch;await flushReading(false);stashReadingDraft();if(epoch!==model.accountEpoch)return;
     model.summary=request.summary;model.groupId=request.summary.groupId;model.view='summaries';renderSidebar();renderHeader();renderSummary();renderInspector();
@@ -830,16 +954,16 @@ function renderAiRequestStatus() {
   if(!running)actions.push(button('关闭',()=>{if(model.aiRequest===request)model.aiRequest=null;renderAiRequestStatus();},'text small',{id:'dismiss-ai-status','aria-label':'关闭 AI 请求状态'}));
   header.append(node('div',{id:'ai-request-status',class:'ai-request-status '+request.status,role:'status','aria-live':'polite','aria-busy':String(running)},running?node('span',{class:'busy-indicator','aria-hidden':'true'}):null,node('span',{id:'ai-request-message'},message),...actions));
 }
-function startAiSummary(range) {
+function startAiSummary(range,preview) {
   if(model.aiRequest?.status==='running')return;
-  const request={sequence:++model.aiRequestSequence,status:'running',accountId:model.state.account?.id,epoch:model.accountEpoch,range:Object.freeze({...range}),error:'',summary:null};
+  const request={sequence:++model.aiRequestSequence,requestId:'send-'+Date.now()+'-'+model.aiRequestSequence,previewId:preview.previewId,status:'running',accountId:model.state.account?.id,epoch:model.accountEpoch,range:Object.freeze({...range}),error:'',summary:null};
   // Lock before closing the dialog or yielding: a second click cannot create a second request.
   model.aiRequest=request;closeModal();renderAiRequestStatus();
   void run('active-ai-request-'+request.sequence,async()=>{
     try{
       await flushReading(false);stashReadingDraft();
       if(request.epoch!==model.accountEpoch || request.accountId!==model.state.account?.id)throw new Error('工作区已切换');
-      const summary=await api('summary.ai',{...request.range,confirmed:true});
+      const summary=await api('summary.ai',{previewId:request.previewId,requestId:request.requestId,confirmed:true});
       request.summary=summary;request.status='complete';
       // Updating navigation never replaces the reading DOM or opens the result by itself.
       try{await refreshState();model.summaries=await api('summary.list');}catch{/* The returned summary is already saved; listing can be refreshed later. */}
@@ -851,11 +975,30 @@ function startAiSummary(range) {
 }
 async function confirmAI() {
   if(model.aiRequest?.status==='running'){renderAiRequestStatus();return;}
-  const range=getRange();const p=await api('summary.preview',range);model.preview=p;renderInspector();
   if(!model.state.credentials.ai || !model.state.settings.endpoint || !model.state.settings.model){showSettings();toast('请先配置 AI 服务地址、模型和 Key。',true);return;}
+  const range=getRange(),epoch=model.accountEpoch;
+  const preparation={requestId:'prepare-'+Date.now()+'-'+(++model.aiRequestSequence),canceled:false,previewId:null};
+  const cancelPreparation=async()=>{preparation.canceled=true;closeModal();await api('summary.ai.cancel',{requestId:preparation.requestId,previewId:preparation.previewId});};
+  modal('准备 AI 总结内容',node('div',{class:'ai-prepare-status',role:'status'},node('p',{},'正在核对选定时段的分享微博正文与图片…'),node('p',{class:'form-description'},'此步骤只读取本地记录及其中可访问的微博内容，不调用 AI。准备完成后会列出实际发送范围、模型和遗漏。')) ,[],{onClose:cancelPreparation,closeLabel:'取消准备'});
+  let p;
+  try{
+    p=await api('summary.ai.prepare',{...range,requestId:preparation.requestId});preparation.previewId=p.previewId;
+    if(preparation.canceled||epoch!==model.accountEpoch){await api('summary.ai.discard',{previewId:p.previewId});return;}
+  }catch(error){if(preparation.canceled)return;closeModal();throw error;}
+  model.preview=p;renderInspector();
   if(!p.messageCount)throw new Error('选定时段没有可发送的消息。');
-  let agreed=false;const send=button('确认发送并生成',()=>{if(!agreed)throw new Error('请先确认发送范围。');if(model.aiRequest?.status==='running')return;send.disabled=true;startAiSummary(range);},'primary',{id:'confirm-ai-send',disabled:true});
-  modal('确认发送至 AI 服务',node('div',{},node('p',{class:'form-description'},'这次操作会把选定消息的文本、成员显示名、时间与引用标记发送到你配置的服务。服务可能收费，且适用该服务的数据处理政策。'),node('div',{class:'preview-blocks'},`服务：${model.state.settings.endpoint}\n模型：${model.state.settings.model}\n群聊：${groupName(range.groupId)}\n时段：${fmt(range.start,true)} — ${fmt(range.end,true)}\n消息：${p.messageCount} 条；分段：${p.chunkCount} 个`),p.warning?node('div',{class:'warning'},noteText(p.warning)):null,node('details',{},node('summary',{},`展开前 ${(p.messages||[]).length} 条消息预览`),node('div',{class:'preview-blocks'},(p.messages||[]).map(m=>`${fmt(m.time,true)} ${m.senderName}\n${m.text}`).join('\n\n'))),node('div',{class:'form-section'},check('我确认发送以上时段的消息，并主动调用此 AI 服务',false,v=>{agreed=v;send.disabled=!v || model.aiRequest?.status==='running';},{id:'ai-consent'}))),[send]);
+  const scope=p.contentScope||{},omissions=scope.omissions||[];
+  let agreed=false;const send=button('确认发送并生成',()=>{if(!agreed)throw new Error('请先确认发送范围。');if(model.aiRequest?.status==='running')return;send.disabled=true;startAiSummary(range,p);},'primary',{id:'confirm-ai-send',disabled:true});
+  const cancelPreview=async()=>{closeModal();await api('summary.ai.discard',{previewId:p.previewId});};
+  modal('确认发送至 AI 服务',node('div',{},
+    node('p',{class:'form-description'},'将发送下列快照中的聊天与可读微博正文、成员显示名、时间、引用标记，以及实际准备好的图片字节。只发送到所列服务；不会隐式调用 OCR 或其他模型。'),
+    node('div',{class:'preview-blocks',id:'ai-content-scope'},`服务：${p.service.url}\n实际模型：${p.service.model}\n群聊：${groupName(range.groupId)}\n时段：${fmt(range.start,true)} — ${fmt(range.end,true)}\n聊天：${p.messageCount} 条；分享微博正文：${scope.postCount||0} 条\n实际图片：${scope.imageCount||0} 张（${((scope.imageBytes||0)/1024/1024).toFixed(2)} MiB）；重复图片：${scope.duplicateImages||0} 张\n请求分段：${p.chunkCount} 个；范围遗漏：${omissions.length} 项`),
+    node('p',{class:scope.vision?.supported?'form-description':'warning',id:'ai-vision-status'},scope.vision?.reason||p.service.vision?.reason||'请核对所选模型的图片能力。'),
+    node('div',{class:'warning',id:'ai-cost-notice'},scope.costNotice||'图片会额外消耗 token，具体费用由所选服务决定。每段最多生成 4096 token；本次不自动提高预算、重试或更换服务。'),
+    p.warning?node('div',{class:'warning'},noteText(p.warning)):null,
+    omissions.length?node('details',{open:true,id:'ai-omissions'},node('summary',{},`未完整纳入的内容 · ${omissions.length} 项`),node('div',{class:'preview-blocks'},omissions.map(item=>`[${item.label||item.messageId||'来源'}] ${item.kind==='post'?'微博正文':'图片'}：${item.reason}`).join('\n'))):node('p',{class:'caption'},'当前准备步骤未报告遗漏；这不代表群聊历史记录完整。'),
+    node('details',{},node('summary',{},`展开前 ${(p.messages||[]).length} 条正文预览`),node('div',{class:'preview-blocks'},(p.messages||[]).map(m=>`${fmt(m.time,true)} ${m.senderName}\n${m.text}`).join('\n\n'))),
+    node('div',{class:'form-section'},check('我已核对实际正文、图片与遗漏，确认发送并承担所选服务费用',false,v=>{agreed=v;send.disabled=!v || model.aiRequest?.status==='running';},{id:'ai-consent'}))),[send],{onClose:cancelPreview});
 }
 
 async function loadBookmarks() {model.bookmarks=await api('bookmark.list',{query:model.bookmarkQuery});renderBookmarks();renderInspector();}
@@ -894,18 +1037,123 @@ async function exportBookmarks(format) {const result=await api('export.bookmarks
 function renderSummaries() {
   const host=$('workspace-content');
   if(!model.summaries.length){host.replaceChildren(emptyState('给一段讨论，留一份回顾','在右侧选择群聊的起止时段，先检查覆盖情况，再生成本地摘录或调用自己的 AI 服务。',[button('打开摘要工具',()=>{$('app').classList.add('show-inspector');$('summary-start')?.focus();},'soft')]));return;}
-  const cards=model.summaries.slice().sort((a,b)=>b.createdAt-a.createdAt).map(s=>node('button',
-    {class:'summary-list-card','data-summary-id':s.id,onclick:()=>{model.summary=s;model.groupId=s.groupId;model.preview=null;renderSidebar();renderHeader();renderSummary();renderInspector();}},
-    node('div',{class:'card-meta'},node('span',{class:'card-group'},groupName(s.groupId)),node('span',{class:'live-badge'},s.mode==='local'?'本地摘录':'AI 摘要'),node('span',{},fmt(s.createdAt,true))),
-    node('h3',{},s.title),node('p',{class:'summary-excerpt'},s.body),
-    node('div',{class:'card-actions'},node('span',{class:'caption'},`${s.refs?.length || 0} 处原文引用　↗`))
+  const cards=model.summaries.slice().sort((a,b)=>b.createdAt-a.createdAt).map(s=>node('article',
+    {class:'summary-list-card','data-summary-id':s.id},
+    node('button',{type:'button',class:'summary-open','aria-label':`查看摘要：${s.title}`,onclick:()=>{model.summary=s;model.groupId=s.groupId;model.preview=null;renderSidebar();renderHeader();renderSummary();renderInspector();}},
+      node('div',{class:'card-meta'},node('span',{class:'card-group'},groupName(s.groupId)),node('span',{class:'live-badge'},s.mode==='local'?'本地摘录':'AI 摘要'),node('span',{},fmt(s.createdAt,true))),
+      node('h3',{},s.title),node('p',{class:'summary-excerpt'},s.body),
+      node('div',{class:'card-actions'},node('span',{class:'caption'},`${s.refs?.length || 0} 处原文引用　↗`))),
+    summaryDeleteButton(s)
   ));
   host.replaceChildren(node('div',{class:'view-toolbar'},node('span',{class:'caption'},`${model.summaries.length} 份已保存摘要 · 点击查看引用与导出`)),node('div',{class:'content-scroll'},cards));
+}
+function summaryDeleteButton(summary) {
+  const control=button('删除摘要',event=>confirmDeleteSummary(summary,event.currentTarget),'summary-delete',{
+    title:'删除摘要','aria-label':'删除摘要','data-action':'delete-summary','data-summary-id':summary.id,disabled:!!model.summaryDeletion
+  });
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  for(const [key,value] of Object.entries({viewBox:'0 0 24 24',width:'18',height:'18',fill:'none',stroke:'currentColor','stroke-width':'1.8','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true',focusable:'false'}))svg.setAttribute(key,value);
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+  path.setAttribute('d','M9 6V4h6v2M4 6h16M6 6l1 14h10l1-14M10 10v6M14 10v6');svg.append(path);
+  control.replaceChildren(svg);return control;
+}
+function updateSummaryDeleteButtons() {
+  document.querySelectorAll('.summary-delete').forEach(control=>{
+    control.disabled=!!model.summaryDeletion;
+    if(model.summaryDeletion?.saving)control.setAttribute('aria-busy','true');else control.removeAttribute('aria-busy');
+  });
+}
+function summaryDeleteContextCurrent(operation) {
+  return model.summaryDeletion===operation && !model.switching && model.accountEpoch===operation.epoch &&
+    model.state.account?.id===operation.accountId && model.view===operation.view &&
+    model.groupId===operation.viewGroupId && model.summary?.id===operation.detailId;
+}
+function validateSummaryDeletionResult(result,operation) {
+  if(!result || result.accountId!==operation.accountId || result.summaryId!==operation.summaryId || result.groupId!==operation.groupId ||
+     (!result.deleted&&!result.missing) || !Number.isInteger(result.summaryCount) || result.summaryCount<0)throw new Error('删除结果无法核对，请重新打开摘要列表检查。');
+}
+function applySummaryDeletion(result,operation) {
+  validateSummaryDeletionResult(result,operation);
+  const sameView=summaryDeleteContextCurrent(operation);
+  if(model.accountEpoch!==operation.epoch || model.state.account?.id!==operation.accountId)return;
+  model.summaries=model.summaries.filter(s=>s.id!==operation.summaryId);
+  model.state.stats.summaries=result.summaryCount;
+  if(model.summary?.id===operation.summaryId)model.summary=null;
+  if(model.aiRequest?.accountId===operation.accountId && model.aiRequest.summary?.id===operation.summaryId)model.aiRequest=null;
+  renderSidebar();renderHeader();
+  if(model.view==='summaries'&&!model.summary){
+    renderSummaries();renderInspector();
+    const scroll=$('workspace-content').querySelector('.content-scroll');
+    if(scroll)scroll.scrollTop=operation.scrollTop;
+    if(sameView){
+      const choices=[...document.querySelectorAll('.summary-open')];
+      (choices[Math.min(operation.cardIndex,choices.length-1)] || $('workspace-content').querySelector('.empty-actions button'))?.focus({preventScroll:true});
+    }
+  }
+  toast(result.deleted?'摘要已从本机删除。':'这份摘要已不存在，列表已更新。');
+}
+async function confirmDeleteSummary(summary,trigger) {
+  if(model.summaryDeletion)return;
+  const operation={accountId:model.state.account?.id,summaryId:String(summary.id),groupId:String(summary.groupId),
+    epoch:model.accountEpoch,view:model.view,viewGroupId:model.groupId,detailId:model.summary?.id,
+    scrollTop:$('workspace-content').querySelector('.content-scroll')?.scrollTop||0,
+    cardIndex:Math.max(0,[...document.querySelectorAll('.summary-list-card')].indexOf(trigger.closest('.summary-list-card'))),saving:false};
+  model.summaryDeletion=operation;updateSummaryDeleteButtons();
+  const release=()=>{
+    if(model.summaryDeletion===operation)model.summaryDeletion=null;
+    updateSummaryDeleteButtons();
+  };
+  const cancel=()=>{
+    if(operation.saving)return;
+    const restore=summaryDeleteContextCurrent(operation);closeModal();release();
+    if(restore&&trigger.isConnected)trigger.focus({preventScroll:true});
+  };
+  try{
+    const preview=await api('summary.delete.preview',{accountId:operation.accountId,summaryId:operation.summaryId,groupId:operation.groupId});
+    if(!summaryDeleteContextCurrent(operation)){release();return;}
+    if(preview.missing){applySummaryDeletion(preview,operation);release();return;}
+    if(preview.accountId!==operation.accountId || preview.summaryId!==operation.summaryId || preview.groupId!==operation.groupId || typeof preview.confirmationToken!=='string')throw new Error('无法核对所选摘要，请重新打开列表。');
+    const warning=node('p',{id:'summary-delete-warning',class:'form-description'},'仅删除这份本地摘要，不影响聊天记录、收藏或已经导出的 Notion 页面。删除后无法撤销。');
+    const status=node('p',{id:'summary-delete-status',class:'caption',role:'status','aria-live':'polite',hidden:true});
+    const confirm=button('删除摘要',async()=>{
+      if(operation.saving)return;
+      if(!summaryDeleteContextCurrent(operation)){cancel();throw new Error('当前工作区或摘要视图已变化，请重新选择要删除的摘要。');}
+      operation.saving=true;updateSummaryDeleteButtons();
+      const controls=[confirm,$('summary-delete-cancel'),$('modal').querySelector('.modal-head button')].filter(Boolean);
+      controls.forEach(control=>control.disabled=true);confirm.setAttribute('aria-busy','true');
+      status.hidden=false;status.textContent='正在删除本地摘要…';$('modal-error')?.remove();
+      try{
+        const result=await api('summary.delete',{accountId:operation.accountId,summaryId:operation.summaryId,groupId:operation.groupId,confirmationToken:preview.confirmationToken,confirmed:true});
+        validateSummaryDeletionResult(result,operation);
+        closeModal();try{applySummaryDeletion(result,operation);}finally{release();}
+      }catch(error){
+        status.textContent='未能确认删除结果。请关闭后重新打开摘要列表检查，再决定是否重试。';
+        reportError(error);
+        // A confirmation is single-use; a new preview is required before retrying.
+        confirm.dataset.used='true';
+        if(!$('modal').open || $('modal').dataset.context!=='summary-delete')release();
+      }finally{
+        operation.saving=false;controls.forEach(control=>control.disabled=false);
+        confirm.disabled=confirm.dataset.used==='true';confirm.removeAttribute('aria-busy');updateSummaryDeleteButtons();
+      }
+    },'danger',{id:'summary-delete-confirm'});
+    const dialog=modal('删除摘要？',node('div',{},node('p',{class:'summary-delete-title'},preview.title),warning,status),[confirm],{onClose:cancel});
+    dialog.setAttribute('data-context','summary-delete');
+    const cancelButton=$('modal-close');cancelButton.id='summary-delete-cancel';cancelButton.focus();
+  }catch(error){release();throw error;}
 }
 function summaryText(body, refs) {const fragment=document.createDocumentFragment();const regex=/\[(M\d+)\]/g;let previous=0;for(const match of String(body||'').matchAll(regex)){fragment.append(document.createTextNode(String(body).slice(previous,match.index)));const ref=refs.find(r=>r.label===match[1]) || refs[Number(match[1].slice(1))-1];if(ref)fragment.append(button(`[${match[1]}]`,()=>jumpToMessage(ref),'citation',{'aria-label':`查看原文引用 ${match[1]}`}));else fragment.append(document.createTextNode(match[0]));previous=match.index+match[0].length;}fragment.append(document.createTextNode(String(body||'').slice(previous)));return fragment;}
 function renderSummary() {
   const s=model.summary;if(!s)return renderSummaries();const refs=s.refs || [];
-  const doc=node('article',{class:'summary-document'},node('div',{class:'document-overline'},button('← 所有摘要',()=>{model.summary=null;renderHeader();renderSummaries();renderInspector();},'text small'),node('span',{class:'live-badge'},s.mode==='local'?'本地摘录 · 无联网':'AI 摘要 · 请核对原文')),node('h2',{class:'document-title'},s.title),node('div',{class:'document-meta'},`${groupName(s.groupId)}\n${fmt(s.start,true)} — ${fmt(s.end,true)}（结束不含）\n生成于 ${fmt(s.createdAt,true)} · ${refs.length} 条原文引用`),s.warning?node('div',{class:'warning'},noteText(s.warning)):null,node('div',{class:'summary-body'},summaryText(s.body,refs)),node('section',{class:'reference-list'},node('h3',{},'回到原始对话'),...refs.map((r,i)=>node('button',{class:'reference-item',onclick:()=>void run('jump-reference',()=>jumpToMessage(r))},node('span',{class:'reference-number'},r.label || `M${i+1}`),node('div',{class:'reference-copy'},node('p',{},r.text || '查看消息'),node('small',{},`${fmt(r.time,true)}　查看原文 ↗`))))));
+  const doc=node('article',{class:'summary-document','data-summary-id':s.id},node('div',{class:'document-overline'},button('← 所有摘要',()=>{model.summary=null;renderHeader();renderSummaries();renderInspector();},'text small'),node('div',{class:'document-summary-actions'},node('span',{class:'live-badge'},s.mode==='local'?'本地摘录 · 无联网':'AI 摘要 · 请核对原文'),summaryDeleteButton(s))),node('h2',{class:'document-title'},s.title),node('div',{class:'document-meta'},`${groupName(s.groupId)}\n${fmt(s.start,true)} — ${fmt(s.end,true)}（结束不含）\n生成于 ${fmt(s.createdAt,true)} · ${refs.length} 条原文引用`),s.warning?node('div',{class:'warning'},noteText(s.warning)):null,node('div',{class:'summary-body'},summaryText(s.body,refs)),node('section',{class:'reference-list'},node('h3',{},'回到原始对话'),...refs.map((r,i)=>node('button',{class:'reference-item',onclick:()=>void run('jump-reference',()=>jumpToMessage(r))},node('span',{class:'reference-number'},r.label || `M${i+1}`),node('div',{class:'reference-copy'},node('p',{},r.text || '查看消息'),node('small',{},`${fmt(r.time,true)}　查看原文 ↗`))))));
+  if(s.contentScope){
+    const scope=s.contentScope,omissions=Array.isArray(scope.omissions)?scope.omissions:[];
+    const details=node('details',{class:'summary-content-scope'},
+      node('summary',{},`本次发送范围：${scope.messageCount||0} 条消息 · ${scope.postCount||0} 条微博正文 · ${scope.imageCount||0} 张图片 · ${omissions.length} 项缺失`),
+      node('p',{class:'caption'},scope.vision?.reason||'按确认时的内容范围生成。'),
+      omissions.length?node('div',{class:'preview-blocks'},...omissions.map(item=>node('p',{},`${item.label||item.messageId||''} ${item.reason||'内容未提供'}`))):null);
+    doc.insertBefore(details,doc.querySelector('.summary-body'));
+  }
   $('workspace-content').replaceChildren(node('div',{class:'view-toolbar'},node('span',{class:'caption'},'摘要与引用已保存到本机'),button('导出 Markdown',async()=>{const result=await api('summary.export',{summaryId:s.id});if(!result?.canceled&&!result?.cancelled)toast('摘要与原文引用已导出。');},'small',{id:'export-summary'})),node('div',{class:'content-scroll'},doc));
 }
 function notionPanel() {
@@ -949,19 +1197,18 @@ async function openNotionEditor(source,targetId) {
   const targetTitle=model.targets.find(target=>target.id===targetId)?.title || targetId;
   const draft={title:String(preview.title || ''),body:String(preview.body || ''),includeReferences:preview.includeReferences!==false};
   const titleLimit=Number(preview.limits?.titleChars)||180,bodyLimit=Number(preview.limits?.bodyChars)||200000;
-  let agreed=false,saving=false;
+  let saving=false;
   const title=node('input',{id:'notion-edit-title',value:draft.title,maxlength:titleLimit,oninput:event=>{draft.title=event.target.value;updateSend();}});
   const body=node('textarea',{id:'notion-edit-body',class:'notion-body-editor',value:draft.body,maxlength:bodyLimit,rows:12,oninput:event=>{draft.body=event.target.value;updateCount();}});
   const count=node('small',{id:'notion-edit-count',class:'caption'});
   const referencePreview=node('details',{id:'notion-reference-preview',hidden:!draft.includeReferences},node('summary',{},'查看将附加的引用原文与本地定位'),node('div',{class:'preview-blocks'},preview.referencesText || '没有可附加的原文引用。'));
   const include=check('引用原文与本地定位',draft.includeReferences,enabled=>{draft.includeReferences=enabled;referencePreview.hidden=!enabled;},{id:'notion-include-references'});
-  const consent=check(`我确认将以上编辑内容导出到“${targetTitle}”`,false,enabled=>{agreed=enabled;updateSend();},{id:'notion-consent'});
   const status=node('p',{id:'notion-submit-status',class:'caption',role:'status','aria-live':'polite',hidden:true});
   const send=button('确认导出到 Notion',async()=>{
     if(saving)return;
-    if(!agreed || !draft.title.trim())throw new Error('请填写标题并确认导出目标。');
-    saving=true;updateSend();status.hidden=false;status.textContent='等待发送确认或 Notion 返回，请稍候…';
-    const fields=[title,body,include.querySelector('input'),consent.querySelector('input')];fields.forEach(field=>field.disabled=true);
+    if(!draft.title.trim())throw new Error('请填写页面标题。');
+    saving=true;updateSend();status.hidden=false;status.textContent='正在导出到 Notion，请稍候…';
+    const fields=[title,body,include.querySelector('input')];fields.forEach(field=>field.disabled=true);
     const close=$('modal-close');if(close)close.disabled=true;
     // Capture exactly what is displayed. Toggling references never rebuilds body.
     const payload={...source,targetId,sourceHash:preview.sourceHash,draft:{title:draft.title.trim(),body:draft.body,includeReferences:draft.includeReferences},confirmed:true};
@@ -972,10 +1219,10 @@ async function openNotionEditor(source,targetId) {
     }catch(error){status.textContent='导出未完成，编辑内容已保留。不会自动重试。';reportError(error);}
     finally{saving=false;fields.forEach(field=>field.disabled=false);if(close)close.disabled=false;updateSend();}
   },'primary',{id:'notion-confirm-export',disabled:true});
-  function updateSend(){send.disabled=saving || !agreed || !draft.title.trim();send.textContent=saving?'正在导出…':'确认导出到 Notion';}
+  function updateSend(){send.disabled=saving || !draft.title.trim();send.textContent=saving?'正在导出…':'确认导出到 Notion';}
   function updateCount(){count.textContent=`正文 ${draft.body.length.toLocaleString()} / ${bodyLimit.toLocaleString()} 字符`;}
-  updateCount();
-  modal('编辑 Notion 导出预览',node('div',{},node('p',{id:'notion-export-target',class:'form-description'},`目标：${targetTitle}\n${preview.resumeNotice?'将继续此目标下未完成的原页面。':'将以以下标题新建子页面，编辑仅用于本次导出。'}`),preview.contextText?node('div',{id:'notion-export-context',class:'notion-export-context'},preview.contextText):null,preview.resumeNotice?node('p',{id:'notion-resume-notice',class:'warning',role:'status'},preview.resumeNotice):null,field('页面标题',title),field('导出正文',body),count,node('p',{class:'caption'},'页面会附加导出标识，以便识别重复导出。'),node('div',{class:'notion-reference-option'},include,node('p',{class:'caption'},'取消勾选仅移除附加的原文与定位，保留你编辑的正文。'),referencePreview),node('div',{class:'form-section'},consent),status),[send],{onClose:()=>{if(!saving)closeModal();}});
+  updateCount();updateSend();
+  modal('编辑 Notion 导出预览',node('div',{},node('p',{id:'notion-export-target',class:'form-description'},`目标：${targetTitle}\n${preview.resumeNotice?'将继续此目标下未完成的原页面。':'将以以下标题新建子页面，编辑仅用于本次导出。'}\n点击“确认导出到 Notion”会立即提交以下编辑内容。`),preview.contextText?node('div',{id:'notion-export-context',class:'notion-export-context'},preview.contextText):null,preview.resumeNotice?node('p',{id:'notion-resume-notice',class:'warning',role:'status'},preview.resumeNotice):null,field('页面标题',title),field('导出正文',body),count,node('p',{class:'caption'},'页面会附加导出标识，以便识别重复导出。'),node('div',{class:'notion-reference-option'},include,node('p',{class:'caption'},'取消勾选仅移除附加的原文与定位，保留你编辑的正文。'),referencePreview),status),[send],{onClose:()=>{if(!saving)closeModal();}});
 }
 
 function aiProviderName(id) {
@@ -1031,6 +1278,10 @@ async function showAiConfiguration(settingsDraft) {
   const providerSelect=node('select',{id:'ai-provider','aria-label':'模型厂商'},...providers.flatMap(provider=>[provider.custom?node('option',{value:'',disabled:true},'──────────'):null,node('option',{value:provider.id,selected:provider.id===providerId},provider.name)]));
   const aiKey=node('input',{id:'ai-key',type:'password',autocomplete:'new-password',placeholder:'输入此服务的 API Key',maxlength:8192});
   const modelInput=node('input',{id:'ai-model',value:settings.model || '',placeholder:'填写服务商支持的 API 模型名称',autocomplete:'off',maxlength:200});
+  const visionSelect=node('select',{id:'ai-vision-mode','aria-label':'图片理解能力'},
+    node('option',{value:'auto',selected:!settings.aiVisionMode||settings.aiVisionMode==='auto'},'自动识别已知官方视觉模型'),
+    node('option',{value:'enabled',selected:settings.aiVisionMode==='enabled'},'我确认此模型支持兼容协议的图片输入'),
+    node('option',{value:'disabled',selected:settings.aiVisionMode==='disabled'},'仅发送文本，不发送图片'));
   const endpoint=node('input',{id:'ai-endpoint',type:'url',value:customEndpoint,placeholder:'https://你的服务地址/v1',autocomplete:'off',maxlength:2048});
   const keyHint=node('small',{id:'ai-key-guidance',class:'inline-help'});
   const eye=node('span',{class:'key-eye','aria-hidden':'true'});
@@ -1068,21 +1319,22 @@ async function showAiConfiguration(settingsDraft) {
   const save=button('保存',async()=>{
     if(saving)return;
     updateSave();if(save.disabled)return;
-    const payload={providerId,endpoint:targetEndpoint(),model:modelInput.value.trim(),aiKey:aiKey.value.trim(),keyAction:aiKey.value.trim()?'replace':'keep'};
+    const payload={providerId,endpoint:targetEndpoint(),model:modelInput.value.trim(),aiVisionMode:visionSelect.value,aiKey:aiKey.value.trim(),keyAction:aiKey.value.trim()?'replace':'keep'};
     saving=true;updateSave();
-    const controls=[providerSelect,aiKey,modelInput,endpoint,toggle,$('modal-close'),dialog.querySelector('.modal-head button')].filter(Boolean);controls.forEach(control=>control.disabled=true);
+    const controls=[providerSelect,aiKey,modelInput,visionSelect,endpoint,toggle,$('modal-close'),dialog.querySelector('.modal-head button')].filter(Boolean);controls.forEach(control=>control.disabled=true);
     try{
       model.state=await api('settings.ai.save',payload);clearTypedKey();saving=false;renderInspector();showSettings(settingsDraft);toast('AI 模型配置已保存在本机，尚未发送请求。');
     }catch(error){reportError(error);}
     finally{saving=false;controls.forEach(control=>control.disabled=false);updateSave();}
   },'primary',{id:'save-ai-config',disabled:true});
-  providerSelect.addEventListener('change',()=>{if(selectedProvider()?.custom)customEndpoint=endpoint.value;providerId=providerSelect.value;endpoint.value=customEndpoint;clearTypedKey();updateProvider();});
-  endpoint.addEventListener('input',()=>{customEndpoint=endpoint.value;clearTypedKey();updateSave();});
+  providerSelect.addEventListener('change',()=>{if(selectedProvider()?.custom)customEndpoint=endpoint.value;providerId=providerSelect.value;endpoint.value=customEndpoint;visionSelect.value='auto';clearTypedKey();updateProvider();});
+  endpoint.addEventListener('input',()=>{customEndpoint=endpoint.value;visionSelect.value='auto';clearTypedKey();updateSave();});
   aiKey.addEventListener('input',()=>{if(!aiKey.value)hideTypedKey();updateSave();});
-  modelInput.addEventListener('input',updateSave);
+  modelInput.addEventListener('input',()=>{visionSelect.value='auto';updateSave();});
   const body=node('div',{class:'ai-config-fields'},field('模型厂商',providerSelect),address,notice,customField,
     node('div',{class:'field'},node('label',{for:'ai-key'},'API Key'),node('div',{class:'ai-key-field'},aiKey,toggle),keyHint),
-    field('模型名称',modelInput,'使用该服务支持的 API 模型名称，可自由填写。'));
+    field('模型名称',modelInput,'使用该服务支持的 API 模型名称，可自由填写。'),
+    field('图片理解能力',visionSelect,'仅支持 Chat Completions 兼容协议的 image_url 输入。未知服务或模型不会自动发送图片；请先查服务商说明再选择确认支持。图片可能额外计费，保存不会发送测试请求。'));
   modal('添加自定义模型',body,[save],{closeLabel:'返回设置',onClose:returnToSettings});
   dialog.classList.add('ai-config-dialog');
   dialog.querySelector('.modal-footer').prepend(node('p',{class:'ai-config-footnote'},'自定义配置遵循服务商的模型规则，Token 消耗由服务商计费。保存不会测试连接或调用模型。'));
@@ -1210,7 +1462,7 @@ function showLogin() {
 }
 async function showGroups() {
   if(!model.state.account)return showLogin();const selected=new Set(model.state.groups.filter(g=>g.selected!==false).map(g=>String(g.id)));
-  const body=node('div',{},node('p',{class:'form-description'},accountKind()==='weibo'?'只同步你选择且有权访问的群聊。选择后每 60 秒自动更新，可暂停，也可手动同步最新或更早记录。':'选择在侧栏显示的本地群聊。隐藏群聊不会删除已保存的数据。'),...model.state.groups.map(g=>node('label',{class:'group-choice'},node('input',{type:'checkbox',checked:selected.has(String(g.id)),onchange:e=>{if(e.target.checked)selected.add(String(g.id));else selected.delete(String(g.id));}}),node('span',{class:'group-avatar'},String(g.name||'群').slice(0,1)),node('span',{class:'group-choice-copy'},g.name,node('small',{},g.coverage?.note || (g.coverage?.newest?`最近记录 ${fmt(g.coverage.newest,true)}`:'尚未同步记录'))))));
+  const body=node('div',{},node('p',{class:'form-description'},accountKind()==='weibo'?'只同步你勾选且有权访问的群聊。新消息定期检查，离线缺口分批续补，可暂停或手动继续。“更早历史”只读取本机最早记录之前的消息。':'选择在侧栏显示的本地群聊。隐藏群聊不会删除已保存的数据。'),...model.state.groups.map(g=>node('label',{class:'group-choice'},node('input',{type:'checkbox',checked:selected.has(String(g.id)),onchange:e=>{if(e.target.checked)selected.add(String(g.id));else selected.delete(String(g.id));}}),node('span',{class:'group-avatar'},String(g.name||'群').slice(0,1)),node('span',{class:'group-choice-copy'},g.name,node('small',{},g.coverage?.note || (g.coverage?.newest?`最近记录 ${fmt(g.coverage.newest,true)}`:'尚未同步记录'))))));
   if(!model.state.groups.length)body.append(node('div',{class:'warning'},'当前没有群聊可选择。如果已经在微博登录，可重新读取群聊。'));
   modal('选择我的群聊',body,[button('保存选择',async()=>{await flushReading(false);stashReadingDraft();await api('groups.select',{ids:[...selected]});closeModal();await refreshState();if(!selected.has(String(model.groupId)))model.groupId=model.state.groups.find(g=>selected.has(String(g.id)))?.id || null;renderSidebar();renderHeader();await loadReading(true);toast('群聊选择已保存。');},'primary',{id:'save-groups'})]);
 }

@@ -220,40 +220,57 @@ function mainHarness({ confirm = async () => {}, fetch = async () => createRespo
   return { context, local, calls, handle: context.handle };
 }
 
-test('main local preview needs no token/network; canceled confirmation makes zero request and journal writes', async () => {
+test('main local preview can be dismissed without any token, network request, dialog or journal write', async () => {
   let requests = 0;
-  const h = mainHarness({ confirm: async () => { throw new Error('已取消，未发送内容。'); }, fetch: async () => { requests++; return createResponse(); } });
+  const h = mainHarness({ confirm: async () => { throw new Error('Unexpected confirmation'); }, fetch: async () => { requests++; return createResponse(); } });
   const preview = await h.handle('notion.preview', { summaryId: 's1', targetId: target });
+  assert.equal(preview.title, '原摘要');
   assert.equal(h.calls.secrets.length, 0); assert.equal(h.calls.dialogs.length, 0);
-  await assert.rejects(h.handle('notion.export', { summaryId: 's1', targetId: target, sourceHash: preview.sourceHash, draft: draft(), confirmed: true }), /已取消/);
   assert.equal(requests, 0); assert.equal(h.calls.writes, 0); assert.equal(h.calls.secrets.length, 0); assert.equal(h.context.busy, false);
 });
 
-test('main binds source and credentials to current account; requires explicit draft consent and rejects source changes during confirm', async () => {
+test('main still requires explicit submit, valid target and source hash, and rejects changed preview source', async () => {
   let requests = 0;
-  const h = mainHarness({ confirm: async local => { local.summaries[0].body = 'changed while confirming'; }, fetch: async () => { requests++; return createResponse(); } });
+  const h = mainHarness({ fetch: async () => { requests++; return createResponse(); } });
   const preview = await h.handle('notion.preview', { summaryId: 's1', targetId: target, accountId: 'attacker-account' });
   const payload = { summaryId: 's1', targetId: target, sourceHash: preview.sourceHash, draft: draft(), confirmed: true };
   await assert.rejects(h.handle('notion.export', { ...payload, confirmed: false }), /确认导出/);
   await assert.rejects(h.handle('notion.export', { ...payload, draft: undefined }), /确认导出/);
   await assert.rejects(h.handle('notion.export', { ...payload, summaryId: 'other-account' }), /当前账号/);
+  await assert.rejects(h.handle('notion.export', { ...payload, targetId: 'invalid' }), /Notion.*ID|目标/);
+  h.local.summaries[0].body = 'changed after preview';
   await assert.rejects(h.handle('notion.export', payload), /来源已变化/);
-  assert.equal(requests, 0); assert.equal(h.calls.writes, 0); assert.equal(h.calls.secrets.length, 0);
+  assert.equal(requests, 0); assert.equal(h.calls.writes, 0); assert.equal(h.calls.secrets.length, 0); assert.equal(h.calls.dialogs.length, 0);
 });
 
-test('main exports edited current-account snapshot and immutable target/selection even if caller payload mutates while confirming', async () => {
-  const requests = []; let payload;
-  const h = mainHarness({ confirm: async () => { payload.draft.body = 'unexpected late change'; payload.accountId = 'other'; payload.targetId = 'bad'; payload.bookmarkIds.splice(0); }, fetch: async (url, options) => { requests.push({ url, options }); return createResponse(); } });
-  const preview = await h.handle('notion.preview', { bookmarkIds: ['b2'], targetId: target });
-  payload = { bookmarkIds: ['b2'], targetId: target, sourceHash: preview.sourceHash, draft: draft({ includeReferences: false }), confirmed: true };
-  await h.handle('notion.export', payload);
-  assert.equal(requests.length, 1);
-  const body = JSON.parse(requests[0].options.body);
-  assert.equal(body.parent.page_id, target);
-  assert.match(blockText(body.children), /编辑后的正文/); assert.doesNotMatch(blockText(body.children), /unexpected late change/);
-  assert.deepEqual(h.calls.secrets, ['local-account']);
-  assert.equal(h.context.busy, false);
-});
+for (const [name, selection] of [['summary', { summaryId: 's1' }], ['multiple bookmarks', { bookmarkIds: ['b1', 'b2'] }]]) {
+  test(`main directly submits edited ${name} once without a second confirmation, retaining busy protection and immutable content`, async () => {
+    const requests = []; let release, arrived;
+    const ready = new Promise(resolve => { arrived = resolve; });
+    const held = new Promise(resolve => { release = resolve; });
+    const h = mainHarness({ confirm: async () => { throw new Error('Unexpected confirmation'); }, fetch: async (url, options) => {
+      requests.push({ url, options }); arrived(); await held; return createResponse();
+    } });
+    const original = structuredClone({ summaries: h.local.summaries, bookmarks: h.local.bookmarks, messages: h.local.messages });
+    const preview = await h.handle('notion.preview', { ...selection, targetId: target });
+    const payload = { ...structuredClone(selection), targetId: target, sourceHash: preview.sourceHash, draft: draft({ includeReferences: false }), confirmed: true };
+    const pending = h.handle('notion.export', payload);
+    await ready;
+    assert.equal(h.context.busy, true);
+    await assert.rejects(h.handle('notion.export', payload), /已有操作/);
+    payload.draft.body = 'unexpected late change'; payload.accountId = 'other'; payload.targetId = 'bad';
+    if (payload.bookmarkIds) payload.bookmarkIds.splice(0);
+    release(); const result = await pending;
+    assert.equal(requests.length, 1); assert.equal(result.status, 'completed');
+    const body = JSON.parse(requests[0].options.body);
+    assert.equal(body.parent.page_id, target);
+    assert.match(blockText(body.children), /编辑后的正文/);
+    assert.doesNotMatch(blockText(body.children), /unexpected late change|原文 900719/);
+    assert.deepEqual(h.calls.secrets, ['local-account']); assert.equal(h.calls.dialogs.length, 0);
+    assert.deepEqual({ summaries: h.local.summaries, bookmarks: h.local.bookmarks, messages: h.local.messages }, original);
+    assert.equal(h.context.busy, false);
+  });
+}
 
 test('IPC large draft allowance is restricted to Notion actions and still checks sender and bounded payload', async () => {
   const from = mainSource.indexOf("  ipcMain.handle('weiyue:call'");

@@ -12,7 +12,7 @@ const { _electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(__dirname, '..');
 const sourceVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const harness = fs.mkdtempSync(path.join(os.tmpdir(), 'weiyue-media-integration-'));
-const evidence = path.join(root, 'artifacts', 'media-integration');
+const evidence = path.resolve(process.env.WEIYUE_MEDIA_TEST_OUTPUT || path.join(root, 'artifacts', 'media-integration'));
 const dataDir = path.join(harness, 'data');
 fs.mkdirSync(evidence, { recursive: true });
 fs.mkdirSync(dataDir);
@@ -259,7 +259,7 @@ const anchor = () => page.evaluate(() => {
     assert.ok(scheduledStatus.lastSuccessAt >= enabledAt + 59000, 'Real scheduler did not succeed after its 60-second interval');
     // The unread strip is intentionally always visible in 1.1.2. Wait for the
     // renderer's next revision poll, not merely for the already-visible strip.
-    await page.waitForFunction(() => document.querySelector('#new-messages-count')?.textContent === '1 条未读消息', null, { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('#new-messages-count')?.textContent === '1 条未读', null, { timeout: 10000 });
     await page.waitForTimeout(850);
     const afterTick = await anchor();
     assert.equal(afterTick.id, beforeTick.id);
@@ -268,7 +268,7 @@ const anchor = () => page.evaluate(() => {
     assert.equal(tickState.groups[0].unreadCount, 1);
     assert.equal(tickState.readStates[fixture.groupId].readThroughId, readBeforeTick.readThroughId, 'Background arrival must not advance read progress');
     assert.equal(await page.locator('#jump-latest').innerText(), '加载到最新');
-    assert.equal(await page.locator('#new-messages-count').innerText(), '1 条未读消息');
+    assert.equal(await page.locator('#new-messages-count').innerText(), '1 条未读');
     assert.equal(tickState.stats.messages, 7);
     assert.equal((await query()).messages.at(-1).id, '9007199254740993007');
     await api('sync.configure', { enabled: false });

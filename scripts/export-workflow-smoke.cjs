@@ -344,7 +344,8 @@ async function verifyWorkflowLayout(kind) {
 
     await openNotionTarget(fixture.targetA);
     assert.equal(await page.locator('#notion-include-references').isChecked(), true);
-    assert.equal(await page.locator('#notion-confirm-export').isDisabled(), true);
+    assert.equal(await page.locator('#notion-confirm-export').isDisabled(), false);
+    assert.equal(await page.locator('#notion-consent').count(), 0);
     const editedTitle = 'EDITED SUMMARY TITLE', editedBody = 'SUMMARY-EDITED-BODY\nOnly the edited draft goes to Notion.\nLiteral <img src=x> remains plain text.';
     await page.locator('#notion-edit-title').fill(editedTitle); await page.locator('#notion-edit-body').fill(editedBody);
     await page.locator('#notion-include-references').uncheck(); assert.equal(await page.locator('#notion-edit-body').inputValue(), editedBody);
@@ -357,16 +358,14 @@ async function verifyWorkflowLayout(kind) {
 
     await page.locator('#notion-preview').click(); await page.waitForSelector('#notion-edit-body');
     await page.locator('#notion-edit-title').fill(editedTitle); await page.locator('#notion-edit-body').fill(editedBody);
-    await page.locator('#notion-include-references').uncheck(); await page.locator('#notion-consent').check();
-    const beforeNativeCancel = (await audit()).requests.length;
-    await plan({ kind: 'notion', response: 0 }); await page.locator('#notion-confirm-export').click();
-    await page.waitForFunction(() => document.getElementById('modal-error')?.textContent.includes('取消'));
-    assert.equal(writes(await audit()).length, 0); assert.equal(await page.locator('#notion-edit-body').inputValue(), editedBody);
-    assert.equal((await audit()).requests.length, beforeNativeCancel);
-    check('Native Notion cancellation sends zero writes and retains the exact editable draft');
+    await page.locator('#notion-include-references').uncheck();
+    assert.equal(await page.locator('#notion-confirm-export').isDisabled(), false);
+    assert.equal(await page.locator('#notion-consent').count(), 0);
+    check('Notion editor submits directly from its explicit button with no consent checkbox or second confirmation');
 
     await page.locator('#notion-include-references').check(); assert.equal(await page.locator('#notion-edit-body').inputValue(), editedBody);
-    await plan({ kind: 'notion', response: 1 }); await page.locator('#notion-confirm-export').click(); await exportResult();
+    const nativeBeforeExport = (await audit()).confirms.length;
+    await page.locator('#notion-confirm-export').click(); await exportResult();
     let summaryExport = await lastExportPayload(); assert.equal(summaryExport.draft.body, editedBody); assert.equal(summaryExport.draft.includeReferences, true);
     current = await audit(); const firstWrite = writes(current)[0]; assert.equal(firstWrite.parent, fixture.targetA); assert.equal(firstWrite.title, editedTitle);
     const transmitted = await application.evaluate(() => {
@@ -375,10 +374,10 @@ async function verifyWorkflowLayout(kind) {
     });
     assert.ok(transmitted.includes(editedBody)); assert.ok(!transmitted.includes('WORKFLOW-AI-SAVED'));
     assert.ok(transmitted.includes('FIXTURE-REFERENCE-') && !transmitted.includes('覆盖与核查提示'));
-    const confirmed = current.confirms.at(-1); assert.ok(confirmed.detail.includes(fixture.targetA) && confirmed.detail.includes(editedTitle));
+    assert.equal(current.confirms.length, nativeBeforeExport);
     assert.deepEqual((await api('summary.list'))[0], savedSummary, 'Editing/exporting must not overwrite the saved summary');
     await finishResult();
-    await plan({ kind: 'notion', response: 1 }); await api('notion.export', summaryExport);
+    await api('notion.export', summaryExport);
     assert.equal(writes(await audit()).length, 1);
     check('Actual Notion payload matches edited title/body with references; target is confirmed, original summary untouched, exact repeat idempotent');
 
@@ -407,8 +406,8 @@ async function verifyWorkflowLayout(kind) {
     await page.locator('#notion-include-references').uncheck();
     assert.equal(await page.locator('#notion-edit-body').inputValue(), batchBody);
     await page.screenshot({ path: path.join(evidence, 'bookmark-export-editor.png') });
-    await page.locator('#notion-consent').check(); await application.evaluate(() => { globalThis.__exportWorkflow.failNextAppend = true; });
-    await plan({ kind: 'notion', response: 1 }); await page.locator('#notion-confirm-export').click();
+    await application.evaluate(() => { globalThis.__exportWorkflow.failNextAppend = true; });
+    await page.locator('#notion-confirm-export').click();
     await page.waitForFunction(() => document.getElementById('modal-error')?.textContent.includes('HTTP 400'));
     assert.equal(await page.locator('#notion-edit-body').inputValue(), batchBody); assert.equal(await page.locator('#notion-include-references').isChecked(), false);
     let afterFailure = await audit(); assert.equal(afterFailure.requests.filter(call => call.kind === 'create').length, 2);
@@ -428,7 +427,6 @@ async function verifyWorkflowLayout(kind) {
     assert.equal(writes(await audit()).length, writes(afterFailure).length);
     await page.screenshot({ path: path.join(evidence, 'bookmark-export-restored.png') });
     check('Reopening a failed partial export restores the journaled title, full draft and disabled references without writing again');
-    await page.locator('#notion-consent').check(); await plan({ kind: 'notion', response: 1 });
     await page.locator('#notion-confirm-export').click(); await exportResult();
     const retriedExport = await lastExportPayload(); assert.deepEqual(retriedExport, failedExport);
     current = await audit(); assert.equal(current.requests.filter(call => call.kind === 'create').length, 2);
@@ -442,7 +440,7 @@ async function verifyWorkflowLayout(kind) {
     assert.ok(!completedBatch.includes('覆盖与核查提示'));
     assert.deepEqual(await api('bookmark.list'), sourceBookmarks);
     await page.screenshot({ path: path.join(evidence, 'bookmark-export-completed.png') }); await finishResult();
-    const writeCount = writes(current).length; await plan({ kind: 'notion', response: 1 }); await api('notion.export', retriedExport);
+    const writeCount = writes(current).length; await api('notion.export', retriedExport);
     assert.equal(writes(await audit()).length, writeCount);
     check('Explicit identical batch retry resumes only the failed append on the same page; all draft text/references survive and completed repeat writes nothing');
     assert.deepEqual(errors, []); finalAudit = await audit(); assert.deepEqual(finalAudit.blocked, []); assert.deepEqual(finalAudit.violations, []);

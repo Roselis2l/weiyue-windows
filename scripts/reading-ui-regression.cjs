@@ -12,7 +12,7 @@ const { _electron } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 const root = path.resolve(__dirname, '..');
 let executablePath = process.argv[2] ? path.resolve(process.argv[2]) : null;
-const evidence = path.join(root, 'artifacts', 'reading-ui-regression');
+const evidence = process.env.WEIYUE_READING_UI_OUTPUT ? path.resolve(process.env.WEIYUE_READING_UI_OUTPUT) : path.join(root, 'artifacts', 'reading-ui-regression');
 const harness = fs.mkdtempSync(path.join(os.tmpdir(), 'weiyue-reading-ui-'));
 if (!executablePath) {
   // A workspace can carry restrictive AppContainer ACLs. An ordinary Temp copy
@@ -23,7 +23,7 @@ if (!executablePath) {
 fs.mkdirSync(evidence, { recursive: true });
 fs.mkdirSync(path.join(harness, 'renderer'));
 const hashes = {};
-for (const name of ['index.html', 'style.css', 'app.js', 'reading-state.js']) {
+for (const name of ['index.html', 'style.css', 'app.js', 'reading-state.js','filter-controls.js','linkify.js','emoticons.js','emoticon-manifest.js']) {
   const bytes = fs.readFileSync(path.join(root, 'app', 'renderer', name));
   fs.writeFileSync(path.join(harness, 'renderer', name), bytes);
   hashes[name] = crypto.createHash('sha256').update(bytes).digest('hex');
@@ -163,6 +163,7 @@ function harnessMain() {
       case 'sync.configure': Object.assign(mock.sync, payload); return { ...mock.sync };
       case 'sync': return { messages: [], count: 0 };
       case 'window.closeReady': mock.closeReady = true; return true;
+      case 'image.open': return { opened: true };
       case 'external.open': return { opened: true };
       default: throw new Error('Unexpected mock action: ' + action);
     }
@@ -328,7 +329,7 @@ async function waitRevision(revision) {
     assert.equal(tailStats.readThroughId, oldAppend.latestId);
     assert.equal(tailStats.atBottom, false);
     assert.equal(tailStats.unreadCount, 3);
-    assert.equal(await page.locator('#new-messages-count').innerText(), '3 条未读消息');
+    assert.equal(await page.locator('#new-messages-count').innerText(), '3 条未读');
     await page.screenshot({ path: path.join(evidence, 'latest-then-keeps-arrivals-unread.png') });
     check('Explicit latest action reaches the real tail and updates read progress once; later arrivals preserve the anchor and stay unread');
 
@@ -379,16 +380,18 @@ async function waitRevision(revision) {
       return image?.complete && image.naturalWidth === 32;
     }, media.ids[0]);
     await mediaCard(0).locator('.image-button').click();
-    await page.waitForFunction(() => document.querySelector('#modal .image-original')?.naturalWidth === 32);
-    assert.equal(await page.locator('#modal .image-viewer-status').isVisible(), false);
+    let originalRequest = await application.evaluate(() => globalThis.__readingMock.calls.filter(call => call.action === 'image.open').at(-1));
+    assert.equal(originalRequest.payload.source, 'app://media/original.png');
+    assert.equal(typeof originalRequest.payload.title, 'string');
+    assert.ok(originalRequest.payload.caption.length > 0);
+    assert.equal(await page.locator('#modal').evaluate(modal => modal.open), false);
     await page.screenshot({ path: path.join(evidence, 'local-original-image.png') });
-    await page.locator('#modal-close').click();
     await mediaCard(1).scrollIntoViewIfNeeded();
     await mediaCard(1).locator('.image-button').click();
-    await page.waitForFunction(() => document.querySelector('#modal .image-viewer-status')?.textContent.includes('原图加载失败'));
-    assert.equal(await page.locator('#modal .image-original').isVisible(), false);
-    await page.locator('#modal-close').click();
-    check('Local PNG thumbnail and original image load through app://media; failed original reports a retryable inline error');
+    originalRequest = await application.evaluate(() => globalThis.__readingMock.calls.filter(call => call.action === 'image.open').at(-1));
+    assert.equal(originalRequest.payload.source, 'app://media/original-missing.png');
+    assert.equal(await page.locator('#modal').evaluate(modal => modal.open), false);
+    check('Local PNG thumbnails load through app://media; original clicks pass source/title/caption to the dedicated viewer without opening a reading modal (viewer loading/error/save covered by image-viewer-integration)');
 
     await mediaCard(2).scrollIntoViewIfNeeded();
     await mediaCard(2).locator('.image-failure').first().waitFor({ state: 'visible' });
@@ -493,7 +496,9 @@ async function waitRevision(revision) {
     const blockedRequests = await application.evaluate(() => globalThis.__readingMock.blockedRequests);
     assert.deepEqual(blockedRequests, []);
     const mediaRequests = await application.evaluate(() => globalThis.__readingMock.mediaRequests);
-    assert.ok(mediaRequests.includes('/thumb.png') && mediaRequests.includes('/original.png') && mediaRequests.includes('/original-missing.png'));
+    assert.ok(mediaRequests.includes('/thumb.png') && mediaRequests.includes('/missing.png') && mediaRequests.includes('/post.png'));
+    assert.ok(!mediaRequests.includes('/original.png') && !mediaRequests.includes('/original-missing.png'),
+      'The reading renderer must delegate original-image loading to the dedicated viewer');
     const report = { passed: true, checks, errors, blockedRequests, mediaRequests, measurements, sourceHashes: hashes,
       executablePath, harness, generatedAt: new Date().toISOString(),
       scope: 'Real renderer, isolated mock IPC, no real account/network/credentials; PNG fixture served through a local app://media protocol' };

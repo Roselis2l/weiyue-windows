@@ -25,3 +25,22 @@
 Thumbs.db
 Desktop.ini
 .DS_Store
+# Additional private test/browser artifacts excluded from public commits
+**/profile/
+**/profiles/
+**/user-data/
+**/userdata/
+**/browser-data/
+**/logs/
+**/cache/
+**/test-results/
+**/playwright-report/
+**/.codex/
+**/.agents/
+**/.aws/
+**/.ssh/
+*.har
+*.trace
+*.sqlite
+*.sqlite3
+/docs/screenshots/

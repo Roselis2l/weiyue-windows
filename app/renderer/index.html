@@ -3,10 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' app://media data:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' app://media app://avatar data:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
   <title>微阅</title>
   <link rel="stylesheet" href="style.css">
   <script src="reading-state.js" defer></script>
+  <script src="filter-controls.js" defer></script>
+  <script src="sync-status.js" defer></script>
+  <script src="linkify.js" defer></script>
+  <script src="emoticon-manifest.js" defer></script>
+  <script src="emoticons.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -17,7 +22,7 @@
       <nav id="navigation" class="navigation" aria-label="主导航"></nav>
       <div class="sidebar-section-heading"><span>我的群聊</span><button id="manage-groups" class="icon-button" title="选择同步群聊" aria-label="选择同步群聊">＋</button></div>
       <div id="group-list" class="group-list"></div>
-      <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span>本地优先 · 保留阅读位置</div><p>已登录群聊默认每 60 秒更新。<br>AI 和 Notion 仍由你主动确认。</p><button id="settings-button" class="settings-button">⚙<span>设置与连接</span><span class="trailing">↗</span></button></div>
+      <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span>本地优先 · 保留阅读位置</div><p>新消息定期更新，离线记录分批补齐。<br>AI 和 Notion 仍由你主动确认。</p><button id="settings-button" class="settings-button">⚙<span>设置与连接</span><span class="trailing">↗</span></button></div>
     </aside>
     <main id="workspace" class="workspace" aria-label="群聊阅读工作台">
       <header id="workspace-header" class="workspace-header"></header>

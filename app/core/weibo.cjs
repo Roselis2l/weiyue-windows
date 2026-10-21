@@ -4,7 +4,9 @@
 // Copyright (c) 2026 ylj5244-dot. See docs/REFERENCE-LICENSE.txt and
 // docs/weibo-protocol.md. This module never reads or returns cookies.
 const ORIGIN = 'https://api.weibo.com';
-const {normalizeImage, safePostUrl} = require('./media.cjs');
+const {normalizeImage, safeImageUrl, safePostUrl} = require('./media.cjs');
+const {firstAvatarUrl} = require('./avatar.cjs');
+const {normalizeMessageAttachments}=require('./attachments.cjs');
 const PATHS = Object.freeze({
   identity: '/webim/query_primary_info.json',
   groups: '/webim/2/direct_messages/contacts.json',
@@ -77,7 +79,9 @@ function normalizeGroups(data) {
     const id = identifier(user.id);
     const name = typeof user.name === 'string' && user.name.trim() ? user.name : user.screen_name;
     if (typeof name !== 'string' || !name.trim()) throw invalid('微博群名称缺失。');
-    if (!groups.has(id)) groups.set(id, {id, name, selected: false});
+    const avatarUrl = profileAvatarUrl(user, id);
+    if (!groups.has(id)) groups.set(id, {id, name, selected: false, ...(avatarUrl ? {avatarUrl} : {})});
+    else if (avatarUrl && !groups.get(id).avatarUrl) groups.get(id).avatarUrl = avatarUrl;
   }
   return [...groups.values()];
 }
@@ -95,15 +99,38 @@ function object(value) { return value && typeof value === 'object' && !Array.isA
 function optionalIdentifier(value) {
   try { return identifier(value); } catch { return undefined; }
 }
+function profileAvatarUrl(profile, expectedId) {
+  if (!object(profile)) return null;
+  // Require explicit matching profile IDs before attaching metadata to a
+  // message sender. A nickname or a neighbouring member profile is not proof.
+  const ids = [profile.idstr, profile.id].filter(value => value !== undefined && value !== null);
+  if (!ids.length || ids.some(value => optionalIdentifier(value) !== expectedId)) return null;
+  // Explicit avatar field spellings only. The public reference documents
+  // profileImageUrl for identity responses; snake-case names are compatibility
+  // candidates and are accepted only with matching IDs and approved CDN URLs.
+  return firstAvatarUrl(profile.avatar_large, profile.profile_image_url, profile.profileImageUrl);
+}
 function imageMetadata(picture) {
   if (typeof picture === 'string') return normalizeImage({url: picture, originalUrl: picture});
   if (!object(picture)) return null;
-  const largest = object(picture.largest) || object(picture.original) || object(picture.large) || {};
-  const original = picture.original_pic || largest.url || picture.url || picture.pic || picture.bmiddle_pic || picture.thumbnail_pic;
-  const thumbnail = picture.thumbnail_pic || object(picture.thumbnail)?.url;
+  // Check each explicitly supplied variant before choosing it. An invalid or
+  // empty higher-priority field must not hide another safe URL in this record.
+  // This is metadata selection only, never a retry after an HTTP rejection.
+  const candidates = [
+    {url: picture.original_pic, dimensions: picture},
+    ...['largest', 'original', 'large'].map(key => ({url: object(picture[key])?.url, dimensions: object(picture[key])})),
+    ...['url', 'pic', 'bmiddle_pic', 'thumbnail_pic'].map(key => ({url: picture[key], dimensions: picture})),
+    {url: object(picture.thumbnail)?.url, dimensions: object(picture.thumbnail)}
+  ];
+  const selected = candidates.map(candidate => ({...candidate, url: safeImageUrl(candidate.url)})).find(candidate => candidate.url);
+  if (!selected) return null;
+  // Preserve a supplied middle-size preview when there is no safe thumbnail;
+  // the original URL remains the first safe high-priority candidate above.
+  const thumbnail = [picture.thumbnail_pic, object(picture.thumbnail)?.url, picture.bmiddle_pic].map(safeImageUrl).find(Boolean);
+  const dimensions = selected.dimensions || picture;
   const size = value => typeof value === 'number' ? value : typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : undefined;
-  return normalizeImage({url: original, originalUrl: original, thumbnailUrl: thumbnail,
-    width: size(largest.width ?? picture.width), height: size(largest.height ?? picture.height)});
+  return normalizeImage({url: selected.url, originalUrl: selected.url, thumbnailUrl: thumbnail,
+    width: size(dimensions.width ?? picture.width), height: size(dimensions.height ?? picture.height)});
 }
 function normalizeImages(message, {allowFids = true} = {}) {
   const images = [], seen = new Set();
@@ -122,14 +149,18 @@ function normalizeImages(message, {allowFids = true} = {}) {
   // Explicit originals take priority over constructing a second URL for the same
   // attachment. FIDs remain lexical; unsafe Number values are skipped.
   if (!images.length && allowFids && (message.media_type === 1 || message.media_type === '1')) {
-    const raw = message.att_ids ?? message.fids;
-    const fids = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [raw];
-    for (const value of fids.slice(0, 50)) {
-      const fid = optionalIdentifier(typeof value === 'string' ? value.trim() : value);
-      if (!fid) continue;
-      const url = new URL('https://upload.api.weibo.com/2/mss/msget');
-      url.searchParams.set('source', '209678993'); url.searchParams.set('fid', fid); url.searchParams.set('imageType', 'origin');
-      add(url.href);
+    for (const raw of [message.att_ids, message.fids]) {
+      const fids = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : [raw];
+      for (const value of fids.slice(0, 50)) {
+        const fid = optionalIdentifier(typeof value === 'string' ? value.trim() : value);
+        if (!fid) continue;
+        const url = new URL('https://upload.api.weibo.com/2/mss/msget');
+        url.searchParams.set('source', '209678993'); url.searchParams.set('fid', fid); url.searchParams.set('imageType', 'origin');
+        add(url.href);
+      }
+      // Retain att_ids precedence when it provides valid attachments. Empty or
+      // invalid att_ids may fall back only to the response's explicit fids.
+      if (images.length) break;
     }
   }
   return images;
@@ -153,6 +184,16 @@ function postText(status) {
     .replace(/<img\b[^>]*>/gi, tag => tag.match(/\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i)?.slice(1).find(value => value !== undefined) || '')
     .replace(/<\/?[a-z][^>]*>/gi, '')).replace(/\r\n?/g, '\n').trim();
 }
+function postIncomplete(status) {
+  if (!object(status)) return false;
+  const long = object(status.longText)?.longTextContent ?? status.longTextContent;
+  return status.truncated === true || status.truncated === 1 || status.truncated === '1' ||
+    ((status.isLongText === true || status.isLongText === 1 || status.isLongText === '1') && !(typeof long === 'string' && long.trim())) ||
+    /<a\b[^>]*>\s*(?:展开全文|查看全文|全文)\s*<\/a>/i.test(String(status.text || ''));
+}
+function isPublishedPostNotification(value) {
+  return /^我发布了新微博(?:[，,]\s*快来围观吧)?[！!。.]?$/.test(String(value || '').trim());
+}
 function shareUrl(entry, status = {}) {
   const info = object(entry?.info) || {};
   for (const value of [info.url_long, entry?.url_ori, status.url, status.permalink, info.url_short, entry?.url]) {
@@ -165,7 +206,7 @@ function normalizeSharedPost(message) {
   const entries = Array.isArray(message.url_objects) ? message.url_objects.filter(object) : [];
   const entry = entries.find(item => object(item.status));
   const status = object(entry?.status) || object(message.status);
-  const notification = /^我发布了新微博[，,]\s*快来围观吧[！!]?$/.test(String(message.content ?? message.text ?? '').trim());
+  const notification = isPublishedPostNotification(message.content ?? message.text);
   if (!status && !notification) return undefined;
   const url = shareUrl(entry, status || {}) || (notification ? entries.map(item => shareUrl(item)).find(Boolean) || safePostUrl(message.url) || undefined : undefined);
   if (!status && !url) return undefined;
@@ -176,21 +217,26 @@ function normalizeSharedPost(message) {
   let text = postText(status);
   const images = normalizeImages(status, {allowFids: false});
   const repost = object(status.retweeted_status);
+  const incompleteReasons = [];
   if (repost) {
-    const repostText = postText(repost);
+    const repostDeleted = repost.deleted === true || repost.deleted === 1 || repost.deleted === '1' || !!repost.error;
+    const repostText = repostDeleted ? '' : postText(repost);
+    const repostImages = repostDeleted ? [] : normalizeImages(repost, {allowFids: false});
     const repostAuthor = typeof repost.user?.screen_name === 'string' ? repost.user.screen_name : '';
     if (repostText) text += (text ? '\n\n' : '') + (repostAuthor ? '转发 @' + repostAuthor + '：\n' : '转发原文：\n') + repostText;
     const seen = new Set(images.map(image => image.originalUrl));
-    for (const image of normalizeImages(repost, {allowFids: false})) if (images.length < 50 && !seen.has(image.originalUrl)) {images.push(image); seen.add(image.originalUrl);}
+    for (const image of repostImages) if (images.length < 50 && !seen.has(image.originalUrl)) {images.push(image); seen.add(image.originalUrl);}
+    if (repostDeleted || (!repostText && !repostImages.length)) incompleteReasons.push('转发原微博已删除或当前返回内容不可读');
+    else if (postIncomplete(repost)) incompleteReasons.push('转发原微博正文可能被截断');
   }
   const deleted = status.deleted === true || status.deleted === 1 || status.deleted === '1' || !!status.error;
   const unavailable = deleted || (!text && !images.length);
-  const longText = object(status.longText)?.longTextContent ?? status.longTextContent;
-  const truncated = status.truncated === true || status.truncated === 1 ||
-    ((status.isLongText === true || status.isLongText === 1) && !(typeof longText === 'string' && longText.trim()) && typeof status.text_raw !== 'string');
+  if (postIncomplete(status)) incompleteReasons.push('原微博正文可能被截断');
+  const truncated = incompleteReasons.length > 0;
   return {text: deleted ? '' : text, images: deleted ? [] : images, state: unavailable ? 'unavailable' : 'ready',
     ...(id ? {id} : {}), ...(url ? {url} : {}), ...(author ? {author} : {}), ...(truncated ? {truncated: true} : {}),
-    ...(unavailable ? {reason: deleted ? '原微博已删除或当前账号无法访问' : '消息未附可读取的微博正文或配图，请打开原微博查看'} : {})};
+    ...(unavailable ? {reason: deleted ? '原微博已删除或当前账号无法访问' : '消息未附可读取的微博正文或配图，请打开原微博查看'}
+      : incompleteReasons.length ? {reason: incompleteReasons.join('；')} : {})};
 }
 
 function normalizeMessages(data, groupId) {
@@ -204,15 +250,20 @@ function normalizeMessages(data, groupId) {
     const sender = message.from_user || {};
     const senderId = message.from_uid ?? sender.idstr ?? sender.id;
     const unknownSender = senderId === undefined || senderId === null || senderId === '' || senderId === 0 || senderId === '0';
+    const normalizedSenderId = unknownSender ? 'unknown:' + id : identifier(senderId);
+    const senderAvatarUrl = unknownSender ? null : profileAvatarUrl(sender, normalizedSenderId);
     const senderName = typeof sender.screen_name === 'string' && sender.screen_name.trim() ? sender.screen_name : sender.name;
     const text = message.content ?? message.text ?? '';
     if (typeof text !== 'string') throw invalid('消息正文格式无法确认。');
     const images = normalizeImages(message);
     const sharedPost = normalizeSharedPost(message);
-    return {id, groupId, senderId: unknownSender ? 'unknown:' + id : identifier(senderId),
+    const attachments = normalizeMessageAttachments(message);
+    return {id, groupId, senderId: normalizedSenderId,
       senderName: typeof senderName === 'string' && senderName.trim() ? senderName : '发送者待确认',
       text: text || (images.length ? '分享图片' : '[非文字或空消息；未返回可显示的媒体，请在微博官方查看。]'), time: messageTime(message), mediaVersion: 1,
-      ...(images.length ? {images} : {}), ...(sharedPost ? {sharedPost} : {})};
+      ...(images.length ? {images} : {}), ...(sharedPost ? {sharedPost} : {}),
+      ...(attachments.length ? {attachments,attachmentVersion:1} : {}),
+      ...(senderAvatarUrl ? {senderAvatarUrl} : {})};
   });
 }
 
@@ -313,7 +364,9 @@ class WeiboClient {
       }
       if (response.status === 401) throw new WeiboError('AUTH_REQUIRED', '微博登录已失效，请在官方网页重新登录。');
       if (response.status === 403) throw new WeiboError('ACCESS_DENIED', '微博拒绝访问，请在官方网页确认权限或风控提示。');
-      if (response.status === 429) throw new WeiboError('RATE_LIMIT', '微博暂时限流，请稍后重试。', {retryable: true, retryAfter: response.headers?.get('retry-after')});
+      // A rate limit ends this batch immediately. The account scheduler owns
+      // Retry-After and must not silently retry a refused page in this batch.
+      if (response.status === 429) throw new WeiboError('RATE_LIMIT', '微博暂时限流，请稍后重试。', {retryAfter: response.headers?.get('retry-after')});
       if (response.status >= 500 && response.status <= 599) throw new WeiboError('SERVER_ERROR', '微博服务暂时不可用，请稍后重试。', {retryable: true});
       if (response.status < 200 || response.status >= 300) throw new WeiboError('HTTP_ERROR', '微博读取失败，请在官方网页检查状态。');
       let raw;
@@ -356,10 +409,11 @@ class WeiboClient {
     return message;
   }
 
-  async syncGroup(groupId, {maxPages = 20, onPage, before = null, stopAtId = null, signal} = {}) {
+  async syncGroup(groupId, {maxPages = 20, onPage, before = null, stopAtId = null, pageDelayMs = 1000, signal} = {}) {
     groupId = identifier(groupId);
     if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 100) throw new WeiboError('INVALID_ARGUMENT', '每次同步页数须为 1 至 100。');
     if (onPage !== undefined && typeof onPage !== 'function') throw new TypeError('onPage must be a function.');
+    if (!Number.isSafeInteger(pageDelayMs) || pageDelayMs < 500 || pageDelayMs > 5000) throw new TypeError('Invalid page delay.');
     let cursor = before === null || before === undefined ? null : identifier(before, true);
     stopAtId = stopAtId === null || stopAtId === undefined ? null : identifier(stopAtId);
     const seen = new Map();
@@ -371,7 +425,7 @@ class WeiboClient {
         if (newest === null || message.time > newest) newest = message.time;
       }
       return {oldest, newest,
-        complete: exhausted && before === null,
+        complete: exhausted && before === null && (stopAtId === null || reachedStop),
         note: reason + ' 仅覆盖本次接口返回的记录；撤回、服务端不可见历史及未返回的媒体或分享内容无法保证完整。' +
           (before !== null ? ' 本次从历史游标开始，不能据此确认最新消息覆盖。' : '')};
     };
@@ -405,16 +459,21 @@ class WeiboClient {
         exhausted = true;
         reason = '已到达微博本次可返回历史的起点。';
       }
+      // Keep the last safe cursor even when the server reports an early end.
+      // An incremental interval is unresolved until its original baseline is
+      // reached; a transient empty page must not erase restart information.
+      const unresolved = exhausted && stopAtId !== null && !reachedStop;
       if (onPage) await onPage({messages: fresh.sort((a, b) => a.time - b.time || compareIds(a.id, b.id)), page: pages,
-        nextCursor: exhausted ? null : cursor, reachedStop, coverage: coverage()});
+        nextCursor: exhausted ? null : cursor, resumeCursor: cursor, exhausted, unresolved, reachedStop, coverage: coverage()});
       checkAbort(signal);
       if (exhausted || reachedStop) break;
-      if (pages < maxPages) await this.sleep(300, signal);
+      if (pages < maxPages) await this.sleep(pageDelayMs, signal);
     }
     return {messages: [...seen.values()].sort((a, b) => a.time - b.time || compareIds(a.id, b.id)), coverage: coverage(),
-      nextCursor: exhausted ? null : cursor, reachedStop, pages};
+      nextCursor: exhausted ? null : cursor, resumeCursor: cursor, exhausted,
+      unresolved: exhausted && stopAtId !== null && !reachedStop, reachedStop, pages};
   }
 }
 
 module.exports = {WeiboClient, WeiboError, parsePrecisionJson, identifier, previousId, normalizeIdentity, normalizeGroups,
-  normalizeMessages, normalizeImages, normalizeSharedPost, postText, messageTime, retryDelay, ORIGIN, PATHS};
+  normalizeMessages, normalizeImages, normalizeSharedPost, postText, postIncomplete, isPublishedPostNotification, messageTime, retryDelay, ORIGIN, PATHS};

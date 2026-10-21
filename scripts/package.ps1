@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
@@ -18,7 +18,7 @@ $SourceZip = Join-Path $DistributionRoot 'WeiYue-Source.zip'
 $ArchiveName = 'electron-v' + $ElectronVersion + '-win32-x64.zip'
 $ArchivePath = Join-Path $ProjectRoot ('vendor\' + $ArchiveName)
 $ChecksumsPath = Join-Path $ProjectRoot 'vendor\SHASUMS256.txt'
-$SourceWhitelist = @('app', 'tests', 'scripts', 'docs', 'package.json', 'runtime-lock.json', 'README.md', 'CHANGELOG.md', 'LICENSE', '.gitignore', '.gitattributes')
+$SourceWhitelist = @('app', 'tests', 'scripts', 'docs', 'package.json', 'README.md', 'LICENSE', 'CONTRACT.md')
 
 function Assert-SafeSourceTree([string]$Path) {
     $Item = Get-Item -LiteralPath $Path -Force
@@ -57,15 +57,6 @@ if ($ChecksumLines.Count -ne 1) { throw ('Expected exactly one checksum entry fo
 $ExpectedHash = ($ChecksumLines[0] -split '\s+')[0].ToLowerInvariant()
 $ActualHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($ActualHash -ne $ExpectedHash) { throw 'Electron SHA256 verification failed. No application was packaged.' }
-
-$RuntimeLock = Get-Content -LiteralPath (Join-Path $ProjectRoot 'runtime-lock.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($ElectronVersion -ne $RuntimeLock.electronVersion -or $ArchiveName -ne $RuntimeLock.archive) {
-    throw 'This release is pinned by runtime-lock.json. Audit a runtime upgrade before changing the pin.'
-}
-if ($ActualHash -ne $RuntimeLock.sha256) {
-    throw 'Electron archive differs from the reviewed runtime-lock.json SHA256.'
-}
-
 Write-Host ('Verified official Electron archive: ' + $ArchiveName)
 
 if (-not (Test-Path -LiteralPath $DistributionRoot)) { New-Item -ItemType Directory -Path $DistributionRoot | Out-Null }
@@ -78,7 +69,7 @@ if (-not (Test-Path -LiteralPath $ElectronExe -PathType Leaf)) { throw 'The veri
 Rename-Item -LiteralPath $ElectronExe -NewName 'WeiYue.exe'
 $AppRoot = Join-Path $PortableRoot 'resources\app'
 New-Item -ItemType Directory -Path $AppRoot | Out-Null
-foreach ($Relative in @('package.json', 'runtime-lock.json', 'app', 'docs', 'README.md', 'CHANGELOG.md', 'LICENSE')) {
+foreach ($Relative in @('package.json', 'app', 'docs', 'README.md', 'LICENSE')) {
     Copy-Item -LiteralPath (Join-Path $ProjectRoot $Relative) -Destination $AppRoot -Recurse
 }
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'docs') -Destination $PortableRoot -Recurse
@@ -93,7 +84,6 @@ $BuildInfo = [ordered]@{
     electronArchive = $ArchiveName
     electronSha256 = $ActualHash
     referenceCommit = '7b6c7203490b9110f3b109e53b0e24b4aad1ccac'
-    publicationPreparation = 'Public documentation and pinned runtime; application source is version 1.1.8'
     platform = 'win32-x64'
     packagedAtUtc = [DateTime]::UtcNow.ToString('o')
 }

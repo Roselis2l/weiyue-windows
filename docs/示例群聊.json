@@ -1,0 +1,33 @@
+{
+  "groups": [
+    {
+      "id": "sample-group",
+      "name": "示例读书群",
+      "selected": true,
+      "coverage": {
+        "oldest": 1792396800000,
+        "newest": 1792400400000,
+        "complete": false,
+        "note": "仅包含手工整理的两条虚构示例，历史可能不完整"
+      }
+    }
+  ],
+  "messages": [
+    {
+      "id": "9007199254740993001",
+      "groupId": "sample-group",
+      "senderId": "sample-member-a",
+      "senderName": "林间",
+      "text": "这是一条虚构示例。值得保存的观点可添加备注与标签。",
+      "time": 1792396800000
+    },
+    {
+      "id": "9007199254740993002",
+      "groupId": "sample-group",
+      "senderId": "sample-member-b",
+      "senderName": "山月",
+      "text": "摘要可按时间范围整理，并通过引用回看原文。",
+      "time": 1792400400000
+    }
+  ]
+}

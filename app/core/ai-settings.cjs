@@ -1,6 +1,6 @@
 'use strict';
 
-const { validateEndpoint, completionEndpoint, prepareAiRequest } = require('./summary.cjs');
+const { validateEndpoint, completionEndpoint, prepareAiRequest, inspectAiVision } = require('./summary.cjs');
 
 // These are destination presets, not model suggestions or connectivity checks.
 // Other regions and plans must use an explicitly entered custom destination.
@@ -58,6 +58,12 @@ function prepareAiSettingsSave(currentSettings, credentials, payload, { allowMis
   if (!provider.custom && completionEndpoint(endpoint) !== completionEndpoint(provider.endpoint)) throw new Error('预设厂商地址不可修改；其他地区或服务请使用自定义。');
   const settings = { ...currentSettings, endpoint: provider.custom ? endpoint : provider.endpoint, model, aiProviderId: provider.id };
   prepareAiRequest(settings);
+  let unchangedModelScope = false;
+  try { unchangedModelScope = sameScope(scopeFor(currentSettings), scopeFor(settings)) && currentSettings.model?.trim() === model; } catch {}
+  // A capability declaration belongs to this exact service/model selection.
+  // Legacy callers which change either must not silently inherit "enabled".
+  settings.aiVisionMode = own(payload, 'aiVisionMode') ? payload.aiVisionMode : unchangedModelScope ? currentSettings.aiVisionMode || 'auto' : 'auto';
+  inspectAiVision(settings);
   if (!['keep', 'replace'].includes(payload.keyAction)) throw new Error('请选择保留现有 Key 或输入新 Key。');
   const next = { ...credentials }, scope = scopeFor(settings);
   if (payload.keyAction === 'replace') {
@@ -81,14 +87,15 @@ function prepareAiSettingsSave(currentSettings, credentials, payload, { allowMis
 // Keep old settings.save callers compatible without letting them bypass the
 // same destination/key checks used by the dedicated AI editor.
 function prepareLegacyAiSettingsSave(currentSettings, credentials, payload, options) {
-  if (!['endpoint', 'model', 'aiKey'].some(field => own(payload, field))) return { settings: { ...currentSettings }, credentials: { ...credentials } };
+  if (!['endpoint', 'model', 'aiKey', 'aiVisionMode'].some(field => own(payload, field))) return { settings: { ...currentSettings }, credentials: { ...credentials } };
   const endpoint = own(payload, 'endpoint') ? payload.endpoint : currentSettings.endpoint || '';
   const model = own(payload, 'model') ? payload.model : currentSettings.model || '';
   if (typeof endpoint !== 'string' || typeof model !== 'string' || (own(payload, 'aiKey') && typeof payload.aiKey !== 'string')) throw new Error('AI 设置格式无效。');
   const nextEndpoint = endpoint.trim(), nextModel = model.trim(), newKey = payload.aiKey?.trim() || '';
   if (!nextEndpoint && !nextModel && !newKey && !credentials.aiKey) {
     const next = { ...credentials }; delete next.aiKeyScope;
-    return { settings: { ...currentSettings, endpoint: '', model: '', aiProviderId: 'custom' }, credentials: next };
+    if (own(payload, 'aiVisionMode') && !['auto', 'enabled', 'disabled'].includes(payload.aiVisionMode)) throw new Error('图片理解设置无效。');
+    return { settings: { ...currentSettings, endpoint: '', model: '', aiProviderId: 'custom', aiVisionMode: 'auto' }, credentials: next };
   }
   let sameDestination = false;
   try { sameDestination = completionEndpoint(nextEndpoint) === completionEndpoint(currentSettings.endpoint); } catch {}
@@ -96,6 +103,7 @@ function prepareLegacyAiSettingsSave(currentSettings, credentials, payload, opti
     providerId: sameDestination ? providerId(currentSettings) : 'custom',
     endpoint: nextEndpoint, model: nextModel, keyAction: newKey ? 'replace' : 'keep',
     ...(newKey ? { aiKey: newKey } : {}),
+    ...(own(payload, 'aiVisionMode') ? { aiVisionMode: payload.aiVisionMode } : {}),
   }, options);
 }
 

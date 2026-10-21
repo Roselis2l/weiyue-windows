@@ -7,6 +7,14 @@
 .modal-body details{margin-top:15px;font-size:11px;color:#7d9169}
 .modal-body details .preview-blocks{margin-top:10px}
 .modal-inline-error{margin-top:16px}
+.summary-list-card{display:grid;grid-template-columns:minmax(0,1fr) 32px;gap:12px;align-items:start;cursor:default}
+.summary-open{display:block;min-width:0;width:100%;padding:0;border:0;border-radius:4px;background:none;text-align:left;cursor:pointer;overflow-wrap:anywhere}
+.button.summary-delete{width:32px;height:32px;min-width:32px;min-height:32px;flex:0 0 32px;padding:0;display:inline-grid;place-items:center;color:#8c9785;border-color:transparent;background:transparent}
+.button.summary-delete:hover{color:var(--danger);background:#f9eee9;border-color:#e7d4ca}
+.button.summary-delete:focus-visible{outline:2px solid var(--danger);outline-offset:3px}
+.button.summary-delete:disabled{opacity:.4;cursor:wait}
+.document-summary-actions{display:flex;align-items:center;gap:10px;min-width:0}
+.summary-delete-title{font-size:14px;font-weight:600;line-height:1.7;overflow-wrap:anywhere;margin-bottom:12px}
 .login-progress{padding:16px;border:1px solid #dce5d1;border-radius:8px;background:#f1f5eb;margin:20px 0 12px}
 .login-progress-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#466238;font-size:12px}
 .login-progress-heading .caption{margin-left:auto}
@@ -22,6 +30,11 @@
 
 .sync-status-line{font-size:10px;line-height:16px;color:#7f9272;margin:0;overflow-wrap:anywhere;min-width:0}
 .sync-status-line.has-error{color:#a27151}
+.sync-status-stack{flex:1;min-width:0}
+.sync-status-stack[hidden]{display:none}
+.sync-status-stack .sync-status-line,.sync-gap-line{height:16px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sync-gap-line{font-size:10px;color:#6b815d;margin:0;min-width:0;font-variant-numeric:tabular-nums}
+.sync-gap-line.has-error{color:#a27151}
 
 .message-content{min-width:0}
 .message-media{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px;max-width:460px;align-items:start}
@@ -120,3 +133,54 @@
 .ai-config-dialog #save-ai-config{min-width:74px}
 .ai-config-dialog #save-ai-config:disabled{background:#bfc4c0;border-color:#bfc4c0;color:#fff;cursor:default;opacity:1}
 @media(max-width:700px){.ai-config-dialog .modal-head,.ai-config-dialog .modal-body,.ai-config-dialog .modal-footer{padding-left:18px;padding-right:18px}.ai-config-dialog .modal-footer{flex-wrap:wrap}.ai-config-footnote{flex-basis:100%;margin-right:0}}
+
+/* Compact sender groups while keeping the name, time and stable action row. */
+.group-avatar,.avatar{position:relative;overflow:hidden;isolation:isolate}
+.group-avatar{min-width:31px;max-width:31px;min-height:31px;max-height:31px}
+.avatar{min-width:33px;max-width:33px;min-height:33px;max-height:33px}
+.avatar-letter{line-height:1}
+.group-avatar .avatar-image,.avatar .avatar-image{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;opacity:0;pointer-events:none}
+.group-avatar .avatar-image.is-loaded,.avatar .avatar-image.is-loaded{opacity:1}
+.group-avatar.has-image .avatar-letter,.avatar.has-image .avatar-letter{visibility:hidden}
+.message{padding-top:9px;padding-bottom:9px}
+.message-top{margin-bottom:4px}
+.message-tools{margin-top:4px}
+.ai-prepare-status{min-height:110px;line-height:1.8}
+#ai-content-scope{margin-bottom:12px}
+#ai-omissions{margin-top:14px;font-size:12px;line-height:1.8}
+#ai-omissions summary{color:#9b814c;cursor:pointer}
+#ai-omissions .preview-blocks{margin-top:8px;max-height:210px}
+.message-link{color:#356f64;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;overflow-wrap:anywhere;cursor:pointer}
+.message-link:hover{color:#174c42}
+.message-link:focus-visible{outline:2px solid #5a9185;outline-offset:3px;border-radius:2px}
+.post-original-link{display:inline-block;margin-top:10px;font-size:12px;font-weight:600}
+
+.attachment-card{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:12px 0;padding:14px 16px;background:#f0f3ed;border:1px solid #d9e1d4;border-radius:10px}.attachment-copy{display:flex;flex-direction:column;gap:5px;flex:1;min-width:180px;overflow-wrap:anywhere}.attachment-copy small,.attachment-save-hint{font-size:12px;color:#65705f}.attachment-save-hint{flex-basis:100%}
+[hidden]{display:none!important}
+.member-picker{position:relative;flex:none;min-width:104px}
+.member-picker-toggle{height:34px;max-width:155px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--line);border-radius:7px;padding:0 10px;background:var(--surface,#fff);color:var(--ink);cursor:pointer}
+.member-picker-toggle:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.member-picker-panel{position:absolute;z-index:30;top:calc(100% + 7px);right:0;width:285px;max-width:calc(100vw - 40px);padding:10px;background:var(--surface,#fff);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px #233c2929}
+.member-picker-search{width:100%;height:34px;box-sizing:border-box;margin-bottom:5px}
+.member-picker-clear{background:none;border:0;color:var(--accent,#356f50);cursor:pointer;font-size:12px;padding:6px 0}
+.member-picker-list{max-height:280px;overflow-y:auto;overscroll-behavior:contain}
+.member-picker-option{display:flex;align-items:center;gap:8px;padding:7px 4px;border-radius:5px;cursor:pointer}
+.member-picker-option:hover{background:var(--soft,#edf4ef)}
+.member-picker-option input{flex:none}
+.member-picker-name{overflow-wrap:anywhere;min-width:0}
+.member-picker-id{margin-left:auto;font-size:10px;color:var(--muted);overflow-wrap:anywhere;max-width:125px}
+.member-picker-empty,.member-picker-status{font-size:11px;color:var(--muted);padding:6px 2px;margin:0}
+.filter-error{font-size:12px;color:#a33328;margin:8px 0 0}
+.filter-extra input[type="datetime-local"]{min-width:0;width:100%;font-size:12px}
+.reading-navigation{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:0}
+.reading-navigation .new-messages-notice{margin-left:0;justify-content:flex-start;flex:1}
+#jump-latest-read{flex:none;white-space:nowrap}
+
+/* Inline Weibo emoticons reserve the same geometry while loading or failing. */
+/* Out-of-flow children keep the inline-block baseline identical in all states. */
+.inline-emoticon{display:inline-block;position:relative;vertical-align:-6px;width:32px;height:24px;max-width:32px;overflow:hidden;white-space:nowrap;line-height:0;letter-spacing:0;text-indent:0}
+.emoticon-image{position:absolute;left:4px;top:0;width:24px;height:24px;object-fit:contain}
+.emoticon-fallback{position:absolute;left:0;top:0;display:block;width:32px;max-width:32px;text-align:center;font-size:8px;line-height:24px;white-space:nowrap;font-weight:400;letter-spacing:0;user-select:text}
+.inline-emoticon[data-original-token="【笑cry】"] .emoticon-fallback{font-size:7px}
+.emoticon-fallback.emoticon-fallback-long{top:50%;transform:translateY(-50%);font-size:7px;line-height:8px;white-space:normal;word-break:break-all;line-break:anywhere;overflow-wrap:anywhere;max-height:24px}
+.emoticon-fallback.emoticon-fallback-compact{font-size:6px}

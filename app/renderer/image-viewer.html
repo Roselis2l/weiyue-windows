@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src data:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>查看原图 · 微阅</title>
+  <link rel="stylesheet" href="image-viewer.css">
+  <script src="image-viewer.js" defer></script>
+</head>
+<body>
+  <header class="viewer-chrome">
+    <div class="viewer-label"><strong id="image-title">查看原图</strong><span id="image-caption"></span></div>
+    <div class="window-controls" aria-label="窗口控制">
+      <button id="minimize" title="最小化" aria-label="最小化图片窗口">—</button>
+      <button id="maximize" title="最大化或还原" aria-label="最大化或还原图片窗口">□</button>
+      <button id="close" class="close" title="关闭（Esc）" aria-label="关闭图片窗口">×</button>
+    </div>
+  </header>
+  <main id="viewport" tabindex="0" aria-label="原图，滚轮缩放，拖动平移，Esc 关闭">
+    <img id="image" alt="" hidden draggable="false">
+    <div id="status-panel"><p id="status" role="status" aria-live="polite">正在加载原图…</p><button id="retry" hidden>重新加载</button></div>
+  </main>
+  <footer class="viewer-toolbar">
+    <div class="zoom-controls" aria-label="图片缩放">
+      <button id="zoom-out" aria-label="缩小图片" title="缩小（−）" disabled>−</button>
+      <output id="zoom-value" aria-live="polite">—</output>
+      <button id="zoom-in" aria-label="放大图片" title="放大（+）" disabled>＋</button>
+      <button id="fit" disabled>适应窗口</button>
+      <button id="actual" disabled>原始大小</button>
+    </div>
+    <span id="image-info" class="image-info">滚轮缩放 · 拖动平移 · Esc 关闭</span>
+    <button id="save" class="primary" disabled>另存为…</button>
+  </footer>
+  <div id="save-status" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

@@ -12,7 +12,7 @@ const { assertWindowsRuntimeReadable } = require('./windows-runtime-check.cjs');
 
 const root = path.resolve(__dirname, '..');
 const sourceVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
-const evidence = path.join(root, 'artifacts', 'native-reading-input-integration-' + sourceVersion);
+const evidence = process.env.WEIYUE_READING_TEST_OUTPUT ? path.resolve(process.env.WEIYUE_READING_TEST_OUTPUT) : path.join(root, 'artifacts', 'native-reading-input-integration-' + sourceVersion);
 const harness = fs.mkdtempSync(path.join(os.tmpdir(), 'weiyue-native-reading-'));
 const dataDir = path.join(harness, 'data');
 fs.mkdirSync(evidence, { recursive: true });
@@ -97,6 +97,10 @@ function boot(fixtures) {
       info.apiCalls.push(url.pathname);
       if (url.origin === 'https://api.weibo.com' && url.pathname === '/webim/query_primary_info.json') {
         return Response.json({ profile: { id: fixtures.identity, screen_name: '离线模拟账号' } });
+      }
+      if (url.origin === 'https://api.weibo.com' && url.pathname === '/webim/2/direct_messages/contacts.json' &&
+          url.searchParams.get('source') === '209678993' && url.searchParams.get('special_source') === '3') {
+        return Response.json({ contacts: fixtures.groups.map(group => ({ user: { type: 2, id: group.id, name: group.name } })) });
       }
       if (url.origin === 'https://api.weibo.com' && url.pathname === '/webim/groupchat/query_messages.json') {
         const batch = pending.get(url.searchParams.get('id'));

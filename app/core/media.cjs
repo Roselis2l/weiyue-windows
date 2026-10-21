@@ -1,5 +1,12 @@
 'use strict';
 
+const { types: { isUint8Array } } = require('node:util');
+const { isHeic } = require('./image-format.cjs');
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const byteLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength').get;
+const byteOffsetGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteOffset').get;
+const bufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'buffer').get;
+
 const MAX_URL_LENGTH = 4096;
 const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 // Image hosts are cross-origin to the official chat page. Chromium's default
@@ -9,6 +16,11 @@ const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 // continue to use their existing full official Referer in weibo.cjs.
 const OFFICIAL_REFERER = 'https://api.weibo.com/';
 const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+// The official image endpoint can declare image/jpeg for HEIC bytes. Opt in
+// only at call sites that provide a bounded local HEIC decoder; avatar and AI
+// callers retain the existing four-format behavior by default.
+const HEIC_DECLARED_MIMES = new Set(['image/jpeg', 'image/heic', 'image/heif']);
+const VALIDATION_STAGES = new Set(['mime', 'body', 'chunk', 'magic']);
 const MESSAGES = Object.freeze({
   MEDIA_URL: '图片地址不在允许范围。',
   MEDIA_CONFIG: '图片加载设置无效。',
@@ -22,9 +34,21 @@ const MESSAGES = Object.freeze({
 });
 
 class MediaError extends Error {
-  constructor(code) { super(MESSAGES[code]); this.name = 'MediaError'; this.code = code; }
+  constructor(code, details) {
+    super(MESSAGES[code]); this.name = 'MediaError'; this.code = code;
+    if (code === 'MEDIA_TYPE' && VALIDATION_STAGES.has(details?.validationStage)) {
+      // Fixed diagnostic vocabulary only: never attach response text, a URL,
+      // arbitrary header values, raw bytes, or upstream error details.
+      this.validation = Object.freeze({
+        validationStage: details.validationStage,
+        declaredMime: ALLOWED_MIMES.has(details.declaredMime) ? details.declaredMime : 'other',
+        detectedMime: ALLOWED_MIMES.has(details.detectedMime) ? details.detectedMime : 'unknown',
+        byteLength: Number.isSafeInteger(details.byteLength) && details.byteLength >= 0 ? details.byteLength : 0,
+      });
+    }
+  }
 }
-function fail(code) { throw new MediaError(code); }
+function fail(code, details) { throw new MediaError(code, details); }
 
 function parseUrl(value) {
   if (typeof value !== 'string' || !value || value.length > MAX_URL_LENGTH || /[\s\u0000-\u001f\u007f\\]/.test(value)) return null;
@@ -95,10 +119,10 @@ function cancelBody(body) {
   try { if (body?.cancel) Promise.resolve(body.cancel()).catch(() => {}); } catch { /* best effort only */ }
 }
 
-async function fetchImage({ url, fetch: request, signal, timeoutMs = 15000, maxBytes = DEFAULT_MAX_BYTES } = {}) {
+async function fetchImage({ url, fetch: request, signal, timeoutMs = 15000, maxBytes = DEFAULT_MAX_BYTES, allowHeif = false } = {}) {
   let currentUrl = safeImageUrl(url);
   if (!currentUrl) fail('MEDIA_URL');
-  if (typeof request !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > DEFAULT_MAX_BYTES) fail('MEDIA_CONFIG');
+  if (typeof request !== 'function' || typeof allowHeif !== 'boolean' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > DEFAULT_MAX_BYTES) fail('MEDIA_CONFIG');
   if (signal && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) fail('MEDIA_CONFIG');
   if (signal?.aborted) fail('MEDIA_ABORT');
 
@@ -157,10 +181,12 @@ async function fetchImage({ url, fetch: request, signal, timeoutMs = 15000, maxB
     }
 
     const mime = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!ALLOWED_MIMES.has(mime)) fail('MEDIA_TYPE');
+    if (!ALLOWED_MIMES.has(mime) && !(allowHeif && HEIC_DECLARED_MIMES.has(mime))) fail('MEDIA_TYPE', { validationStage: 'mime', declaredMime: mime, byteLength: 0 });
     const length = response.headers.get('content-length');
     if (length !== null && /^\d+$/.test(length) && BigInt(length) > BigInt(maxBytes)) fail('MEDIA_TOO_LARGE');
-    if (!response.body || typeof response.body.getReader !== 'function') fail('MEDIA_TYPE');
+    if (!response.body || typeof response.body.getReader !== 'function') fail('MEDIA_TYPE', {
+      validationStage: 'body', declaredMime: mime, byteLength: 0,
+    });
     reader = response.body.getReader();
     const chunks = [];
     let size = 0;
@@ -168,13 +194,28 @@ async function fetchImage({ url, fetch: request, signal, timeoutMs = 15000, maxB
       const result = await withinBudget(() => reader.read());
       if (result.done) break;
       const value = result.value;
-      if (!(value instanceof Uint8Array)) fail('MEDIA_TYPE');
-      size += value.byteLength;
+      // Electron and Node may create byte arrays in different JS realms.
+      // This accepts actual Uint8Array/Buffer values without accepting other
+      // views, strings, or objects that merely spoof their prototype/tag.
+      if (!isUint8Array(value)) fail('MEDIA_TYPE', { validationStage: 'chunk', declaredMime: mime, byteLength: size });
+      let view;
+      try {
+        view = new Uint8Array(Reflect.apply(bufferGetter, value, []),
+          Reflect.apply(byteOffsetGetter, value, []), Reflect.apply(byteLengthGetter, value, []));
+      } catch { fail('MEDIA_TYPE', { validationStage: 'chunk', declaredMime: mime, byteLength: size }); }
+      size += view.byteLength;
       if (size > maxBytes) fail('MEDIA_TOO_LARGE');
-      chunks.push(Buffer.from(value));
+      chunks.push(Buffer.from(view));
     }
     const bytes = Buffer.concat(chunks, size);
-    if (detectedMime(bytes) !== mime) fail('MEDIA_TYPE');
+    const actualMime = detectedMime(bytes);
+    if (allowHeif && HEIC_DECLARED_MIMES.has(mime) && !actualMime && isHeic(bytes)) {
+      if (interruptError) throw interruptError;
+      return { bytes, mime: 'image/heic' };
+    }
+    if (actualMime !== mime) fail('MEDIA_TYPE', {
+      validationStage: 'magic', declaredMime: mime, detectedMime: actualMime, byteLength: size,
+    });
     if (interruptError) throw interruptError;
     return { bytes, mime };
   } catch (error) {

@@ -135,11 +135,14 @@ test('429 numeric Retry-After can exceed the backoff ceiling and cannot be short
   const f = fixture({ run: async () => { calls++; if (calls === 1) throw failed('RATE_LIMIT', { retryAfter: '1800' }); } }); enable(f.controller);
   await f.clock.advance(60000); const due = f.clock.time + 1800000;
   assert.equal(f.controller.status().nextRunAt, due);
+  assert.equal(f.controller.status().errorCode, 'RATE_LIMIT'); assert.equal(f.controller.status().blocked, false);
   await f.clock.advance(10000); f.controller.configure({ enabled: false }); f.controller.stop();
   f.controller.configure({ enabled: true }); f.controller.start();
   assert.equal(f.controller.status().nextRunAt, due);
+  assert.equal(f.controller.status().errorCode, 'RATE_LIMIT'); assert.equal(f.controller.status().blocked, false);
   await f.clock.advance(due - f.clock.time - 1); assert.equal(calls, 1);
   await f.clock.advance(1); assert.equal(calls, 2); assert.equal(f.controller.status().error, '');
+  assert.equal(f.controller.status().errorCode, ''); assert.equal(f.controller.status().blocked, false);
 });
 
 test('429 HTTP dates, explicit seconds and malformed headers retain a safe minimum wait', async () => {
@@ -162,6 +165,7 @@ test('a rate limit received after pause/resume still prevents an early retry', a
   f.controller.configure({ enabled: true }); f.controller.start();
   pending.reject(failed('RATE_LIMIT', { retryAfter: '1800' })); await flush();
   assert.equal(f.controller.status().nextRunAt, f.clock.time + 1800000);
+  assert.equal(f.controller.status().errorCode, 'RATE_LIMIT'); assert.equal(f.controller.status().blocked, false);
   await f.clock.advance(1799999); assert.equal(calls, 1);
   await f.clock.advance(1); assert.equal(calls, 2);
 });
@@ -173,6 +177,7 @@ test('security failure received after a stop remains paused on start until user 
   pending.reject(failed('AUTH_REQUIRED')); await flush();
   f.controller.start(); await f.clock.advance(600000);
   assert.equal(calls, 1); assert.match(f.controller.status().pausedReason, /重新登录/);
+  assert.equal(f.controller.status().errorCode, 'AUTH_REQUIRED'); assert.equal(f.controller.status().blocked, true);
   f.controller.configure({ enabled: true }); await f.clock.advance(60000); assert.equal(calls, 2);
 });
 
@@ -200,8 +205,10 @@ test('unrepresentable server cooldown pauses safely, and invalid options never c
   const f = fixture({ run: async () => { throw failed('RATE_LIMIT', { retryAfter: '9'.repeat(100) }); } }); enable(f.controller);
   await f.clock.advance(60000);
   assert.equal(f.controller.status().nextRunAt, null); assert.match(f.controller.status().pausedReason, /计时范围/);
+  assert.equal(f.controller.status().errorCode, 'RATE_LIMIT'); assert.equal(f.controller.status().blocked, true);
   f.controller.configure({ enabled: true }); await f.clock.advance(3600000);
   assert.equal(f.controller.status().nextRunAt, null);
+  assert.equal(f.controller.status().errorCode, 'RATE_LIMIT'); assert.equal(f.controller.status().blocked, true);
   for (const value of [0, -1, 59999, 86400001, NaN, Infinity, '60000']) assert.throws(() => f.controller.configure({ enabled: true, intervalMs: value }));
   assert.throws(() => f.controller.configure({ enabled: 'yes' }));
   assert.equal(f.clock.timers.size, 0);
@@ -221,4 +228,163 @@ test('a stop requested by the running status observer prevents starting the requ
   f.controller.onChange = status => { if (status.running && !observed) { observed = true; f.controller.stop(); } };
   enable(f.controller); await f.clock.advance(60000);
   assert.equal(f.calls(), 0); assert.equal(f.controller.status().running, false); assert.equal(f.clock.timers.size, 0);
+});
+
+test('public status exposes only fixed safe codes and separates hard blocks from temporary waiting', async () => {
+  const secret = 'Cookie=private-sentinel https://private.invalid';
+  for (const [failure, expectedCode] of [
+    [failed(secret), 'GENERIC'], [new Error(secret), 'GENERIC'], [secret, 'GENERIC'],
+    [failed('constructor'), 'GENERIC'], [failed('NETWORK'), 'NETWORK'],
+    [failed('TIMEOUT'), 'TIMEOUT'], [failed('SERVER_ERROR'), 'SERVER_ERROR'], [failed('ABORTED'), 'ABORTED'],
+    [failed(secret, {status:429,retryAfter:120}), 'RATE_LIMIT'],
+  ]) {
+    const f = fixture({run:async()=>{throw failure;}});
+    assert.equal(f.controller.status().blocked, false); assert.equal(f.controller.status().errorCode, '');
+    enable(f.controller); await f.clock.advance(60000);
+    assert.equal(f.controller.status().blocked, false); assert.equal(f.controller.status().errorCode, expectedCode);
+    assert.ok(f.controller.status().nextRunAt > f.clock.time);
+    assert.doesNotMatch(JSON.stringify(f.changes), /private-sentinel|private\.invalid|Cookie=/);
+  }
+  const waiting = fixture({isEligible:()=>false}); enable(waiting.controller);
+  await waiting.clock.advance(120000);
+  assert.equal(waiting.controller.status().blocked, false); assert.equal(waiting.controller.status().errorCode, '');
+  const busy = fixture({run:async()=>{throw failed('SYNC_BUSY');}}); enable(busy.controller);
+  await busy.clock.advance(60000);
+  assert.equal(busy.controller.status().blocked, false); assert.equal(busy.controller.status().errorCode, '');
+});
+
+test('bare authorization statuses and known safety failures remain blocked until explicit configuration', async () => {
+  for (const [failure, expectedCode] of [
+    [failed('private-server-code', {status:401}), 'AUTH_REQUIRED'],
+    [failed('private-server-code', {statusCode:403}), 'ACCESS_DENIED'],
+    ...['AUTH_REQUIRED','ACCESS_DENIED','API_REJECTED','RISK_CONTROL','RISK_REQUIRED','ACCOUNT_MISMATCH',
+      'PAGE_SOURCE_REJECTED','UNSAFE_ENDPOINT','UNSAFE_REDIRECT','INVALID_RESPONSE','CURSOR_IGNORED','HTTP_ERROR'].map(code=>[failed(code),code]),
+  ]) {
+    let fail = true, calls = 0;
+    const f = fixture({run:async()=>{calls++; if(fail)throw failure;}}); enable(f.controller);
+    await f.clock.advance(60000);
+    assert.equal(f.controller.status().blocked, true); assert.equal(f.controller.status().errorCode, expectedCode);
+    assert.equal(f.controller.status().nextRunAt, null);
+    f.controller.stop(); f.controller.start(); await f.clock.advance(3600000);
+    assert.equal(calls, 1); assert.equal(f.controller.status().blocked, true); assert.equal(f.controller.status().errorCode, expectedCode);
+    assert.doesNotMatch(JSON.stringify(f.changes), /private-server-code|secret-sentinel|private\.invalid/);
+    fail = false; f.controller.configure({enabled:true});
+    assert.equal(f.controller.status().blocked, false); assert.equal(f.controller.status().errorCode, '');
+    await f.clock.advance(60000); assert.equal(calls, 2);
+  }
+});
+
+test('successful retry clears the safe code while user pause is not a hard block', async () => {
+  let calls = 0;
+  const f = fixture({run:async()=>{if(++calls===1)throw failed('TIMEOUT');}}); enable(f.controller);
+  await f.clock.advance(60000); assert.equal(f.controller.status().errorCode, 'TIMEOUT');
+  await f.clock.advance(60000); assert.equal(f.controller.status().errorCode, ''); assert.equal(f.controller.status().error, '');
+  f.controller.configure({enabled:false});
+  assert.equal(f.controller.status().blocked, false); assert.equal(f.controller.status().errorCode, '');
+  assert.equal(f.controller.status().nextRunAt, null);
+});
+
+test('manual synchronization is allowed while automatic updates are off, but respects a server cooldown', async () => {
+  const f = fixture();
+  assert.equal(f.controller.assertAllowed(), true);
+  f.controller.recordFailure(failed('RATE_LIMIT', { retryAfter: '1800' }));
+  const until = f.clock.time + 1800000;
+  assert.equal(f.controller.cooldownUntil, until);
+  assert.equal(f.controller.status().enabled, false);
+  assert.equal(f.controller.status().nextRunAt, null);
+  assert.throws(() => f.controller.assertAllowed(), error => error.code === 'RATE_LIMIT' && error.retryAfterMs === 1800000);
+  await f.clock.advance(1799999);
+  assert.throws(() => f.controller.assertAllowed(), error => error.code === 'RATE_LIMIT' && error.retryAfterMs === 1);
+  await f.clock.advance(1);
+  assert.equal(f.controller.assertAllowed(), true);
+  assert.equal(f.calls(), 0);
+});
+
+test('repeated manual guard denials do not extend cooldown, increase backoff or change the scheduled attempt', async () => {
+  const f = fixture(); enable(f.controller);
+  f.controller.recordFailure(failed('RATE_LIMIT', { retryAfterSeconds: 1800 }));
+  const until = f.controller.cooldownUntil, due = f.controller.status().nextRunAt;
+  assert.equal(f.controller.failures, 1);
+  for (let i = 0; i < 5; i++) {
+    await f.clock.advance(1000);
+    let rejection;
+    try { f.controller.assertAllowed(); } catch (error) { rejection = error; }
+    assert.equal(rejection.code, 'RATE_LIMIT');
+    f.controller.recordFailure(rejection);
+    assert.equal(f.controller.failures, 1);
+    assert.equal(f.controller.cooldownUntil, until);
+    assert.equal(f.controller.status().nextRunAt, due);
+  }
+  await f.clock.advance(until - f.clock.time);
+  assert.equal(f.calls(), 1); assert.equal(f.controller.failures, 0);
+});
+
+test('manual security failures block every sync until explicit enabling, even when automatic updates were disabled', async () => {
+  for (const [failure, code] of [
+    [failed('AUTH_REQUIRED'), 'AUTH_REQUIRED'], [failed('private-value', {status:401}), 'AUTH_REQUIRED'],
+    [failed('private-value', {statusCode:403}), 'ACCESS_DENIED'], [failed('RISK_CONTROL'), 'RISK_CONTROL'],
+    [failed('RISK_REQUIRED'), 'RISK_REQUIRED'], [failed('API_REJECTED'), 'API_REJECTED'],
+  ]) {
+    const f = fixture();
+    f.controller.recordFailure(failure);
+    assert.equal(f.controller.status().blocked, true);
+    let rejection;
+    try { f.controller.assertAllowed(); } catch (error) { rejection = error; }
+    assert.equal(rejection.code, code);
+    assert.doesNotMatch(rejection.message, /private|secret|Cookie|Authorization/);
+    f.controller.recordFailure(rejection);
+    f.controller.configure({enabled:false}); f.controller.start(); f.controller.stop(); f.controller.start();
+    f.controller.configure({intervalMs:120000}); f.controller.configure();
+    assert.throws(() => f.controller.assertAllowed(), error => error.code === code);
+    await f.clock.advance(3600000); assert.equal(f.calls(), 0);
+    f.controller.configure({enabled:true});
+    assert.equal(f.controller.assertAllowed(), true); assert.equal(f.controller.status().blocked, false);
+  }
+});
+
+test('manual failure is recorded once and the automatic path owns its own single failure accounting', async () => {
+  let f, calls = 0;
+  f = fixture({run:async()=>{
+    f.controller.assertAllowed(); calls++;
+    if (calls === 1) throw failed('RATE_LIMIT', {retryAfter:120});
+  }});
+  enable(f.controller);
+  await f.clock.advance(60000);
+  assert.equal(f.controller.failures, 1);
+  assert.equal(f.controller.status().nextRunAt, f.clock.time + 120000);
+  await f.clock.advance(120000); assert.equal(calls, 2); assert.equal(f.controller.failures, 0);
+  f.controller.recordFailure(failed('RATE_LIMIT', {retryAfter:120}));
+  assert.equal(f.controller.failures, 1);
+  assert.equal(f.controller.status().nextRunAt, f.clock.time + 120000);
+});
+
+test('manual transient and busy errors retain automatic retry behavior without inventing a hard block', () => {
+  const f = fixture(); enable(f.controller);
+  f.controller.recordFailure(failed('SYNC_BUSY'));
+  assert.equal(f.controller.failures, 0); assert.equal(f.controller.status().nextRunAt, f.clock.time + BUSY_DELAY_MS);
+  f.controller.recordFailure(failed('NETWORK'));
+  assert.equal(f.controller.failures, 1); assert.equal(f.controller.status().errorCode, 'NETWORK');
+  assert.equal(f.controller.status().nextRunAt, f.clock.time + MIN_INTERVAL_MS);
+  assert.equal(f.controller.assertAllowed(), true); assert.equal(f.controller.status().blocked, false);
+  assert.doesNotMatch(JSON.stringify(f.changes), /secret-sentinel|private.invalid|Authorization/);
+});
+
+test('manual oversized rate limits are a safe persistent block while the automatic timer is disabled', () => {
+  const f = fixture();
+  f.controller.recordFailure(failed('RATE_LIMIT', {retryAfter:'9'.repeat(100)}));
+  assert.equal(f.controller.status().blocked, true); assert.equal(f.controller.status().errorCode, 'RATE_LIMIT');
+  assert.equal(f.controller.status().nextRunAt, null); assert.equal(f.clock.timers.size, 0);
+  assert.throws(() => f.controller.assertAllowed(), error => error.code === 'RATE_LIMIT' && error.retryAfterMs === undefined);
+  f.controller.configure({enabled:true}); f.controller.start();
+  assert.throws(() => f.controller.assertAllowed(), error => error.code === 'RATE_LIMIT');
+  assert.equal(f.clock.timers.size, 0);
+});
+
+test('a late oversized rate limit remains a safe manual block after stopping the timer', async () => {
+  const pending = deferred(), f = fixture({run:()=>pending.promise}); enable(f.controller);
+  await f.clock.advance(60000); f.controller.stop();
+  pending.reject(failed('RATE_LIMIT', {retryAfter:'9'.repeat(100)})); await flush();
+  assert.equal(f.controller.status().blocked, true); assert.equal(f.controller.status().errorCode, 'RATE_LIMIT');
+  assert.throws(() => f.controller.assertAllowed(), error => error.code === 'RATE_LIMIT' && error.retryAfterMs === undefined);
+  assert.equal(f.clock.timers.size, 0);
 });

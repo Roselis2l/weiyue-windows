@@ -21,6 +21,12 @@ const STOP_MESSAGES = Object.freeze({
   CURSOR_IGNORED: '微博历史游标未生效，自动更新已暂停。请手动检查同步后再恢复。',
   HTTP_ERROR: '微博未接受读取请求，自动更新已暂停。请在官方页面检查状态后手动恢复。',
 });
+const SAFE_ERROR_CODES = new Set([...Object.keys(STOP_MESSAGES),
+  'RATE_LIMIT', 'TIMEOUT', 'SERVER_ERROR', 'ABORTED', 'NETWORK', 'GENERIC']);
+
+function safeErrorCode(code) {
+  return code === '' ? '' : typeof code === 'string' && SAFE_ERROR_CODES.has(code) ? code : 'GENERIC';
+}
 
 function validInterval(value) {
   if (!Number.isSafeInteger(value) || value < MIN_INTERVAL_MS || value > MAX_INTERVAL_MS) {
@@ -55,15 +61,18 @@ function retryDelay(error, now) {
 // through the status channel. Even known error codes receive fixed local copy.
 function classify(error) {
   const code = typeof error?.code === 'string' ? error.code : '';
-  if (Object.prototype.hasOwnProperty.call(STOP_MESSAGES, code)) return { kind: 'stop', message: STOP_MESSAGES[code] };
+  if (Object.prototype.hasOwnProperty.call(STOP_MESSAGES, code)) return { kind: 'stop', code, message: STOP_MESSAGES[code] };
+  for (const [status, safeCode] of [[401, 'AUTH_REQUIRED'], [403, 'ACCESS_DENIED']]) {
+    if (error?.status === status || error?.statusCode === status) return { kind: 'stop', code: safeCode, message: STOP_MESSAGES[safeCode] };
+  }
   if (code === 'BUSY' || code === 'SYNC_BUSY') return { kind: 'busy' };
   if (code === 'RATE_LIMIT' || error?.status === 429 || error?.statusCode === 429) {
-    return { kind: 'rate', message: '微博暂时限流，自动更新将遵守服务器要求的等待时间。' };
+    return { kind: 'rate', code: 'RATE_LIMIT', message: '微博暂时限流，自动更新将遵守服务器要求的等待时间。' };
   }
-  if (code === 'TIMEOUT') return { kind: 'retry', message: '微博读取超时，将稍后自动重试。' };
-  if (code === 'SERVER_ERROR') return { kind: 'retry', message: '微博服务暂时不可用，将稍后自动重试。' };
-  if (code === 'ABORTED') return { kind: 'retry', message: '本次自动更新已取消，将稍后重试。' };
-  return { kind: 'retry', message: '自动更新未完成，请检查网络；程序将稍后重试。' };
+  if (code === 'TIMEOUT') return { kind: 'retry', code, message: '微博读取超时，将稍后自动重试。' };
+  if (code === 'SERVER_ERROR') return { kind: 'retry', code, message: '微博服务暂时不可用，将稍后自动重试。' };
+  if (code === 'ABORTED') return { kind: 'retry', code, message: '本次自动更新已取消，将稍后重试。' };
+  return { kind: 'retry', code: code === 'NETWORK' ? code : 'GENERIC', message: '自动更新未完成，请检查网络；程序将稍后重试。' };
 }
 
 class AutoSync {
@@ -76,14 +85,16 @@ class AutoSync {
     this.now = now; this.setTimer = setTimer; this.clearTimer = clearTimer;
     this.intervalMs = validInterval(intervalMs);
     this.enabled = false; this.started = false; this.running = false;
-    this.lastSuccessAt = null; this.nextRunAt = null; this.error = '';
+    this.lastSuccessAt = null; this.nextRunAt = null; this.error = ''; this.errorCode = '';
     this.blocked = ''; this.holdReason = ''; this.cooldownUntil = 0;
     this.failures = 0; this.generation = 0; this.timer = null;
+    this.policyErrors = new WeakSet();
   }
 
   status() {
     return { enabled: this.enabled, intervalMs: this.intervalMs, running: this.running,
       lastSuccessAt: this.lastSuccessAt, nextRunAt: this.nextRunAt, error: this.error,
+      blocked: Boolean(this.blocked), errorCode: safeErrorCode(this.errorCode),
       pausedReason: !this.enabled ? '自动更新未启用。' : !this.started ? '自动更新已停止。' : this.blocked || this.holdReason };
   }
 
@@ -91,13 +102,39 @@ class AutoSync {
   clear() { if (this.timer !== null) this.clearTimer(this.timer); this.timer = null; this.nextRunAt = null; }
   active() { return this.started && this.enabled && !this.blocked; }
 
-  // Explicit user configuration also resumes a recoverable security pause.
+  // The same account policy also applies to manual synchronization while the
+  // automatic timer is stopped or disabled. This is a guard, not a new failure.
+  assertAllowed() {
+    const time = this.now(); let error;
+    if (this.blocked) {
+      error = Object.assign(new Error(this.blocked), { code: safeErrorCode(this.errorCode) || 'GENERIC' });
+    } else if (this.cooldownUntil > time) {
+      error = Object.assign(new Error('微博要求等待后再同步，请在冷却结束后重试。'),
+        { code: 'RATE_LIMIT', retryAfterMs: this.cooldownUntil - time });
+    }
+    if (error) { this.policyErrors.add(error); throw error; }
+    return true;
+  }
+
+  // Only a manual request's owner calls this. Automatic requests already call
+  // failed() in wake(); recording the same request in both places is incorrect.
+  recordFailure(error) {
+    if (!this.policyErrors.has(error)) this.failed(error);
+    return this.status();
+  }
+
+  // Explicit user enabling also resumes a recoverable security pause.
   // A server cooldown survives pause/resume and cannot be shortened this way.
-  configure({ enabled = this.enabled, intervalMs = this.intervalMs } = {}) {
+  configure(options = {}) {
+    const { enabled = this.enabled, intervalMs: requestedInterval = this.intervalMs } = options;
     if (typeof enabled !== 'boolean') throw new TypeError('自动更新开关必须是布尔值。');
-    intervalMs = validInterval(intervalMs);
+    const intervalMs = validInterval(requestedInterval);
     this.clear(); this.generation++; this.enabled = enabled; this.intervalMs = intervalMs;
-    this.failures = 0; this.error = ''; this.blocked = ''; this.holdReason = '';
+    this.holdReason = '';
+    if (Object.prototype.hasOwnProperty.call(options, 'enabled') && enabled) {
+      this.failures = 0; this.error = ''; this.blocked = '';
+      this.errorCode = this.cooldownUntil > this.now() ? 'RATE_LIMIT' : '';
+    }
     if (!Number.isFinite(this.cooldownUntil)) this.blocked = '微博要求的等待时间超出可安全计时范围，自动更新已暂停。';
     this.plan(this.intervalMs);
     return this.status();
@@ -119,6 +156,10 @@ class AutoSync {
 
   plan(delay, reason = '') {
     this.clear(); this.holdReason = reason;
+    if (!Number.isFinite(this.cooldownUntil) || this.cooldownUntil > MAX_DATE_MS) {
+      this.blocked = '微博要求的等待时间超出可安全计时范围，自动更新已暂停。';
+      this.errorCode = 'RATE_LIMIT'; this.cooldownUntil = Infinity; this.emit(); return;
+    }
     if (!this.active()) { this.emit(); return; }
     try {
       if (this.isEligible() !== true) this.holdReason = '等待已登录的微博账号和已选择的群聊。';
@@ -127,6 +168,7 @@ class AutoSync {
     const due = Math.max(time + delay, this.cooldownUntil);
     if (!Number.isFinite(due) || due > MAX_DATE_MS) {
       this.blocked = '微博要求的等待时间超出可安全计时范围，自动更新已暂停。';
+      this.errorCode = 'RATE_LIMIT';
       this.cooldownUntil = Infinity; this.emit(); return;
     }
     if (this.cooldownUntil > time + delay && !this.holdReason) this.holdReason = '正在遵守微博要求的限流等待时间。';
@@ -164,10 +206,10 @@ class AutoSync {
       if (!succeeded) {
         const failure = classify(error);
         if (failure.kind === 'stop') {
-          this.error = failure.message; this.blocked = failure.message; this.clear(); this.emit(); return;
+          this.error = failure.message; this.errorCode = failure.code; this.blocked = failure.message; this.clear(); this.emit(); return;
         }
         if (failure.kind === 'rate') {
-          this.error = failure.message;
+          this.error = failure.message; this.errorCode = failure.code;
           this.cooldownUntil = Math.max(this.cooldownUntil, this.now() + Math.max(MIN_INTERVAL_MS, retryDelay(error, this.now())));
           this.plan(this.intervalMs, '正在遵守微博要求的限流等待时间。'); return;
         }
@@ -175,15 +217,18 @@ class AutoSync {
       this.emit(); return;
     }
     if (succeeded) {
-      this.lastSuccessAt = this.now(); this.error = ''; this.failures = 0; this.cooldownUntil = 0;
+      this.lastSuccessAt = this.now(); this.error = ''; this.errorCode = ''; this.failures = 0; this.cooldownUntil = 0;
       this.plan(this.intervalMs);
     } else this.failed(error);
   }
 
   failed(error) {
+    if (this.policyErrors.has(error)) {
+      this.plan(Math.max(0, this.cooldownUntil - this.now())); return;
+    }
     const failure = classify(error);
     if (failure.kind === 'busy') { this.plan(BUSY_DELAY_MS, '正在等待当前操作完成。'); return; }
-    this.error = failure.message;
+    this.error = failure.message; this.errorCode = failure.code;
     if (failure.kind === 'stop') {
       this.blocked = failure.message; this.clear(); this.emit(); return;
     }

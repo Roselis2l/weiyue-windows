@@ -5,6 +5,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const source=fs.readFileSync(require.resolve('../app/renderer/app.js'),'utf8');
 const reading=require('../app/renderer/reading-state.js');
+const filters=require('../app/renderer/filter-controls.js');
 function section(start,end){
   const a=source.indexOf(start),b=source.indexOf(end,a);
   assert.ok(a>=0 && b>a,`renderer section ${start}`);return source.slice(a,b);
@@ -12,7 +13,8 @@ function section(start,end){
 // Exercise the shipped event handlers, renderer reconciliation, load and read IPC
 // logic. This fake DOM detects a detach/focus loss; real Chromium IME is tested
 // separately by the Windows regression harness.
-const extracted=section('async function run(','function updateBusy()')+
+const extracted=section('function emptyFilters()','const model =')+
+  section('async function run(','function updateBusy()')+
   section('async function setView(','function draftKey()')+
   section('function isCurrentReadingRendered()','function captureViewport()')+
   section('function readingBusy()','function queueReadingRefresh(')+
@@ -24,10 +26,16 @@ const extracted=section('async function run(','function updateBusy()')+
 function harness(){
   let now=0,sequence=0,barrier=null,viewport={anchorId:'9007199254740993001',anchorOffset:-28};
   const timers=new Map(),queries=[],writes=[],errors=[],restores=[];
-  const document={activeElement:null,visibilityState:'visible',hasFocus:()=>true};
+  const documentListeners={};
+  const document={activeElement:null,visibilityState:'visible',hasFocus:()=>true,
+    createElement:tag=>new Element(tag),
+    createTextNode:text=>new Element('#text',{textContent:String(text)}),
+    addEventListener:(name,callback)=>(documentListeners[name] ||= []).push(callback),
+    removeEventListener:(name,callback)=>{documentListeners[name]=(documentListeners[name] || []).filter(fn=>fn!==callback);}};
   class Element {
     constructor(tag,props={}){
       this.tag=tag;this.childNodes=[];this.parentNode=null;this.listeners={};this.dataset={};this.value='';
+      this.ownerDocument=document;this.attributes={};
       this.classList={add(){},contains(){return false;},toggle(){}};this.style={};
       for(const [key,value] of Object.entries(props)){
         if(key.startsWith('on'))this.addEventListener(key.slice(2),value);
@@ -50,12 +58,17 @@ function harness(){
       this.childNodes.splice(index<0?this.childNodes.length:index,0,child);child.parentNode=this;
     }
     append(...children){for(const child of children.flat(Infinity))if(child instanceof Element)this.insertBefore(child,null);}
+    appendChild(child){this.append(child);return child;}
     replaceChildren(...children){for(const child of [...this.childNodes])child.remove();this.append(...children);}
+    setAttribute(name,value){this.attributes[name]=String(value);if(name==='id')this.id=String(value);if(name==='class')this.className=String(value);}
+    getAttribute(name){return this.attributes[name] ?? null;}
     addEventListener(name,callback){(this.listeners[name] ||= []).push(callback);}
-    dispatch(name,props={}){const event={target:this,key:'',preventDefault(){this.prevented=true;},...props};for(const fn of this.listeners[name] || [])fn(event);return event;}
+    removeEventListener(name,callback){this.listeners[name]=(this.listeners[name] || []).filter(fn=>fn!==callback);}
+    dispatch(name,props={}){const event={target:this,key:'',preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},...props};for(const fn of this.listeners[name] || [])fn(event);return event;}
     querySelectorAll(selector){
       const matches=element=>selector[0]==='#'?element.id===selector.slice(1):
-        selector==='input[type="date"]'?element.tag==='input' && element.type==='date':
+        selector[0]==='.'?(element.className || '').split(/\s+/).includes(selector.slice(1)):
+        /^input\[type="[^"]+"\]$/.test(selector)?element.tag==='input' && element.type===selector.slice(12,-2):
         selector==='[data-message-id]'?!!element.dataset.messageId:false;
       return this.childNodes.flatMap(child=>[...(matches(child)?[child]:[]),...child.querySelectorAll(selector)]);
     }
@@ -69,7 +82,7 @@ function harness(){
     state:{account:{id:'account-a'},groups:[{id:'group-a',unreadCount:7},{id:'group-b',unreadCount:8}],
       readStates:{'group-a':{anchorId:viewport.anchorId,anchorOffset:-28,readThroughId:'older',unreadCount:7}},readPositions:{}},
     accountEpoch:0,groupId:'group-a',view:'read',queryVersion:1,layoutVersion:0,intentVersion:0,
-    filters:{keyword:'',senderId:'',start:'',end:'',importantOnly:false},searchEditor:null,filterReturn:null,
+    filters:{keyword:'',senderIds:[],start:'',end:'',importantOnly:false},searchEditor:null,filterReturn:null,
     messages:[{id:viewport.anchorId,time:1}],members:[],offset:0,limit:160,total:400,advanced:false,
     selected:new Set(),messageSignatures:new Map(),pending:new Set(),busy:0,readingCommits:new Map(),
     readWrite:Promise.resolve(),lastReadPayload:'',viewport:{...viewport},renderedReading:null,
@@ -86,13 +99,13 @@ function harness(){
     if(action==='read.set'){writes.push(JSON.parse(JSON.stringify(payload)));return{readState:{readThroughId:'older',unreadCount:7}};}
     throw Error('Unexpected mock IPC '+action);
   };
-  const context=vm.createContext({model,reading,document,node,$,api,
+  const context=vm.createContext({model,reading,filters,document,node,$,api,
     button:(text,fn,cls,props={})=>node('button',{...props,onclick:fn},text),
     field:(_label,input)=>node('label',{},input),
     check:(_label,checked,fn,props)=>node('label',{},node('input',{type:'checkbox',checked,...props,onchange:event=>fn(event.target.checked)})),
     emptyState:()=>node('div'),selectionBar:()=>node('div'),messageCard:message=>node('article',{'data-message-id':message.id}),
     messageSignature:JSON.stringify,dateLabel:()=>'',updateBusy(){},reportError:error=>errors.push(error),
-    loadDemo(){},importData(){},jumpToLatest(){},handleReadingScroll(){},bindReadingInput(){},
+    loadDemo(){},importData(){},jumpToLatest(){},jumpToLatestRead(){},handleReadingScroll(){},bindReadingInput(){},
     renderInspector(){},updateReadingSpace(){},updateReadChrome(){},updateUnreadBadges(){},
     renderSidebar(){},renderHeader(){},stashReadingDraft(){},restoreReadingDraft(){},
     loadBookmarks:async()=>host.replaceChildren(node('section')),
@@ -184,10 +197,18 @@ test('clearing search restores the ordinary anchor and filtered panes never pers
 });
 test('clear-all resets other controls without replacing the connected search input',async()=>{
   const h=harness(),input=h.input();h.type('text');await h.tick(350);
-  await h.run("applyFilters({senderId:'member-a',start:'2026-10-01',importantOnly:true})");
+  h.run("model.searchEditor.memberPicker.setSelected(['member-a']);model.searchEditor.filter.querySelector('#reading-start').value='2026-10-01T09:30'");
+  await h.run("applyFilters({senderIds:['member-a'],start:'2026-10-01T09:30',importantOnly:true})");
+  assert.deepEqual(h.queries.at(-1).senderIds,['member-a']);
+  assert.equal(h.queries.at(-1).start,Date.parse('2026-10-01T09:30:00+08:00'));
   await h.run('clearReadingFilters()');assert.equal(h.input(),input);assert.equal(input.value,'');
-  assert.equal(Object.values(h.model.filters).some(Boolean),false);
-  assert.equal(h.queries.at(-1).keyword,'');assert.equal(h.queries.at(-1).senderId,'');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.model.filters)),{keyword:'',senderIds:[],start:'',end:'',importantOnly:false});
+  assert.equal(h.queries.at(-1).keyword,'');assert.deepEqual(h.queries.at(-1).senderIds,[]);
+  assert.equal('start' in h.queries.at(-1),false);
+  assert.equal('end' in h.queries.at(-1),false);
+  assert.deepEqual(h.run('model.searchEditor.memberPicker.getSelected()'),[]);
+  assert.equal(h.run("model.searchEditor.filter.querySelector('#reading-start').value"),'');
+  assert.equal(h.run("model.searchEditor.filter.querySelector('#reading-end').value"),'');
 });
 test('switching group cancels a pending old draft and new queries remain group scoped',async()=>{
   const h=harness();h.type('old pending');await h.run("selectGroup('group-b')");await h.tick(700);

@@ -1,100 +1,44 @@
-# 测试与 Windows 验收
+# 测试与 Windows 复核
 
-以下命令均从源码根目录执行。测试分为 Node 核心测试、Electron 桌面回归和真实服务人工联调。命令的存在不代表已在读者的机器执行通过；应保留实际结果，并说明所用版本和环境。
+## 1.1.16 验证范围
+
+本次核心测试 673 项通过；最终 portable 的补扫界面 11 项、版本与沙箱启动校验通过。补扫回归使用隔离数据，覆盖大缺口、重复页、乱序、续传、退避以及阅读边界。真实服务限流、风控和长期运行不由合成结果证明。
+
+表情 8 项、摘要删除 8 项、mock Notion 10 项桌面回归在最后一项详情补全请求限制补丁前完成，对应功能未改动；补丁后重新执行全部核心测试、最终补扫 UI 和启动校验。
+
+当前结果及限制见 [1.1.16 更新说明](1.1.16更新说明.md) 和同次交付报告。下面只说明可复现方法，不预报尚未执行的检查。
+
+本轮重点覆盖每份摘要右上角垃圾桶入口、默认取消的应用内确认、按稳定 ID 删除、取消与持久化失败保留、跨账号与同名摘要隔离、重启恢复。删除不改变聊天、收藏、阅读位置、导出日志或已经存在的 Notion 页面；不请求真实 AI/Notion。Notion 导出使用模拟远端，覆盖摘要与多选收藏从预览按钮直接提交、字段校验、防重复、失败提示和成功链接；没有额外发送勾选或二次确认弹窗。
+
+完整公开表情目录须逐项验证全部名称的两种括号写法、所有去重资源的本地响应/格式/哈希、各分类、长代码和六种原有代码的加载失败原文回退、重复及混合代码、未知代码、链接混合、原文复制、缓存和稳定布局。官方图片随应用本地提供，来源与权利说明见 [WEIBO-EMOTICONS.md](WEIBO-EMOTICONS.md)。本次官方公开目录没有动画 GIF；合成 GIF 能力测试不能冒充真实官方动态表情验收。表情显示不得改变搜索、收藏、导出、摘要输入或用户分享图片列表。
+
+同时回归分钟级起止时间（北京时间、结束分钟包含整分钟）、可搜索成员多选、最新已读位置、未读数量文案和清除筛选恢复阅读位置。同步、媒体加载、筛选和还原位置不得代替真实阅读行为。
+
+合成阅读集成还应覆盖新消息到达时的阅读高水位、重启持久化、真实定时回调与筛选期间不推进已读。日期范围及成员选择不得跨账号泄漏。
+
+保留 HEIC、PDF、视频、原件保存和 HTTP/HTTPS 链接。新阅读功能不能破坏独立查看器、账号隔离或安全渲染。HEIF 对应源码与许可证、PDF.js 全部运行资源继续包含在发行包。
 
 ## 核心测试
-
-需要 Node.js 22 或更高版本，当前记录的工具链为 Node 24.19.0。核心测试不需要 npm 安装：
 
 ```powershell
 .\scripts\test.ps1
 ```
 
-脚本按文件名枚举 `tests/*.test.cjs`，拒绝空测试集，并对测试失败返回错误。若 Node 不在 PATH：
+## Windows 界面与合成集成
+
+准备独立 Electron 运行时和 Playwright；以各脚本参数约定传入本次 portable EXE。下面的集成只使用合成消息、隔离测试 profile 和模拟服务，不登录真实账号、不调用付费 AI/Notion。
 
 ```powershell
-.\scripts\test.ps1 -NodePath '<Node executable>'
+node .\scripts\ui-smoke.cjs .\dist-public-1.1.16\WeiYue-Windows-x64\WeiYue.exe
+node .\scripts\reading-filters-integration.cjs
+node .\scripts\emoticons-integration.cjs
+node .\scripts\summary-delete-integration.cjs
+node .\scripts\notion-direct-export-integration.cjs
+node .\scripts\image-viewer-integration.cjs
+node .\scripts\attachment-viewer-integration.cjs
+node .\scripts\links-ui-regression.cjs
 ```
 
-这一步覆盖存储、同步、分页/去重、阅读状态、媒体、摘要、Notion 导出等核心行为；不能代替实际 Windows 程序验收。
+各脚本实际参数、环境变量和运行范围以源码注释为准。若脚本启动源码应用，应将其结果明确记为源码级检查；最终 portable 验收须真实启动未替换 resources/app 的 EXE，并记录版本、文件 hash、沙箱、表情显示与复制、分钟和多成员筛选、已读高水位及重启。故障注入只能在独立测试副本中完成，不得改写最终发布包。
 
-## 桌面回归准备
-
-需要普通、获准使用的 Windows 交互桌面、Electron 44.9.0 和 Playwright 1.62.1。先完成 [BUILD.md](BUILD.md) 中的下载与 hash 校验，然后创建证据目录并将运行时解压到一个全新目录：
-
-```powershell
-New-Item -ItemType Directory -Path '.\artifacts' -Force | Out-Null
-if (Test-Path -LiteralPath '.\vendor\runtime') {
-    throw 'vendor/runtime already exists; use a fresh source workspace'
-}
-Expand-Archive -LiteralPath '.\vendor\electron-v44.9.0-win32-x64.zip' -DestinationPath '.\vendor\runtime'
-```
-
-不要把不同 Electron 版本解压到同一目录。源码包不包含 `vendor/runtime` 或 `artifacts`，这两个准备步骤不能省略。
-
-GUI 脚本读取 `PLAYWRIGHT_MODULE`，否则尝试加载 Node 能解析到的 `playwright`。若已有 Playwright 1.62.1，可指定 package 根目录：
-
-```powershell
-$env:PLAYWRIGHT_MODULE = '<absolute-path-to-playwright-package>'
-node -p "require(process.env.PLAYWRIGHT_MODULE + '/package.json').version"
-```
-
-如需自行安装外部测试工具，可在源码目录外新建工具目录；以下操作会访问 npm 并写入该工具目录，不由应用自动执行：
-
-```powershell
-$toolsRoot = Join-Path $env:TEMP 'weiyue-playwright-1.62.1'
-if (Test-Path -LiteralPath $toolsRoot) {
-    throw 'Tool directory already exists; choose a new toolsRoot'
-}
-New-Item -ItemType Directory -Path $toolsRoot | Out-Null
-$env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
-npm install --prefix $toolsRoot --save-exact --ignore-scripts playwright@1.62.1
-if ($LASTEXITCODE -ne 0) {
-    throw 'Playwright installation failed'
-}
-$env:PLAYWRIGHT_MODULE = Join-Path $toolsRoot 'node_modules\playwright'
-node -p "require(process.env.PLAYWRIGHT_MODULE + '/package.json').version"
-```
-
-这些测试驱动已下载的 Electron，不需要执行 `playwright install` 下载浏览器。上述命令固定顶层 Playwright 版本；本仓库未固定外部测试工具的完整传递依赖。保存工具目录生成的 lockfile 及实际版本，有助于记录自己的验收环境，不能将其误称为本仓库已提供的依赖锁。
-
-## 对最终 portable 验收
-
-先按 BUILD.md 生成 `dist-public-1.1.8`。以下脚本使用独立演示/合成 profile，不需要登录真实微博、配置 AI Key 或授权 Notion：
-
-```powershell
-node .\scripts\verify-package.cjs .\dist-public-1.1.8\WeiYue-Windows-x64\WeiYue.exe .\artifacts\package-verification.json
-node .\scripts\ui-smoke.cjs .\dist-public-1.1.8\WeiYue-Windows-x64\WeiYue.exe
-node .\scripts\login-integration.cjs .\dist-public-1.1.8\WeiYue-Windows-x64\WeiYue.exe
-```
-
-如果使用了其他 `OutputDirectory`，将三条命令中的 `dist-public-1.1.8` 换成实际名称。`login-integration.cjs` 必须显式传入当前 EXE，避免使用它的历史默认位置。
-
-`verify-package.cjs` 核对当前 app 源码与 portable 中的文件 hash、版本、演示数据、渲染隔离及默认关闭自动网络的状态。`ui-smoke.cjs` 在实际 EXE 中走界面流程。登录脚本使用模拟网络和测试身份，不验证真实微博服务是否仍兼容。
-
-## 源码级桌面回归
-
-准备好 `artifacts`、`vendor/runtime` 和 Playwright 后运行：
-
-```powershell
-node .\scripts\native-reading-input-integration.cjs
-node .\scripts\reading-refresh-integration.cjs
-node .\scripts\reading-position-integration.cjs
-node .\scripts\reading-ui-regression.cjs
-node .\scripts\media-integration.cjs
-node .\scripts\message-search-ime-integration.cjs
-node .\scripts\ai-settings-workflow-smoke.cjs
-node .\scripts\export-workflow-smoke.cjs
-node .\scripts\login-ui-regression.cjs
-node .\scripts\referrer-integration.cjs
-```
-
-这些脚本将源码及运行时复制到临时 harness，建立隔离资料，并模拟外部传输。`referrer-integration.cjs` 使用本机回环 HTTP 服务。需要旧版私有基线的历史布局比较不属于此公开套件。
-
-`windows-runtime-check.cjs` 是随源码提供的只读检查 helper。测试宿主 token 受限、运行时不可读或桌面不可用时，应保留失败原因并改用获准的测试环境；不要禁用 Electron 沙箱、修改 ACL 或变更安全设置来制造通过结果。
-
-## 输入法与真实服务边界
-
-`message-search-ime-integration.cjs` 驱动 Chromium/CDP composition 管线，并区分模拟兼容事件；它没有自动操作真实 Windows 拼音候选窗口。对原生候选窗、候选选择、组合取消、中文标点及多次组合提交，需要另行人工验收，不能由 CDP 测试结果替代。
-
-真实微博登录和群聊同步应由使用者自行完成，只访问其有权限的群。AI 和 Notion 必须由使用者明确配置并主动确认调用；开发/CI 测试不应传入真实群聊、密钥或工作区。公开报告应只包含合成结果和必要工具版本，避免上传 profile、日志中的账号信息或原始内部证据。
+测试产生的 artifacts、profile、备份和截图不随源码或 portable 分发。真实登录、平台风控、真实 AI 服务和 Notion 写入不由合成结果证明。浏览器真实交接与目标页面加载也分开记录。

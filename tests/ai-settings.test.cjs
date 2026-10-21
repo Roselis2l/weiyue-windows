@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { listAiProviders, prepareAiSettingsSave, prepareLegacyAiSettingsSave, assertAiKeyScope, scopeFor } = require('../app/core/ai-settings.cjs');
 const { prepareAiRequest, aiSummary, prepareSummary } = require('../app/core/summary.cjs');
+const { AiPreviewStore } = require('../app/core/ai-preview.cjs');
 const { Vault } = require('../app/core/security.cjs');
 const { Store } = require('../app/core/store.cjs');
 
@@ -112,6 +113,27 @@ test('legacy Notion-only save preserves AI exactly; full payload cannot bypass t
   assert.equal(prepareLegacyAiSettingsSave({}, {}, { endpoint: '', model: '', aiKey: '' }).credentials.aiKey, undefined);
 });
 
+test('omitted vision mode remains bound to canonical endpoint, provider and model across current and legacy saves', () => {
+  const initial = {
+    settings: { endpoint: 'https://vision.example.test/v1', model: 'declared-vision-model', aiProviderId: 'custom', aiVisionMode: 'enabled' },
+    credentials: { aiKey: 'VISION-MOCK-KEY', aiKeyScope: { providerId: 'custom', endpoint: 'https://vision.example.test/v1/chat/completions' } },
+  };
+  const payload = { providerId: 'custom', endpoint: initial.settings.endpoint, model: initial.settings.model, keyAction: 'keep' };
+  const current = extra => prepareAiSettingsSave(initial.settings, initial.credentials, { ...payload, ...extra });
+  const legacy = extra => prepareLegacyAiSettingsSave(initial.settings, initial.credentials, extra);
+  assert.equal(current({ endpoint: 'https://VISION.EXAMPLE.TEST:443/v1/chat/completions/', model: ' declared-vision-model ' }).settings.aiVisionMode, 'enabled');
+  assert.equal(current({ model: 'different-model' }).settings.aiVisionMode, 'auto');
+  assert.equal(current({ endpoint: 'https://another-vision.example.test/v1', keyAction: 'replace', aiKey: 'NEW-MOCK-KEY' }).settings.aiVisionMode, 'auto');
+  assert.equal(current({ providerId: 'openai', endpoint: 'https://api.openai.com/v1', keyAction: 'replace', aiKey: 'NEW-MOCK-KEY' }).settings.aiVisionMode, 'auto');
+  assert.equal(current({ model: 'different-model', aiVisionMode: 'enabled' }).settings.aiVisionMode, 'enabled');
+  assert.equal(legacy({ endpoint: 'https://vision.example.test/v1/chat/completions/', model: initial.settings.model, aiKey: '' }).settings.aiVisionMode, 'enabled');
+  assert.equal(legacy({ model: 'different-model', aiKey: '' }).settings.aiVisionMode, 'auto');
+  assert.equal(legacy({ endpoint: 'https://another-vision.example.test/v1', aiKey: 'NEW-MOCK-KEY' }).settings.aiVisionMode, 'auto');
+  assert.equal(legacy({ model: 'different-model', aiKey: '', aiVisionMode: 'enabled' }).settings.aiVisionMode, 'enabled');
+  assert.deepEqual(legacy({ notionToken: 'NOTION-MOCK-ONLY' }), initial);
+  assert.equal(initial.settings.aiVisionMode, 'enabled', 'Neither save helper may mutate original configuration');
+});
+
 test('binding stays inside the encrypted Vault blob and provider settings survive Store restart', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'weiyue-ai-settings-test-'));
   try {
@@ -156,9 +178,12 @@ const mainSource = fs.readFileSync(require.resolve('../app/main.cjs'), 'utf8');
 const handleSource = mainSource.slice(mainSource.indexOf('async function handle(action,p){'), mainSource.indexOf('\nasync function start(){'));
 function mainHarness(initial = bound()) {
   const account = { settings: structuredClone(initial.settings) }, calls = { secrets: 0, vault: [], settings: 0, summary: [], confirm: 0, reset: 0, invalidates: 0 };
+  const aiPreviews = new AiPreviewStore(), owner = 'account-A:epoch-1';
   let privateData = structuredClone(initial.credentials);
   const context = vm.createContext({
-    activeId: 'account-A', busy: false, account: () => account,
+    activeId: 'account-A', busy: false, activeAi: null, account: () => account,
+    aiPreviews, aiOwner: () => owner, AbortController, crypto: require('node:crypto'),
+    checkAiOperation: operation => { assert.equal(operation.owner, owner); assert.equal(operation.controller.signal.aborted, false); },
     secrets: id => { assert.equal(id, 'account-A'); calls.secrets++; return structuredClone(privateData); },
     vault: { write: (id, value) => { assert.equal(id, 'account-A'); calls.vault.push(structuredClone(value)); privateData = structuredClone(value); } },
     store: { update: (id, fn) => { assert.equal(id, 'account-A'); calls.settings++; fn(account); } },
@@ -171,7 +196,13 @@ function mainHarness(initial = bound()) {
     sessionRegistry: { invalidate: () => { calls.invalidates++; } },
   });
   vm.runInContext(`${handleSource}\nglobalThis.handle = handle;`, context);
-  return { context, calls, account, handle: context.handle, credentials: () => privateData };
+  return {
+    context, calls, account, handle: context.handle, credentials: () => privateData,
+    prepareToken: () => aiPreviews.put({
+      owner, settings: account.settings, prepared: { messages: [{ text: 'mock' }], chunks: [{}] },
+      profile: prepareAiRequest(account.settings),
+    }),
+  };
 }
 
 test('main provider listing has zero credentials/network activity; AI save returns snapshot without keys', async () => {
@@ -215,7 +246,7 @@ test('main summary refuses mismatched key binding before confirmation, allows un
   await assert.rejects(bad.handle('summary.ai', {}), /不匹配/);
   assert.equal(bad.calls.confirm, 0); assert.equal(bad.calls.summary.length, 0); assert.equal(bad.calls.vault.length, 0);
   const legacy = mainHarness({ settings: oldSettings(), credentials: secrets() });
-  await legacy.handle('summary.ai', {});
+  await legacy.handle('summary.ai', { previewId: legacy.prepareToken(), confirmed: true });
   assert.equal(legacy.calls.confirm, 1); assert.equal(legacy.calls.summary.length, 1); assert.equal(legacy.calls.vault.length, 0);
   assert.equal(legacy.credentials().aiKeyScope, undefined);
 });

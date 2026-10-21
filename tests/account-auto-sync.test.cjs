@@ -23,3 +23,42 @@ test('switching away and back cannot clear risk stop or user pause',()=>{
  a.configure({enabled:false});f.registry.activate('B',f.make);f.registry.activate('A',f.make);
  assert.equal(a.status().enabled,false);assert.equal(a.status().nextRunAt,null);
 });
+
+test('account switches preserve independent safe error codes, security blocks and rate cooldowns',()=>{
+ const f=setup(),a=f.registry.activate('A',f.make);
+ a.failed({status:429,code:'private-server-value',retryAfter:3600});const due=a.status().nextRunAt;
+ assert.equal(a.status().errorCode,'RATE_LIMIT');assert.equal(a.status().blocked,false);
+ f.advance(1000);const b=f.registry.activate('B',f.make);
+ b.failed({statusCode:403,code:'private-server-value'});
+ assert.equal(b.status().errorCode,'ACCESS_DENIED');assert.equal(b.status().blocked,true);assert.equal(b.status().nextRunAt,null);
+ f.advance(1000);assert.equal(f.registry.activate('A',f.make),a);
+ assert.equal(a.status().errorCode,'RATE_LIMIT');assert.equal(a.status().blocked,false);assert.equal(a.status().nextRunAt,due);
+ assert.equal(b.status().errorCode,'ACCESS_DENIED');assert.equal(b.status().blocked,true);
+ assert.equal(f.timers.size,1);
+ f.registry.activate('B',f.make);
+ assert.equal(b.status().blocked,true);assert.equal(b.status().nextRunAt,null);assert.equal(f.timers.size,0);
+ b.configure({enabled:true});
+ assert.equal(b.status().blocked,false);assert.equal(b.status().errorCode,'');
+ assert.equal(a.status().errorCode,'RATE_LIMIT');assert.equal(a.cooldownUntil,due);
+ assert.doesNotMatch(JSON.stringify([a.status(),b.status()]),/private-server-value/);
+});
+
+test('manual restrictions belong to the captured account controller across an in-flight account switch',()=>{
+ const f=setup(),a=f.registry.activate('A',f.make);
+ assert.equal(a.assertAllowed(),true);
+ const b=f.registry.activate('B',f.make);
+ a.recordFailure({code:'RATE_LIMIT',retryAfter:1800});const until=a.cooldownUntil;
+ assert.throws(()=>a.assertAllowed(),error=>error.code==='RATE_LIMIT');
+ assert.equal(b.assertAllowed(),true);assert.equal(b.status().errorCode,'');
+ f.registry.activate('A',f.make);
+ assert.equal(a.cooldownUntil,until);assert.throws(()=>a.assertAllowed(),error=>error.code==='RATE_LIMIT');
+ a.configure({enabled:false});a.configure({enabled:true});
+ assert.equal(a.cooldownUntil,until);assert.throws(()=>a.assertAllowed(),error=>error.code==='RATE_LIMIT');
+ b.recordFailure({statusCode:403});
+ assert.throws(()=>b.assertAllowed(),error=>error.code==='ACCESS_DENIED');
+ f.registry.activate('B',f.make);b.configure({enabled:false});
+ f.registry.activate('A',f.make);f.registry.activate('B',f.make);
+ assert.throws(()=>b.assertAllowed(),error=>error.code==='ACCESS_DENIED');
+ b.configure({enabled:true});assert.equal(b.assertAllowed(),true);
+ assert.equal(a.cooldownUntil,until);
+});

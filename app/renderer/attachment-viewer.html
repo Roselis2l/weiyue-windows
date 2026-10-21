@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src blob: data:; media-src blob:; worker-src 'self' blob:; connect-src 'self'; font-src blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>附件预览 — 微阅</title>
+  <link rel="stylesheet" href="attachment-viewer.css">
+  <script type="module" src="attachment-viewer.js"></script>
+</head>
+<body>
+  <header class="chrome"><div class="heading"><strong id="title">附件预览</strong><span id="filename"></span></div><nav aria-label="窗口控制"><button id="minimize" aria-label="最小化">—</button><button id="maximize" aria-label="最大化或还原">□</button><button id="close" aria-label="关闭">×</button></nav></header>
+  <main id="viewport" tabindex="0">
+    <div id="notice" role="status" aria-live="polite"><p id="status">正在读取附件…</p><button id="retry" hidden>重新加载</button></div>
+    <section id="pdf-stage" hidden aria-label="PDF 页面"><canvas id="page" aria-label="PDF 页面画布"></canvas></section>
+    <video id="video" controls preload="metadata" playsinline hidden aria-label="视频播放器"></video>
+  </main>
+  <footer>
+    <div id="pdf-controls" hidden><button id="previous" disabled>上一页</button><label>第 <input id="page-number" type="number" min="1" value="1" aria-label="页码"> / <span id="page-count">—</span> 页</label><button id="next" disabled>下一页</button><span class="divider"></span><button id="zoom-out" aria-label="缩小" disabled>−</button><output id="zoom">100%</output><button id="zoom-in" aria-label="放大" disabled>＋</button><button id="fit" disabled>适应宽度</button></div>
+    <span id="info">文件仅在本机预览</span><button id="save" class="primary" disabled>另存为…</button>
+  </footer>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

@@ -281,7 +281,7 @@ test('incremental sync pages until known overlap and does not confuse overlap wi
   assert.equal(result.nextCursor, '26');
   assert.equal(result.reachedStop, true);
   assert.equal(result.coverage.complete, false);
-  assert.deepEqual(f.delays, [300]);
+  assert.deepEqual(f.delays, [1000]);
 });
 
 test('incremental budget exhaustion stays resumable, and continuation retains its original overlap boundary', async () => {
@@ -302,7 +302,7 @@ test('actual historical end remains distinct from overlap, and unsafe stop IDs f
   const end = fixture([reply({messages: [], has_more: false})]);
   const result = await end.client.syncGroup('21', {stopAtId: '20'});
   assert.equal(result.reachedStop, false);
-  assert.equal(result.coverage.complete, true);
+  assert.equal(result.coverage.complete, false);
   assert.equal(result.nextCursor, null);
   const none = fixture([]);
   for (const stopAtId of [9007199254740993123, '0', '1e3', '-1', {}]) await assert.rejects(none.client.syncGroup('21', {stopAtId}), {code: 'INVALID_RESPONSE'});
@@ -382,10 +382,11 @@ test('invalid attempt/deadline options fail before any network request', () => {
   }
 });
 
-test('429 honors Retry-After and long cooldown stops rather than shortening it', async () => {
+test('429 immediately stops this batch and exposes Retry-After to the scheduler', async () => {
   const f = fixture([reply('', 429, {'retry-after': '2'}), reply({messages: []})]);
-  await f.client.syncGroup('21');
-  assert.deepEqual(f.delays, [2000]);
+  await assert.rejects(f.client.syncGroup('21'), error => error.code === 'RATE_LIMIT' && error.retryAfter === '2');
+  assert.deepEqual(f.delays, []);
+  assert.equal(f.calls.length, 1);
   const long = fixture([reply('', 429, {'retry-after': '3600'})]);
   await assert.rejects(long.client.syncGroup('21'), error => error.code === 'RATE_LIMIT' && error.retryAfter === '3600');
   assert.equal(long.calls.length, 1);

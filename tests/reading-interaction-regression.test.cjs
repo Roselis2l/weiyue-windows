@@ -5,11 +5,16 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const source=fs.readFileSync(require.resolve('../app/renderer/app.js'),'utf8');
 const reading=require('../app/renderer/reading-state.js');
+const filters=require('../app/renderer/filter-controls.js');
 // Exercise actual renderer handlers, timers, queued writes and background refresh.
 // Only the DOM geometry, clock and IPC transport are faked. In particular neither
 // scheduleRead nor flushReading is stubbed: their interaction caused the regression.
 function section(start,end){const a=source.indexOf(start),b=source.indexOf(end,a);assert.ok(a>=0&&b>a,`source section ${start}`);return source.slice(a,b);}
-const extracted=section('async function refreshState(','function renderSidebar()')+
+const extracted=section('function emptyFilters()','const model =')+
+  section('function queryPayload()','async function loadReading(')+
+  section('function hasFilters(','async function applyFilters(')+
+  section('function updateMessageAvatar(','function noteText(')+
+  section('async function refreshState(','function renderSidebar()')+
   section('function isCurrentReadingRendered()','function watchMessageSizes()')+
   section('function reconcileChildren(','function renderReading()')+
   section('function bindReadingInput(','function updateUnreadBadges()')+
@@ -23,17 +28,20 @@ function harness(){
   let backend=initial.slice();
   const model={view:'read',groupId:'group-a',accountEpoch:1,queryVersion:7,layoutVersion:0,intentVersion:0,
     state:{account:{id:'mock-account'},groups:[{id:'group-a',unreadCount:3}],readStates:{'group-a':{readThroughId:'M0'}},readPositions:{}},
-    renderedReading:{accountId:'mock-account',epoch:1,groupId:'group-a',version:7},
+    renderedReading:{accountId:'mock-account',epoch:1,groupId:'group-a',version:7,filtered:false},
     scrollTop:100,restoring:false,restoreFrame:null,pointerScrolling:false,touchY:null,readTimer:null,viewport:null,
     switching:false,readWrite:Promise.resolve(),lastReadPayload:'',messages:initial.slice(),messageSignatures:new Map(),
     pointerReading:null,readingActivity:null,readingCommits:new Map(),pendingReadingRefresh:null,pendingReadingTimer:null,
-    offset:0,total:2,refreshRunning:false,members:[],filters:{senderId:''}};
+    offset:0,limit:160,total:2,refreshRunning:false,members:[],filters:null,
+    searchEditor:null,filterReturn:null,readNavigation:null};
   const scroll={scrollTop:100,offsetWidth:100,clientWidth:90,clientHeight:400,scrollHeight:1000,childNodes:[],
     getBoundingClientRect:()=>({top:0,bottom:400,right:200}),addEventListener:(name,callback)=>listeners[name]=callback,
     querySelectorAll(selector){return this.childNodes.filter(n=>selector==='[data-message-id]'?n.dataset.messageId:selector==='[data-day]'?n.dataset.day:false);},
     insertBefore(child,cursor){const old=this.childNodes.indexOf(child);if(old>=0)this.childNodes.splice(old,1);const index=cursor?this.childNodes.indexOf(cursor):-1;if(index<0)this.childNodes.push(child);else this.childNodes.splice(index,0,child);}};
   Object.defineProperty(scroll,'firstChild',{get:()=>scroll.childNodes[0]||null});
-  function element(dataset={}){const classes=new Set();const el={dataset,style:{},classList:{contains:v=>classes.has(v),add:v=>classes.add(v)},
+  // Geometry-only cards have no decorative descendants. Execute the real avatar
+  // hook; the dedicated avatar UI regression covers its actual DOM/load effects.
+  function element(dataset={}){const classes=new Set();const el={dataset,style:{},querySelector:()=>null,classList:{contains:v=>classes.has(v),add:v=>classes.add(v)},
     getBoundingClientRect(){const r=rows.get(dataset.messageId)||{top:0,bottom:0};return{top:r.top-scroll.scrollTop,bottom:r.bottom-scroll.scrollTop,height:r.bottom-r.top};},
     remove(){const i=scroll.childNodes.indexOf(el);if(i>=0)scroll.childNodes.splice(i,1);}};
     Object.defineProperty(el,'nextSibling',{get:()=>scroll.childNodes[scroll.childNodes.indexOf(el)+1]||null});return el;}
@@ -52,18 +60,18 @@ function harness(){
     if(name==='members.list')return[];
     throw Error('Unexpected fake IPC '+name);
   };
-  const context=vm.createContext({model,reading,readIntent:reading.createReadIntentGate(),document,api,
+  const context=vm.createContext({model,reading,filters,readIntent:reading.createReadIntentGate(),document,api,
     $:id=>id==='message-scroll'?scroll:id==='reading-end-space'?space:id==='modal'?modal:null,
     performance:{now:()=>now},setTimeout:(callback,delay)=>{const id=next++;timers.set(id,{callback,due:now+delay});return id;},clearTimeout:id=>timers.delete(id),
     requestAnimationFrame:callback=>{const id=next++;frames.set(id,callback);return id;},cancelAnimationFrame:id=>frames.delete(id),
-    getComputedStyle:()=>({paddingBottom:'0'}),hasFilters:()=>false,measuredMessages:captureItems,
+    getComputedStyle:()=>({paddingBottom:'0'}),measuredMessages:captureItems,
     findMessageElement:id=>scroll.childNodes.find(el=>el.dataset.messageId===id),
     watchMessageSizes:()=>{},updateReadChrome:()=>{},updateUnreadBadges:()=>{},enrichVisibleMessages:async()=>{},
     renderSidebar:()=>events.push({at:now,type:'sidebar'}),renderHeader:()=>events.push({at:now,type:'header'}),
     messageSignature:JSON.stringify,messageCard:card,node:(_tag,props)=>element(props?.['data-day']?{day:props['data-day']}:{}),
-    dateLabel:()=>'',emptyState:()=>element(),queryPayload:()=>({groupId:model.groupId}),locateReadBoundary:async()=>null,
+    dateLabel:()=>'',emptyState:()=>element(),locateReadBoundary:async()=>null,
     window:{addEventListener:(name,callback)=>windowListeners[name]=callback},scroll});
-  vm.runInContext(extracted+';bindReadingInput(scroll);',context);
+  vm.runInContext(extracted+';model.filters=emptyFilters();bindReadingInput(scroll);',context);
   const run=code=>vm.runInContext(code,context);
   async function settle(waitWrites=true){for(let i=0;i<16;i++)await Promise.resolve();if(waitWrites)await model.readWrite;}
   async function tick(ms,waitWrites=true){const target=now+ms;let iterations=0;for(;;){const due=[...timers].filter(([,t])=>t.due<=target).sort((a,b)=>a[1].due-b[1].due)[0];if(!due)break;assert.ok(iterations++<100,'deferred refresh must not spin');now=due[1].due;timers.delete(due[0]);due[1].callback();await settle(waitWrites);}now=target;await settle(waitWrites);}

@@ -13,7 +13,8 @@ const sourceRoot = path.resolve(option('--source-root') || root);
 const expectBug = process.argv.includes('--expect-bug');
 const sourceVersion = JSON.parse(fs.readFileSync(path.join(sourceRoot,'package.json'),'utf8')).version;
 const harness = fs.mkdtempSync(path.join(os.tmpdir(),'weiyue-search-ime-'));
-const evidence = fs.mkdtempSync(path.join(root,'artifacts','message-search-ime-'+sourceVersion+'-'));
+const evidence = process.env.WEIYUE_IME_OUTPUT ? path.resolve(process.env.WEIYUE_IME_OUTPUT) : fs.mkdtempSync(path.join(root,'artifacts','message-search-ime-'+sourceVersion+'-'));
+fs.mkdirSync(evidence,{recursive:true});
 const dataDir = path.join(harness,'data');
 fs.mkdirSync(dataDir);
 fs.cpSync(path.join(root,'vendor/runtime'),path.join(harness,'runtime'),{recursive:true});
@@ -87,6 +88,10 @@ function boot(fixtures){
     current.fetch=async(target,options)=>{
       const u=new URL(String(target));if(['app:','file:'].includes(u.protocol))return fetch(target,options);
       info.apiCalls.push(u.pathname);
+      if(u.origin==='https://api.weibo.com'&&u.pathname==='/webim/2/direct_messages/contacts.json'&&
+          u.searchParams.get('source')==='209678993'&&u.searchParams.get('special_source')==='3'){
+        return Response.json({contacts:fixtures.groups.map(group=>({user:{type:2,id:group.id,name:group.name}}))});
+      }
       if(u.origin==='https://api.weibo.com'&&u.pathname==='/webim/query_primary_info.json')return Response.json({profile:{id:fixtures.identity,screen_name:'虚构中文测试账号'}});
       if(u.origin==='https://api.weibo.com'&&u.pathname==='/webim/groupchat/query_messages.json'){
         const batch=pending.get(u.searchParams.get('id'));if(!batch)throw Error('No fake sync batch queued');

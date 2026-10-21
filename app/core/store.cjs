@@ -3,6 +3,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
+const { safeAvatarUrl } = require('./avatar.cjs');
+const {normalizeAttachment,mergeAttachments,attachmentSearchText}=require('./attachments.cjs');
 
 const SCHEMA_VERSION = 1;
 const MAX_MESSAGES = 500000;
@@ -84,6 +86,15 @@ function normalizeMessage(message) {
   }
   if (message.images !== undefined) normalized.images = normalizeImages(message.images);
   if (message.sharedPost !== undefined) normalized.sharedPost = normalizeSharedPost(message.sharedPost);
+  if (message.attachmentVersion !== undefined) {
+    if (message.attachmentVersion !== 1) fail('附件数据版本不受支持');
+    normalized.attachmentVersion = 1;
+  }
+  if (message.attachments !== undefined) normalized.attachments = array(message.attachments,'附件列表',20).map(item=>{
+    const value=normalizeAttachment(item);if(!value)fail('附件信息无效');return value;
+  });
+  const senderAvatarUrl = safeAvatarUrl(message.senderAvatarUrl);
+  if (senderAvatarUrl && !normalized.senderId.startsWith('unknown:')) normalized.senderAvatarUrl = senderAvatarUrl;
   return normalized;
 }
 function normalizeImages(images) {
@@ -143,18 +154,37 @@ function mergeSharedPost(previous, incoming) {
 function mergeRichMessage(previous, incoming) {
   if (!previous) return incoming;
   const result = { ...previous, ...incoming };
+  // A refreshed identity may replace an initially unknown/corrected sender.
+  // An avatar from the old stable sender ID must not survive that correction.
+  if (previous.senderId !== incoming.senderId && !incoming.senderAvatarUrl) delete result.senderAvatarUrl;
   if (!incoming.text.trim()) result.text = previous.text;
   if (!incoming.senderName.trim() || incoming.senderName === '未知成员') result.senderName = previous.senderName;
   if (previous.images !== undefined || incoming.images !== undefined) result.images = mergeImages(previous.images, incoming.images);
   if (previous.sharedPost !== undefined || incoming.sharedPost !== undefined) result.sharedPost = mergeSharedPost(previous.sharedPost, incoming.sharedPost);
+  if (previous.attachments !== undefined || incoming.attachments !== undefined) result.attachments = mergeAttachments(previous.attachments,incoming.attachments);
   return result;
 }
 function searchableMessage(message) {
-  return [message.text, message.senderName, message.sharedPost?.text || '', message.sharedPost?.author || ''].join('\n');
+  return [message.text, message.senderName, message.sharedPost?.text || '', message.sharedPost?.author || '',attachmentSearchText(message.attachments)].join('\n');
+}
+function normalizePendingRange(value) {
+  const pending = record(value, '最近消息续读状态');
+  const decimal = (value, label) => {
+    if (typeof value !== 'string' || value.length > 256 || !/^\d+$/.test(value)) fail(`${label}必须是十进制数字字符串`);
+    return value;
+  };
+  const cursor = pending.cursor === null ? null : decimal(pending.cursor, '最近消息续读游标');
+  if (cursor !== null && BigInt(cursor) <= 0n) fail('最近消息续读游标必须大于零');
+  const status = pending.status === undefined ? 'pending' : pending.status;
+  if (!['pending', 'unresolved'].includes(status)) fail('最近消息续读状态无效');
+  return {cursor, baselineId: decimal(pending.baselineId, '最近消息续读边界'),
+    arrivalAfterId: identifier(pending.arrivalAfterId, '最近消息到达起点'), status};
 }
 function normalizeGroup(group) {
   record(group, '群');
   const normalized = { id: identifier(group.id, '群 ID'), name: stringValue(group.name, '群名称', 512) };
+  const avatarUrl = safeAvatarUrl(group.avatarUrl);
+  if (avatarUrl) normalized.avatarUrl = avatarUrl;
   if (group.selected !== undefined) {
     if (typeof group.selected !== 'boolean') fail('群选择状态必须是布尔值');
     normalized.selected = group.selected;
@@ -167,22 +197,26 @@ function normalizeGroup(group) {
     if (typeof group.historyExhausted !== 'boolean') fail('历史同步完成状态必须是布尔值');
     normalized.historyExhausted = group.historyExhausted;
   }
-  if (group.latestPending !== undefined) {
-    if (group.latestPending === null) normalized.latestPending = null;
-    else {
-      const pending = record(group.latestPending, '最近消息续读状态');
-      const decimal = (value, label) => {
-        if (typeof value !== 'string' || value.length > 256 || !/^\d+$/.test(value)) fail(`${label}必须是十进制数字字符串`);
-        return value;
-      };
-      const cursor = decimal(pending.cursor, '最近消息续读游标');
-      if (BigInt(cursor) <= 0n) fail('最近消息续读游标必须大于零');
-      normalized.latestPending = {
-        cursor,
-        baselineId: decimal(pending.baselineId, '最近消息续读边界'),
-        arrivalAfterId: identifier(pending.arrivalAfterId, '最近消息到达起点'),
-      };
-    }
+  if (group.latestPendingRanges !== undefined || group.latestPending !== undefined) {
+    // Legacy files migrate in memory. The full range list is authoritative;
+    // latestPending remains a compatible mirror for older callers and UI.
+    const ranges = group.latestPendingRanges === undefined
+      ? (group.latestPending === null ? [] : [normalizePendingRange(group.latestPending)])
+      : array(group.latestPendingRanges, '待补消息区间', 32).map(normalizePendingRange);
+    normalized.latestPendingRanges = ranges;
+    normalized.latestPending = ranges.length ? {cursor:ranges[0].cursor,baselineId:ranges[0].baselineId,arrivalAfterId:ranges[0].arrivalAfterId} : null;
+  }
+  if (group.syncProgress !== undefined) {
+    const progress = record(group.syncProgress, '补扫进度');
+    if (!['backfill','joined','unresolved','blocked'].includes(progress.phase)) fail('补扫阶段无效');
+    for (const key of ['added','pages']) if (!Number.isSafeInteger(progress[key]) || progress[key] < 0) fail('补扫计数必须是非负整数');
+    normalized.syncProgress = {phase:progress.phase,added:progress.added,pages:progress.pages,
+      scannedUntil:progress.scannedUntil === null ? null : timestamp(progress.scannedUntil, '补扫到达时间'),
+      updatedAt:timestamp(progress.updatedAt, '补扫更新时间'),reason:stringValue(progress.reason,'补扫提示',1000,'')};
+  }
+  if (group.syncNext !== undefined) {
+    if (!['head','gap'].includes(group.syncNext)) fail('补扫调度状态无效');
+    normalized.syncNext=group.syncNext;
   }
   if (group.coverage !== undefined) {
     const coverage = record(group.coverage, '覆盖范围');
@@ -254,7 +288,7 @@ function validateState(state, expectedId) {
     messageKeys.add(key);
   }
   for (const group of groups) {
-    if (group.latestPending && !messageKeys.has(messageKey({ groupId: group.id, id: group.latestPending.arrivalAfterId }))) fail('最近消息续读起点引用的同群消息不存在；请保留原文件后检查数据');
+    for (const pending of group.latestPendingRanges || []) if (!messageKeys.has(messageKey({ groupId: group.id, id: pending.arrivalAfterId }))) fail('最近消息续读起点引用的同群消息不存在；请保留原文件后检查数据');
   }
   const bookmarks = array(state.bookmarks, '收藏', 100000).map(bookmark => {
     record(bookmark, '收藏'); identifier(bookmark.id, '收藏 ID');
@@ -292,6 +326,11 @@ function filterMessages(messages, query = {}, importantMembers = []) {
   record(query, '筛选条件');
   const groupId = query.groupId === undefined || query.groupId === '' ? null : identifier(query.groupId, '群 ID');
   const senderId = query.senderId === undefined || query.senderId === '' ? null : identifier(query.senderId, '成员 ID');
+  // Members are selected by stable ID, never display name. An empty selection
+  // adds no constraint; legacy senderId and a nonempty selection intersect.
+  // Array.from validates sparse entries as well as normal array elements.
+  const senderIds = query.senderIds === undefined ? null
+    : new Set(Array.from(array(query.senderIds, '成员 ID 列表', 100000), id => identifier(id, '成员 ID')));
   const keyword = stringValue(query.keyword, '关键词', 10000, '').trim().toLocaleLowerCase();
   const start = query.start === undefined || query.start === null || query.start === '' ? 0 : timestamp(query.start, '开始时间');
   const end = query.end === undefined || query.end === null || query.end === '' ? MAX_TIME : timestamp(query.end, '结束时间');
@@ -299,6 +338,7 @@ function filterMessages(messages, query = {}, importantMembers = []) {
   const important = new Set(importantMembers);
   return messages.filter(message => (!groupId || message.groupId === groupId)
     && (!senderId || message.senderId === senderId)
+    && (!senderIds?.size || senderIds.has(message.senderId))
     && message.time >= start && message.time < end
     && (!query.importantOnly || important.has(message.senderId))
     && (!keyword || searchableMessage(message).toLocaleLowerCase().includes(keyword)))
@@ -366,8 +406,21 @@ class Store {
   }
   update(id, mutator) {
     if (typeof mutator !== 'function') fail('更新操作无效');
-    const state = this.get(id), result = mutator(state);
+    const state = this.get(id);
+    const previousPending = new Map(state.groups.map(group => [group.id, {legacy:JSON.stringify(group.latestPending),ranges:JSON.stringify(group.latestPendingRanges)}]));
+    const result = mutator(state);
     if (result && typeof result.then === 'function') fail('本地数据更新必须是同步操作');
+    // Honor legacy callers editing only the mirrored first range, while never
+    // discarding additional intervals introduced by continuous catch-up.
+    for (const group of state.groups) {
+      const previous = previousPending.get(group.id);
+      if (previous && previous.legacy !== JSON.stringify(group.latestPending) && previous.ranges === JSON.stringify(group.latestPendingRanges)) {
+        const rest = (group.latestPendingRanges || []).slice(1);
+        if (group.latestPending != null) group.latestPendingRanges = [group.latestPending, ...rest];
+        else if (group.latestPending === undefined && !rest.length) delete group.latestPendingRanges;
+        else group.latestPendingRanges = rest;
+      }
+    }
     return this._write(identifier(id), state);
   }
   mergeMessages(accountId, groups, messages, options = {}) {
@@ -460,6 +513,23 @@ class Store {
     id = identifier(id, '收藏 ID'); let removed = false;
     this.update(accountId, state => { const before = state.bookmarks.length; state.bookmarks = state.bookmarks.filter(item => item.id !== id); removed = before !== state.bookmarks.length; });
     return removed;
+  }
+  removeSummary(accountId, summaryId, groupId) {
+    // Summary IDs are immutable opaque strings, never list indexes or titles.
+    if (typeof accountId !== 'string' || identifier(accountId, '账号 ID') !== accountId) fail('账号 ID 无效');
+    if (typeof summaryId !== 'string' || identifier(summaryId, '摘要 ID') !== summaryId) fail('摘要 ID 无效');
+    if (typeof groupId !== 'string' || identifier(groupId, '摘要群 ID') !== groupId) fail('摘要群 ID 无效');
+    const state = this.get(accountId);
+    const matches = state.summaries.filter(item => item && item.id === summaryId);
+    if (!matches.length) return { deleted: false, summaryCount: state.summaries.length };
+    if (matches.length !== 1) fail('摘要 ID 重复，请保留数据后检查，未删除摘要。');
+    const selected = matches[0];
+    if (selected.groupId !== groupId) fail('摘要所属群已变化，请刷新后重试。');
+    state.summaries = state.summaries.filter(item => item !== selected);
+    // _write publishes the validated file atomically. No cache or caller-owned
+    // objects are changed before it succeeds; exports and source data stay intact.
+    this._write(accountId, state);
+    return { deleted: true, summaryCount: state.summaries.length };
   }
   setReadPosition(accountId, groupId, messageId, options) {
     const legacyCall = arguments.length < 4;
