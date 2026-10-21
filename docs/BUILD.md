@@ -1,3 +1,9 @@
+> **历史文档（1.1.8） / Historical documentation (1.1.8)**
+>
+> 本页原文保留作 1.1.8 历史记录。下文声称打包脚本强制读取 runtime-lock.json 的流程属于旧版，不适用于当前 scripts/package.ps1。请以[当前源码测试与构建说明](../README.md#源码测试与构建)为准。
+>
+> This page preserves the original 1.1.8 documentation. The runtime-lock.json enforcement described below belongs to the old build workflow and does not apply to the current scripts/package.ps1. Use the [current source testing and build instructions](../README.md#源码测试与构建) for the current release.
+
 # 从源码构建 Windows 应用
 
 在 Windows x64 上，从源码根目录执行以下步骤。源码 ZIP 解压后应能在当前目录看到 `package.json`、`app`、`scripts`、`tests` 和 `runtime-lock.json`。
