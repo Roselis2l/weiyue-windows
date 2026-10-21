@@ -1,8 +1,8 @@
 > **历史文档（1.1.8） / Historical documentation (1.1.8)**
 >
-> 本页原文保留作 1.1.8 历史记录。下文的 AI 发送范围及外链行为属于旧版，不能作为 1.1.16 的说明。请以[当前安全与隐私说明](安全与限制.md)为准。
+> 本页原文保留作 1.1.8 历史记录。下文的 AI 发送范围及外链行为属于旧版，不能作为 1.1.21 的说明。请以[当前安全与隐私说明](安全与限制.md)为准。
 >
-> This page preserves the original 1.1.8 documentation. The AI data scope and external-link behavior below describe the old version, not 1.1.16. Use the [current security and privacy documentation](安全与限制.md) for the current release.
+> This page preserves the original 1.1.8 documentation. The AI data scope and external-link behavior below describe the old version, not 1.1.21. Use the [current security and privacy documentation](安全与限制.md) for the current release.
 
 # 安全与隐私
 

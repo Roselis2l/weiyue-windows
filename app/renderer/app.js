@@ -10,6 +10,11 @@ const emoticons = window.WeiyueEmoticons.create({manifest:window.WeiyueEmoticonM
 emoticons.installCopyHandler(document);
 const filters = window.WeiyueFilters;
 const syncDisplay = window.WeiyueSyncStatus;
+const appearance = window.WeiyueAppearance;
+function applyAppearance(value) {
+  // Dedicated variables affect message areas only; no shared app theme changes.
+  window.WeiyueAppearanceSettings.apply($('workspace'),value);
+}
 function emptyFilters() {return {keyword:'',senderIds:[],start:'',end:'',importantOnly:false};}
 const model = {
   state: { accounts: [], groups: [], stats: {}, readPositions: {}, importantMembers: [], settings: {}, credentials: {} },
@@ -22,12 +27,18 @@ const model = {
   pending: new Set(), toastTimer: null, saveNote: '', saveTags: '', accountEpoch: 0, switching: false,
   modalCloseHandler: null, viewport: null, restoring: false, restoreFrame: null,
   renderedReading: null, readBoundary: null, layoutVersion: 0, intentVersion: 0, scrollTop: 0, pointerScrolling: false, touchY: null,
-  pointerReading: null, readingActivity: null, readingCommits: new Map(), pendingReadingRefresh: null, pendingReadingTimer: null,
+  pointerReading: null, messageDrag: null, readingActivity: null, readingCommits: new Map(), pendingReadingRefresh: null, pendingReadingTimer: null,
   messageObserver: null, drafts: new Map(), readWrite: Promise.resolve(), lastReadPayload: '',
   syncStatus: null, syncRevision: null, polling: false, pollTimer: null, refreshRunning: false, manualSync: false,
   messageSignatures: new Map(), closing: false, enrichmentAttempted: new Set(), enrichmentErrors: new Map(), enriching: false, enrichmentRetryTimer: null
 };
 const readIntent = reading.createReadIntentGate();
+const autoPage = window.WeiyueAutoPage.createAutoPager({
+  snapshot: autoPageSnapshot, load: loadNextLocalPage, apply: appendLocalPage,
+  onState: () => {updateAutoPageChrome();scheduleReadingRefresh();},
+  onError: () => toast('后续消息加载失败，请再次向下滚动或点击“更多消息”重试。',true),
+  now: () => performance.now()
+});
 const loginFlow = {
   running: false, opening: false, canceling: false, closeWhenDone: false,
   stage: 'ready', message: '请在官方窗口完成登录，再读取群聊。', error: '',
@@ -161,6 +172,7 @@ async function refreshState({background=false}={}) {
   const epoch=model.accountEpoch,state=await api('state');if(epoch!==model.accountEpoch)return;
   model.state = state;
   model.state.groups ||= []; model.state.accounts ||= []; model.state.settings ||= {}; model.state.stats ||= {}; model.state.readPositions ||= {}; model.state.readStates ||= {}; model.state.importantMembers ||= []; model.state.credentials ||= {};
+  applyAppearance(model.state.settings.appearance);
   if (!model.state.groups.some(g => g.selected !== false && String(g.id) === String(model.groupId))) model.groupId = reading.recentGroupId(model.state.groups,model.state.readStates);
   if(background && readingBusy()){queueReadingRefresh();updateUnreadBadges();updateReadChrome();return;}
   renderSidebar(); renderHeader();
@@ -203,7 +215,6 @@ function renderGroupList(groups) {
 }
 function renderHeader() {
   const isRead = model.view === 'read';
-  const title = isRead ? currentGroup()?.name || '把对话，读成收获' : model.view === 'bookmarks' ? '价值收藏' : model.summary ? '时段回顾' : '时段摘要';
   const actions = [];
   if (isRead && model.groupId && accountKind() === 'weibo') {
     actions.push(button(model.syncStatus?.enabled===false?'恢复自动更新':'暂停自动更新',toggleAutoSync,'text small',{id:'auto-sync-toggle'}));
@@ -211,7 +222,9 @@ function renderHeader() {
     actions.push(button('更早历史',()=>sync(true),'',{id:'sync-history',title:'读取本机最早记录之前的历史；中间的离线缺口由“补齐离线消息”继续读取。'}));
   }
   actions.push(button('工具栏',()=>{$('app').classList.toggle('show-inspector');},'mobile-panel-toggle'));
-  $('workspace-header').replaceChildren(node('div',{class:'header-title-row'},node('h1',{title},title),node('div',{class:'header-actions'},actions)),node('div',{class:'header-info-row'},node('span',{id:'header-status',class:'header-status'}),node('div',{class:'sync-status-stack',hidden:accountKind()!=='weibo'},node('p',{id:'sync-status-line',class:'sync-status-line'}),node('p',{id:'sync-gap-line',class:'sync-gap-line'}))));
+  // Navigation already identifies the view and group. Keep the actual controls
+  // and task status without spending a second row on the same title.
+  $('workspace-header').replaceChildren(node('div',{class:'header-utility-row'},node('div',{class:'header-status-area'},node('span',{id:'header-status',class:'header-status'}),node('div',{class:'sync-status-stack',hidden:accountKind()!=='weibo'},node('p',{id:'sync-status-line',class:'sync-status-line'}),node('p',{id:'sync-gap-line',class:'sync-gap-line'}))),node('div',{class:'header-actions',role:'group','aria-label':'工作区操作'},actions)));
   updateBusy();
   renderSyncStatus();renderAiRequestStatus();
 }
@@ -245,8 +258,52 @@ function queryPayload() {
   const f=model.filters;
   return {groupId:model.groupId,keyword:f.keyword,senderIds:f.senderIds,importantOnly:f.importantOnly,limit:model.limit,offset:model.offset,...filters.parseChinaMinuteRange(f.start,f.end)};
 }
+function autoPageKey() {
+  return JSON.stringify([readingOwner(),model.searchEditor?.revision,model.filters,
+    model.filters.importantOnly?model.state.importantMembers:null,model.state.revision]);
+}
+function autoPageSnapshot() {
+  const scroll=$('message-scroll');
+  return {key:autoPageKey(),enabled:!!scroll && isCurrentReadingRendered() && !model.switching && !model.closing && document.visibilityState==='visible' && document.hasFocus(),
+    blocked:model.restoring || model.refreshRunning || searchEditing() || !!model.readNavigation || !!model.searchEditor?.memberPicker?.isInteracting() || !!model.messageDrag?.isDragging() || !!$('modal')?.open,
+    atBottom:!!scroll && window.WeiyueAutoPage.isAtBottom(scroll),offset:model.offset,count:model.messages.length,total:model.total,pageSize:model.limit};
+}
+async function loadNextLocalPage(snapshot) {
+  const last=model.messages.at(-1),first=model.messages[0];
+  const result=await api('messages.query',{...queryPayload(),...(last?{afterId:String(last.id)}:{offset:snapshot.offset}),limit:snapshot.pageSize});
+  // A stable boundary is resolved against the same complete filtered list in
+  // the store. Never use an unfiltered locate offset for filtered pagination.
+  if(first && result.offset!==snapshot.offset+snapshot.count){queueReadingRefresh();throw new Error('分页位置已更新，请重试');}
+  return result;
+}
+function appendLocalPage(result) {
+  const scroll=$('message-scroll'),space=$('reading-end-space');if(!scroll || !space)return;
+  const seen=new Set(model.messages.map(message=>String(message.id)));
+  const added=(result.messages || []).filter(message=>!seen.has(String(message.id)) && seen.add(String(message.id)));
+  if(!added.length && model.offset+model.messages.length<result.total)throw new Error('后续消息尚未加载，请重试');
+  const anchor=captureViewport() || model.viewport;
+  model.messageObserver?.disconnect();
+  // Inserting only new siblings preserves native selection and selected tools.
+  let day=model.messages.length?new Date(model.messages.at(-1).time).toDateString():'';
+  for(const message of added){
+    const next=new Date(message.time).toDateString();
+    if(next!==day){scroll.insertBefore(node('div',{class:'day-divider','data-day':next},dateLabel(message.time)),space);day=next;}
+    const element=messageCard(message);scroll.insertBefore(element,space);model.messageSignatures.set(String(message.id),messageSignature(message));
+  }
+  model.messages.push(...added);model.total=result.total;
+  // Restoring by the first visible ID and its measured offset also revokes the
+  // old gesture's read permission. Newly appended rows require fresh reading.
+  restoreViewport(anchor);watchMessageSizes();updateReadChrome();scheduleRead();
+}
+function updateAutoPageChrome() {
+  const status=autoPage.status(),scroll=$('message-scroll'),next=$('next-page');
+  const ended=model.offset+model.messages.length>=model.total;
+  if(scroll){scroll.dataset.autoPageState=status.loading?'loading':status.state==='error'?'error':ended?'end':'idle';scroll.setAttribute('aria-busy',String(status.loading));}
+  if(next){next.disabled=status.loading || ended;next.textContent=status.loading?'正在加载后续消息…':status.state==='error'?'重试更多消息 ↓':'更多消息 ↓';next.title=status.loading?'正在加载后续消息':status.state==='error'?'加载失败，再次向下滚动或点击重试':'查看后续消息；滑动到底部也会自动加载';}
+}
 async function loadReading(restore=false, targetId=null, request=null) {
   if(request && !request.active())return;
+  autoPage.reset();
   invalidateReadingIntent();
   const version=++model.queryVersion,groupId=model.groupId,epoch=model.accountEpoch;
   const editor=isSearchEditorCurrent(model.searchEditor)?model.searchEditor:null,revision=editor?.revision;
@@ -313,7 +370,7 @@ function readingContext() {return JSON.stringify([model.accountEpoch,model.state
 function readingOwner() {return JSON.stringify([model.accountEpoch,model.state.account?.id,model.groupId,model.queryVersion,model.view]);}
 function readingBusy() {
   const owner=readingOwner();
-  return searchEditing() || model.searchEditor?.memberPicker?.isInteracting() || !!model.readNavigation || model.readingActivity?.owner===owner || (model.readingCommits.get(owner)||0)>0 ||
+  return autoPage.status().loading || searchEditing() || model.searchEditor?.memberPicker?.isInteracting() || !!model.readNavigation || !!model.messageDrag?.isDragging() || model.readingActivity?.owner===owner || (model.readingCommits.get(owner)||0)>0 ||
     (model.pointerScrolling && model.pointerReading?.owner===owner && model.pointerReading.scroll===$('message-scroll'));
 }
 function queueReadingRefresh(force=true) {
@@ -341,6 +398,9 @@ async function drainReadingRefresh() {
 }
 function resetReadCandidate() {model.intentVersion++;readIntent.reset();clearTimeout(model.readTimer);model.readingActivity=null;}
 function invalidateReadingIntent() {
+  clearTimeout(model.pagingWheelTimer);model.pagingWheel=null;
+  autoPage.cancelIntent();
+  model.messageDrag?.cancel();
   resetReadCandidate();model.pointerScrolling=false;model.pointerReading=null;model.touchY=null;
   if(model.pendingReadingRefresh)model.syncRevision=null;
   clearTimeout(model.pendingReadingTimer);model.pendingReadingRefresh=null;
@@ -353,6 +413,9 @@ function updateReadingSpace() {
 }
 function restoreViewport(anchor) {
   const scroll=$('message-scroll');if(!scroll || !isCurrentReadingRendered())return;
+  clearTimeout(model.pagingWheelTimer);model.pagingWheel=null;
+  autoPage.cancelIntent();
+  model.messageDrag?.cancel();
   // A genuine image/viewport resize invalidates the old visible candidate, but
   // does not pretend that a physically held native thumb has been released.
   resetReadCandidate();model.layoutVersion++;
@@ -414,28 +477,32 @@ async function refreshReadingIncrementally(force=false) {
   if(model.refreshRunning || !isCurrentReadingRendered() || !model.groupId || !$('message-scroll'))return;
   if(readingBusy()){queueReadingRefresh(force);return;}
   model.refreshRunning=true;
-  const groupId=model.groupId,version=model.queryVersion,epoch=model.accountEpoch;
+  const groupId=model.groupId,version=model.queryVersion,epoch=model.accountEpoch,key=autoPageKey();
+  const active=()=>version===model.queryVersion && epoch===model.accountEpoch && groupId===model.groupId && model.view==='read' && key===autoPageKey();
   const anchor=captureViewport() || model.viewport;
   try{
-    let offset=model.offset;
-    if(!hasFilters() && model.messages[0]){
-      try{const located=await api('messages.locate',{groupId,messageId:String(model.messages[0].id)});offset=Math.max(0,located.offset);}catch{/* Fall back to the current page if an imported record was removed. */}
-    }
-    if(version!==model.queryVersion || epoch!==model.accountEpoch || groupId!==model.groupId || model.view!=='read')return;
+    if(!active())return;
     const throughId=model.state.readStates?.[groupId]?.readThroughId;
-    const [result,boundary]=await Promise.all([api('messages.query',{...queryPayload(),offset}),locateReadBoundary(groupId,throughId)]);
-    if(version!==model.queryVersion || epoch!==model.accountEpoch || groupId!==model.groupId || model.view!=='read')return;
+    const [result,boundary]=await Promise.all([window.WeiyueAutoPage.queryWindow({query:payload=>api('messages.query',payload),payload:queryPayload(),
+      firstId:model.messages[0]?String(model.messages[0].id):null,lastId:model.messages.at(-1)?String(model.messages.at(-1).id):null,count:model.messages.length,active}),locateReadBoundary(groupId,throughId)]);
+    if(!active())return;
     if(readingBusy()){queueReadingRefresh(force);return;}
     // Re-capture after awaiting IPC: a user may have scrolled while data was loading.
     const latestAnchor=captureViewport() || anchor;
-    model.readBoundary=boundary;model.offset=offset;model.total=result.total || 0;model.messages=result.messages || [];
+    model.readBoundary=boundary;model.offset=result.offset;model.total=result.total || 0;model.messages=result.messages || [];
     patchMessageList(model.messages,latestAnchor);
     if(force){const members=await api('members.list',{groupId});if(version===model.queryVersion && groupId===model.groupId){
       if(readingBusy()){queueReadingRefresh(force);return;}
       const changed=JSON.stringify(model.members)!==JSON.stringify(members || []);model.members=members || [];
       if(changed && isSearchEditorCurrent(model.searchEditor))updateSearchMembers(model.searchEditor);
     }}
-  }finally{model.refreshRunning=false;scheduleReadingRefresh();}
+  }catch(error){
+    if(active())throw error;
+    // A draft/IME change discards this result, then resumes refresh only after
+    // the same reading pane settles. A different account/group owns no retry.
+    if(version===model.queryVersion && epoch===model.accountEpoch && groupId===model.groupId && model.view==='read')queueReadingRefresh(force);
+  }
+  finally{model.refreshRunning=false;scheduleReadingRefresh();}
 }
 // The editor belongs to an account/group, not to a result page. Its connected DOM
 // must survive queries: detaching even briefly cancels Chromium's native IME.
@@ -533,10 +600,10 @@ function renderReading() {
   model.messageSignatures.clear();let day='';model.messages.forEach(m=>{const next=new Date(m.time).toDateString();if(next!==day){scroll.append(node('div',{class:'day-divider','data-day':next},dateLabel(m.time)));day=next;}scroll.append(messageCard(m));model.messageSignatures.set(String(m.id),messageSignature(m));});
   if(!model.messages.length)scroll.append(emptyState('这个范围暂时没有消息','试试调整日期、成员或关键词；新登录的群聊需要手动同步记录。',[button('清除筛选',clearReadingFilters,'soft')]));
   scroll.append(node('div',{id:'reading-end-space','aria-hidden':'true'}));
-  const pagination=node('div',{class:'pagination'},button('↑ 更早一页',async()=>{await flushReading(false);model.offset=Math.max(0,model.offset-model.limit);await loadReading();},'',{id:'previous-page',disabled:model.offset===0}),node('span',{id:'page-position'},model.total?`${model.offset+1}–${Math.min(model.offset+model.messages.length,model.total)} / ${model.total}`:'暂无记录'),button('更多消息 ↓',async()=>{await flushReading(false);model.offset+=model.limit;await loadReading();},'',{id:'next-page',disabled:model.offset+model.messages.length>=model.total}));
+  const pagination=node('div',{class:'pagination'},button('↑ 更早一页',async()=>{await flushReading(false);model.offset=Math.max(0,model.offset-model.limit);await loadReading();},'',{id:'previous-page',disabled:model.offset===0}),node('span',{id:'page-position'},model.total?`${model.offset+1}–${Math.min(model.offset+model.messages.length,model.total)} / ${model.total}`:'暂无记录'),button('更多消息 ↓',async()=>{await flushReading(false);model.offset+=model.messages.length || model.limit;await loadReading();},'',{id:'next-page',disabled:model.offset+model.messages.length>=model.total}));
   const unread=node('div',{id:'new-messages-notice',class:'new-messages-notice','aria-live':'polite'},node('span',{id:'new-messages-count'}),button('加载到最新',jumpToLatest,'primary small',{id:'jump-latest'}));
-  const navigation=node('div',{class:'reading-navigation'},unread,button('最新已读位置',jumpToLatestRead,'soft small',{id:'jump-latest-read',title:'回到本群最新读到的消息；不会将后面的未读消息标为已读'}));
-  reconcileChildren(host,[filter,meta,scroll,selectionBar(),node('footer',{class:'reading-footer','aria-label':'翻页与阅读位置'},pagination,navigation)]);
+  const navigation=node('div',{class:'reading-navigation'},unread,pagination,button('最新已读位置',jumpToLatestRead,'soft small',{id:'jump-latest-read',title:'回到本群最新读到的消息；不会将后面的未读消息标为已读'}));
+  reconcileChildren(host,[filter,meta,scroll,selectionBar(),node('footer',{class:'reading-footer','aria-label':'翻页与阅读位置'},navigation)]);
   model.renderedReading={accountId:model.state.account.id,epoch:model.accountEpoch,groupId:model.groupId,version:model.queryVersion,filtered:hasFilters()};
   updateReadingSpace();updateReadChrome();
 }
@@ -572,12 +639,65 @@ async function applyFilters(changes=null,request=null) {
   }
 }
 function messageCard(m) {
+  if(m.systemNotice?.kind==='weibo-system')return systemNoticeCard(m);
   const selected=model.selected.has(String(m.id));const important=isImportant(m.senderId);let tone=0;for(const char of String(m.senderId))tone=(tone+char.charCodeAt(0))%5;
-  const card=node('article',{class:`message${selected?' chosen':''}`, 'data-message-id':m.id});
+  const card=node('article',{class:`message${selected?' chosen':''}${important?' is-important':''}`, 'data-message-id':m.id,'data-sender-id':m.senderId});
   const cb=node('input',{type:'checkbox',class:'message-check',checked:selected,'aria-label':`选择 ${m.senderName} ${fmt(m.time)} 的消息`,onchange:e=>{if(e.target.checked)model.selected.add(String(m.id));else model.selected.delete(String(m.id));card.classList.toggle('chosen',e.target.checked);model.inspected=m;updateSelection();}});
-  const tools=node('div',{class:'message-tools'},button('☆ 收藏',()=>{model.selected=new Set([String(m.id)]);model.inspected=m;updateSelection();$('app').classList.add('show-inspector');$('bookmark-note')?.focus();},'text small',{'aria-label':`收藏 ${m.senderName} 的消息`}),button(important?'★ 取消重点':'☆ 设为重点',async()=>{await api('important.set',{senderId:m.senderId,enabled:!important});await refreshState({background:true});await refreshReadingIncrementally(true);},`text small${important?' active':''}`),node('span',{class:'message-id'},`#${String(m.id).slice(-6)}`));
-  card.append(cb,avatarNode(`avatar tone-${tone}`,{kind:'member',id:m.senderId,name:m.senderName,source:m.senderAvatarSrc}),node('div',{class:'message-copy'},node('div',{class:'message-top'},node('span',{class:'sender-name'},m.senderName),node('span',{class:'message-time'},fmt(m.time)),important?node('span',{class:'important-marker'},'★ 重点'):null),renderMessageContent(m),tools));
+  const bookmark=messageIconButton('bookmark',()=>{model.selected=new Set([String(m.id)]);model.inspected=m;updateSelection();$('app').classList.add('show-inspector');$('bookmark-note')?.focus();},{'data-action':'bookmark-message'});
+  updateBookmarkAction(bookmark,m.senderName,selected);
+  const priority=messageIconButton('important',async event=>{
+    const keyboardFocus=event.detail===0 && priority.matches(':focus-visible');
+    const pointerExpanded=event.detail>0 && affordance.classList.contains('is-expanded');
+    await api('important.set',{senderId:m.senderId,enabled:!important});await refreshState({background:true});
+    if(model.filters.importantOnly){model.offset=0;await loadReading();}
+    else await refreshReadingIncrementally(true);
+    const current=findMessageElement(m.id)?.querySelector('.message-affordance');
+    if(pointerExpanded && current?.matches(':hover'))current.classList.add('is-expanded');
+    if(keyboardFocus && (document.activeElement===priority || document.activeElement===document.body))current?.querySelector('[data-action="important-member"]')?.focus({preventScroll:true});
+  },{'data-action':'important-member','aria-label':`${important?'取消重点':'设为重点'}：${m.senderName}`,title:important?'取消重点':'设为重点','aria-pressed':String(important)});
+  priority.classList.toggle('active',important);
+  const tools=node('div',{class:'message-tools',role:'group','aria-label':`${m.senderName} 的消息操作`},bookmark,priority);
+  const avatar=avatarNode(`avatar tone-${tone}`,{kind:'member',id:m.senderId,name:m.senderName,source:m.senderAvatarSrc});
+  const affordance=node('div',{class:'message-affordance',onpointerleave:()=>affordance.classList.remove('is-expanded')},cb,node('div',{class:'message-rail'},avatar,tools));
+  bindMessageAffordance(affordance,avatar);
+  card.append(affordance,node('div',{class:'message-copy'},node('div',{class:'message-top'},node('span',{class:'sender-name',title:important?'重点成员':null},m.senderName),node('span',{class:'message-time',title:`消息 ID：${m.id}`},fmt(m.time))),renderMessageContent(m)));
   return card;
+}
+function bindMessageAffordance(affordance,trigger) {
+  // Only entering the avatar opens mouse controls. The whole compact rail then
+  // remains interactive so travelling to a button or checkbox cannot close it.
+  trigger.addEventListener('pointerenter',()=>affordance.classList.add('is-expanded'));
+  // Chromium can retain :focus-visible when the mouse clicks an already focused
+  // keyboard control. Suppress that retained state until the next keyboard input.
+  affordance.addEventListener('pointerdown',()=>affordance.classList.toggle('pointer-mode',affordance.contains(document.activeElement)));
+  affordance.addEventListener('keydown',()=>affordance.classList.remove('pointer-mode'));
+  affordance.addEventListener('focusout',event=>{if(!affordance.contains(event.relatedTarget))affordance.classList.remove('pointer-mode');});
+}
+function systemNoticeCard(m) {
+  const selected=model.selected.has(String(m.id));
+  const card=node('article',{class:`message message-system${selected?' chosen':''}`,'data-message-id':m.id,'data-sender-id':m.senderId});
+  const cb=node('input',{type:'checkbox',class:'message-check',checked:selected,'aria-label':`选择 ${fmt(m.time)} 的系统通知`,onchange:event=>{if(event.target.checked)model.selected.add(String(m.id));else model.selected.delete(String(m.id));model.inspected=m;updateSelection();}});
+  const icon=node('span',{class:'system-notice-icon','aria-hidden':'true'},'ⓘ');
+  const affordance=node('div',{class:'message-affordance system-notice-affordance',onpointerleave:()=>affordance.classList.remove('is-expanded')},cb,icon);
+  bindMessageAffordance(affordance,icon);
+  const fullId=`system-notice-${encodeURIComponent(String(m.id))}`;
+  const full=node('div',{id:fullId,class:'system-notice-full',hidden:true},renderMessageContent(m));
+  const arrow=node('span',{'aria-hidden':'true',class:'system-notice-arrow'},'⌄');
+  const toggle=button('展开系统通知全文',()=>{const expanded=full.hidden;full.hidden=!expanded;toggle.setAttribute('aria-expanded',String(expanded));toggle.setAttribute('aria-label',expanded?'收起系统通知全文':'展开系统通知全文');toggle.title=expanded?'收起通知全文':'展开通知全文';arrow.textContent=expanded?'⌃':'⌄';},'system-notice-toggle',{'aria-expanded':'false','aria-controls':fullId,title:'展开通知全文'});
+  toggle.replaceChildren(node('span',{class:'system-notice-text'},m.text || '系统通知'),arrow);
+  card.append(node('div',{class:'system-notice-line'},affordance,node('span',{class:'message-time',title:`消息 ID：${m.id}`},fmt(m.time)),toggle),full);
+  return card;
+}
+function messageIconButton(kind,action,props={}) {
+  const control=button(kind==='important'?'设置重点成员':'整理消息收藏',action,`message-icon message-icon-${kind}`,props);
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  for(const [key,value] of Object.entries({viewBox:'0 0 24 24',width:'17',height:'17',fill:'none',stroke:'currentColor','stroke-width':'1.8','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true',focusable:'false'}))svg.setAttribute(key,value);
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+  path.setAttribute('d',kind==='important'?'m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z':'M6 3h12v18l-6-4-6 4V3Z');svg.append(path);control.replaceChildren(svg);return control;
+}
+function updateBookmarkAction(control,senderName,selected) {
+  const label=selected?'已选择此消息，编辑收藏':'收藏此消息';
+  control.title=label;control.setAttribute('aria-label',`${label}：${senderName}`);control.setAttribute('aria-pressed',String(selected));control.classList.toggle('active',selected);
 }
 function safeMediaSource(value) {
   if(typeof value!=='string')return '';
@@ -614,17 +734,30 @@ function isNotificationOnly(message) {
     post.text==='' && Array.isArray(post.images) && post.images.length===0 &&
     [post.id,post.url,post.author].every(value=>value===undefined || value===null || value==='') && !post.truncated;
 }
-function isLegacyShare(message) {return !isNotificationOnly(message) && ((!message.mediaVersion && /分享.*图片|我发布了新微博|分享.*微博/.test(message.text || '')) || (!message.attachmentVersion && /^(?:文件消息|分享视频)$/.test((message.text || '').trim())));}
+function needsMessageContext(message) {
+  // Sender names can identify candidates for a bounded official detail lookup;
+  // they never classify a notification or change the rendered message type.
+  return message.contextVersion!==1 && (message.senderName==='粉丝群' ||
+    /^「(?:@[^\r\n:]{1,256}:)?图片」\r?\n- - - - - - - - - - - - - - -\r?\n/.test(message.text || ''));
+}
+function isLegacyShare(message) {
+  if(isNotificationOnly(message))return false;
+  return (!message.mediaVersion && /分享.*图片|我发布了新微博|分享.*微博/.test(message.text || '')) ||
+    (!message.attachmentVersion && /^(?:文件消息|分享视频)$/.test((message.text || '').trim())) ||
+    (!message.referenceVersion && (!!message.images?.length || !!message.sharedPost || !message.text?.trim() || /分享.*图片|分享.*微博|「图片」/.test(message.text || '')));
+}
 function enrichmentKey(message) {return `${model.state.account?.id || ''}\u0000${message.groupId}\u0000${message.id}`;}
 function renderMessageContent(message) {
   const openLink=url=>void run('open-external-link',()=>api('external.open',{url}));
   const content=node('div',{class:'message-content'},emoticons.appendText(node('div',{class:'message-text'}),message.text || '',openLink));
   if(message.images?.length)content.append(imageGallery(message.images,message));
   for(const attachment of message.attachments || []){
-    const type=attachment.kind==='video'?'视频':attachment.kind==='pdf'?'PDF 文件':'文件';
-    const action=attachment.kind==='video'?'播放视频':'预览文件';
+    const archive=attachment.kind==='archive';
+    const type=attachment.livePhoto?'实况照片':attachment.kind==='video'?'视频':attachment.kind==='pdf'?'PDF 文件':archive?'压缩文件':'文件';
+    const action=attachment.livePhoto?'播放实况照片':attachment.kind==='video'?'播放视频':archive?'下载压缩文件':'预览文件';
     const info=[type,attachment.size?((attachment.size/1024/1024).toFixed(2)+' MB'):'',attachment.state==='needs-metadata'?'点击读取文件信息':''].filter(Boolean).join(' · ');
-    content.append(node('section',{class:'attachment-card'},node('div',{class:'attachment-copy'},node('strong',{},attachment.name || type),node('small',{},info)),button(action,()=>api('attachment.open',{source:attachment.src}),'small attachment-open',{'aria-label':action+' '+(attachment.name || type)}),node('span',{class:'attachment-save-hint'},'预览窗口内可另存原文件')));
+    const download=async()=>{const result=await api('attachment.download',{source:attachment.src});if(!result?.canceled)toast('原文件已保存到所选位置。');};
+    content.append(node('section',{class:'attachment-card'},node('div',{class:'attachment-copy'},node('strong',{},attachment.name || type),node('small',{},info)),button(action,archive?download:()=>api('attachment.open',{source:attachment.src}),'small attachment-open',{'aria-label':action+' '+(attachment.name || type)}),attachment.kind==='file'?button('下载原文件',download,'small attachment-download'):null,node('span',{class:'attachment-save-hint'},archive?'选择保存位置，不解压或运行':'预览窗口内可另存原文件')));
   }
   const post=message.sharedPost;
   if(post && !isNotificationOnly(message)){
@@ -639,9 +772,16 @@ function renderMessageContent(message) {
     if(post.state!=='ready' && post.url && accountKind()==='weibo')card.append(button('重试读取原文',()=>enrichMessages([message],true),'text small'));
     content.append(card);
   }
+  if(message.references?.length)content.append(...window.WeiyueReferences.render(message,{node,appendText:emoticons.appendText,imageGallery,createLink:(url,title,cb)=>links.createLink(document,url,title,cb),openLink}));
+  const quote=message.quotePreview;
+  if(message.contextVersion===1 && quote?.kind==='image' && quote.state==='unavailable' && quote.reasonCode==='WEB_REFERENCE_TARGET_UNAVAILABLE'){
+    content.append(node('p',{class:'legacy-share-note quote-image-note'},'当前网页数据无法确认这条引用的原图，暂不能可靠打开。'),officialChatButton());
+  }else if(!message.contextVersion && /^「(?:@[^\r\n:]{1,256}:)?图片」\r?\n- - - - - - - - - - - - - - -\r?\n/.test(message.text || '')){
+    content.append(node('p',{class:'legacy-share-note quote-image-note'},'引用图片信息尚未补全，可尝试重新同步。'),officialChatButton());
+  }
   if(isLegacyShare(message)){
     const error=model.enrichmentErrors.get(enrichmentKey(message));
-    const note=node('div',{class:'legacy-share-note'},error?`补全未完成：${error}`:'这条旧记录尚未保存图片或微博内容，待按需补全。');
+    const note=node('div',{class:'legacy-share-note'},error?`补全未完成：${error}`:'这条旧记录尚未检查实况照片、动图或完整引用，待按需补全。');
     if(accountKind()==='weibo')note.append(button(error?'重试补全':'补全这条分享',()=>enrichMessages([message],true),'text small'));
     else note.textContent='这条导入记录未包含图片或原微博内容，可导入完整数据或在官方页面查看。';
     content.append(note);
@@ -652,7 +792,7 @@ function renderMessageContent(message) {
 async function enrichMessages(messages,manual=false) {
   if(model.enriching || accountKind()!=='weibo' || model.switching)return;
   const groupId=messages[0]?.groupId;if(!groupId)return;
-  const candidates=messages.filter(m=>m.groupId===groupId && (isLegacyShare(m) || manual && m.sharedPost?.state==='unavailable' && m.sharedPost?.url) && (manual || !model.enrichmentAttempted.has(enrichmentKey(m)))).slice(0,10);
+  const candidates=messages.filter(m=>m.groupId===groupId && (isLegacyShare(m) || needsMessageContext(m) || manual && m.sharedPost?.state==='unavailable' && m.sharedPost?.url) && (manual || !model.enrichmentAttempted.has(enrichmentKey(m)))).slice(0,10);
   if(!candidates.length)return;
   model.enriching=true;const epoch=model.accountEpoch;
   candidates.forEach(message=>{model.enrichmentAttempted.add(enrichmentKey(message));model.enrichmentErrors.delete(enrichmentKey(message));});
@@ -677,8 +817,12 @@ async function enrichVisibleMessages() {
   await enrichMessages(model.messages.filter(message=>visible.has(String(message.id))));
 }
 function selectionBar() { return node('div',{id:'selection-bar',class:'selection-bar',hidden:!model.selected.size},node('span',{},`已选择 ${model.selected.size} 条消息`),button('整理收藏',()=>{renderInspector();$('app').classList.add('show-inspector');$('bookmark-note')?.focus();},'primary small'),button('取消',()=>{model.selected.clear();updateSelection();},'text small')); }
-function updateSelection() { document.querySelectorAll('[data-message-id]').forEach(el=>{const yes=model.selected.has(el.dataset.messageId);el.classList.toggle('chosen',yes);el.querySelector('input[type=checkbox]').checked=yes;});const bar=$('selection-bar');if(bar)bar.replaceWith(selectionBar());renderInspector(); }
+function updateSelection() { document.querySelectorAll('[data-message-id]').forEach(el=>{const yes=model.selected.has(el.dataset.messageId);el.classList.toggle('chosen',yes);el.querySelector('input[type=checkbox]').checked=yes;const action=el.querySelector('[data-action="bookmark-message"]');if(action)updateBookmarkAction(action,el.querySelector('.sender-name')?.textContent || '',yes);});const bar=$('selection-bar');if(bar)bar.replaceWith(selectionBar());renderInspector(); }
 function bindReadingInput(scroll) {
+  model.messageDrag?.dispose();model.messageDrag=null;
+  let dragSequence=0,dragDirection=0,dragTrusted=false;
+  const pageIntent=(event,kind,gestureId)=>autoPage.intent({trusted:event.isTrusted===true,kind,direction:event.deltaY ?? dragDirection,
+    gestureId,modified:!!(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)});
   const arm=event=>{
     if(!event.isTrusted || !canAdvanceRead() || hasFilters())return false;
     clearTimeout(model.readTimer);
@@ -692,7 +836,18 @@ function bindReadingInput(scroll) {
     scheduleRead();
     return true;
   };
-  scroll.addEventListener('wheel',event=>{if(event.deltaY>0)arm(event);else invalidateReadingIntent();},{passive:true});
+  scroll.addEventListener('wheel',event=>{
+    if(event.deltaY>0)arm(event);else invalidateReadingIntent();
+    clearTimeout(model.pagingWheelTimer);model.pagingWheel=null;
+    if(event.isTrusted && event.deltaY>0 && !(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)){
+      const token={scroll,owner:readingOwner(),layout:model.layoutVersion,height:scroll.scrollHeight,clientHeight:scroll.clientHeight,until:performance.now()+250};
+      model.pagingWheel=token;
+      // Chromium's native wheel animation spans several frames. The timer only
+      // revokes input; loading is driven by its actual downward scroll below.
+      model.pagingWheelTimer=setTimeout(()=>{if(model.pagingWheel===token){model.pagingWheel=null;autoPage.cancelIntent();}},250);
+    }
+    pageIntent(event,'wheel');
+  },{passive:true});
   scroll.addEventListener('keydown',event=>{
     if(event.target!==scroll || event.ctrlKey || event.metaKey || event.altKey)return;
     if(['ArrowDown','PageDown','End',' '].includes(event.key) && !event.shiftKey)arm(event);
@@ -710,10 +865,36 @@ function bindReadingInput(scroll) {
     if(event.pointerType==='touch' && model.touchY!==null){if(event.clientY<model.touchY)arm(event);model.touchY=event.clientY;}
     else if(model.pointerScrolling && event.buttons)arm(event);
   });
+  model.messageDrag=window.WeiyueDragScroll?.attach(scroll,{
+    isCurrent:()=>scroll===$('message-scroll') && isCurrentReadingRendered() && !model.switching && !model.closing && !$('modal').open,
+    canStart:event=>{
+      const target=event.target,bounds=scroll.getBoundingClientRect();
+      // Text descendants, avatars, tools, links, media and forms retain native
+      // input. Only these containers contain empty padding instead of direct text.
+      return target instanceof Element && (target===scroll || target.matches('.message,.message-copy,.message-top,#reading-end-space')) &&
+        event.clientX<bounds.right-(scroll.offsetWidth-scroll.clientWidth)-2;
+    },
+    onStart:()=>{dragSequence++;dragDirection=0;dragTrusted=false;scroll.classList.add('is-dragging');window.getSelection()?.removeAllRanges();},
+    onIntent:(event,{direction})=>{dragDirection=direction;dragTrusted=event.isTrusted===true;},
+    beforeMove:(event,{from,to})=>{if(to>from)arm(event);else if(to<from)resetReadCandidate();},
+    onEnd:({cancelled})=>{
+      scroll.classList.remove('is-dragging');
+      if(!cancelled && scroll.scrollTop!==model.scrollTop)handleReadingScroll();
+      readIntent.reset();
+      if(cancelled){resetReadCandidate();scheduleRead();}
+      // Release completes this physical gesture, including a clamped short page.
+      // A stable token grants at most one append after any duration of holding.
+      if(!cancelled)pageIntent({isTrusted:dragTrusted},'drag',`${readingOwner()}:${dragSequence}`);
+      else autoPage.cancelIntent();
+      scheduleReadingRefresh();
+    }
+  }) || null;
 }
 function handleReadingScroll() {
   const scroll=$('message-scroll');if(!scroll || model.restoring || !isCurrentReadingRendered())return;
   model.viewport=captureViewport();
+  // A delayed duplicate scroll event must not replace the final drag's dwell.
+  if(scroll.scrollTop===model.scrollTop){updateReadChrome();return;}
   // Chromium handles an active native scrollbar drag without dispatching DOM
   // pointermove events. Its verified pointerdown stays valid until release or
   // context cancellation; renew from the last accepted position on each move.
@@ -721,7 +902,12 @@ function handleReadingScroll() {
     readIntent.arm(readingContext(),model.scrollTop,performance.now(),true);model.readingActivity={owner:readingOwner()};
   }
   const candidate=canAdvanceRead() && !hasFilters()?readIntent.scroll(readingContext(),scroll.scrollTop,performance.now(),model.viewport?.readThroughId):null;
+  const wheel=model.pagingWheel,downward=scroll.scrollTop>model.scrollTop;
   model.scrollTop=scroll.scrollTop;updateReadChrome();scheduleRead(candidate);
+  if(wheel){
+    if(wheel.scroll!==scroll || wheel.owner!==readingOwner() || wheel.layout!==model.layoutVersion || wheel.height!==scroll.scrollHeight || wheel.clientHeight!==scroll.clientHeight || performance.now()>wheel.until){model.pagingWheel=null;autoPage.cancelIntent();}
+    else if(downward)autoPage.observe();
+  }
 }
 function canAdvanceRead() {return isCurrentReadingRendered() && !searchEditing() && !model.searchEditor?.memberPicker?.isInteracting() && !model.readNavigation && document.visibilityState==='visible' && document.hasFocus() && !$('modal').open && !model.switching;}
 function scheduleRead(candidate=null) {
@@ -791,6 +977,7 @@ function updateReadChrome() {
   const unread=Number(currentGroup()?.unreadCount)||0;
   const notice=$('new-messages-notice');if(notice){notice.hidden=false;$('new-messages-count').textContent=`${unread} 条未读`;}
   const latestRead=$('jump-latest-read');if(latestRead){latestRead.disabled=!!model.readNavigation || !model.state.readStates?.[model.groupId]?.readThroughId;latestRead.title=latestRead.disabled && !model.readNavigation?'本群还没有已读位置；正常向下阅读后自动保存。':'回到本群最新读到的消息；不会将后面的未读消息标为已读';}
+  updateAutoPageChrome();
 }
 async function jumpToLatestRead(event) {
   if(!event?.isTrusted || model.readNavigation)return;
@@ -1025,7 +1212,7 @@ function renderBookmarks() {
 function renderBookmarkList() {
   const host=$('bookmark-list');if(!host)return;
   if(!model.bookmarks.length){host.replaceChildren(emptyState('让好内容，有处可寻',model.bookmarkQuery?'没有匹配的收藏，试试另一个关键词。':'在阅读中勾选消息，添加备注和标签，即可把有价值的片段留在这里。',[button('去阅读',()=>setView('read'),'soft')]));updateBookmarkSelection();return;}
-  host.replaceChildren(...model.bookmarks.map(b=>node('article',{class:'bookmark-card','data-bookmark-id':b.id},node('div',{class:'card-meta'},node('input',{type:'checkbox',class:'bookmark-select','data-bookmark-id':b.id,'aria-label':`选择收藏：${(b.note || b.messages?.[0]?.text || groupName(b.groupId)).slice(0,40)}`,checked:model.bookmarkSelected.has(String(b.id)),onchange:event=>changeBookmarkSelection([b.id],event.target.checked)}),node('span',{class:'card-group'},groupName(b.groupId)),node('span',{},`${b.messageIds?.length || b.messages?.length || 0} 条消息`),node('span',{},fmt(b.createdAt,true))),...(b.messages||[]).map(m=>node('div',{class:'bookmark-message'},node('div',{class:'message-top'},node('span',{class:'sender-name'},m.senderName),node('span',{class:'message-time'},fmt(m.time,true))),renderMessageContent(m),button('回到原文 ↗',()=>jumpToMessage(m),'text small'))),b.note?node('div',{class:'bookmark-note'},b.note):null,node('div',{class:'tag-row'},(b.tags||[]).map(t=>node('span',{class:'tag'},`# ${t}`))),node('div',{class:'card-actions'},button('导出到 Notion',()=>chooseBookmarkNotionTarget([b.id]),'text small',{'data-action':'notion-export'}),button('编辑备注',()=>editBookmark(b),'text small'),button('移除收藏',()=>confirmRemoveBookmark(b),'text small')))));
+  host.replaceChildren(...model.bookmarks.map(b=>node('article',{class:'bookmark-card','data-bookmark-id':b.id},node('div',{class:'card-meta'},node('input',{type:'checkbox',class:'bookmark-select','data-bookmark-id':b.id,'aria-label':`选择收藏：${(b.note || b.messages?.[0]?.text || groupName(b.groupId)).slice(0,40)}`,checked:model.bookmarkSelected.has(String(b.id)),onchange:event=>changeBookmarkSelection([b.id],event.target.checked)}),node('span',{class:'card-group'},groupName(b.groupId)),node('span',{},`${b.messageIds?.length || b.messages?.length || 0} 条消息`),node('span',{},fmt(b.createdAt,true))),node('div',{class:'bookmark-chat-surface'},...(b.messages||[]).map(m=>node('div',{class:`bookmark-message${m.systemNotice?.kind==='weibo-system'?' message-system':isImportant(m.senderId)?' is-important':''}`,'data-sender-id':m.senderId},node('div',{class:'message-top'},node('span',{class:'sender-name',title:isImportant(m.senderId)?'重点成员':null},m.senderName),node('span',{class:'message-time'},fmt(m.time,true))),renderMessageContent(m),button('回到原文 ↗',()=>jumpToMessage(m),'text small')))),b.note?node('div',{class:'bookmark-note'},b.note):null,node('div',{class:'tag-row'},(b.tags||[]).map(t=>node('span',{class:'tag'},`# ${t}`))),node('div',{class:'card-actions'},button('导出到 Notion',()=>chooseBookmarkNotionTarget([b.id]),'text small',{'data-action':'notion-export'}),button('编辑备注',()=>editBookmark(b),'text small'),button('移除收藏',()=>confirmRemoveBookmark(b),'text small')))));
   updateBookmarkSelection();
 }
 function editBookmark(b) {
@@ -1255,15 +1442,32 @@ function showSettings(restoredDraft) {
     settings.endpoint?node('p',{id:'ai-current-endpoint',class:'ai-settings-address'},settings.endpoint):null,
     button(settings.endpoint || settings.model?'编辑自定义模型':'添加自定义模型',()=>showAiConfiguration(draft),'full',{id:'configure-ai'}));
   const body=node('div',{},node('p',{class:'form-description'},'凭据由 Windows 保护并绑定当前本地工作区。已保存的 Key 不会回显。AI 模型与 Notion 连接分别保存。'),aiDetails,
+    node('div',{class:'form-section'},node('h3',{},'外观颜色'),node('p',{class:'form-description'},'调整聊天背景、成员昵称与消息框颜色，仅影响当前账号的阅读与收藏。'),button('编辑外观颜色',()=>showAppearanceSettings(draft),'full',{id:'configure-appearance',disabled:!accountId})),
     node('div',{class:'form-section'},node('h3',{},'Notion 连接'),node('p',{class:'form-description'},'使用你自己的 Notion integration，并在 Notion 页面中授予它访问权限。保存设置不会写入任何页面。'),field('Integration token',notionToken,creds.notion?'已保存的 Token 留空保持不变。':null)),
     node('div',{class:'form-section'},check('清除当前账号保存的 AI 与 Notion 凭据',draft.deleteSecrets,value=>draft.deleteSecrets=value,{id:'delete-secrets'})),
     node('div',{class:'source-note'},'没有后台定时发送。只有点击并确认 AI 总结或 Notion 导出后，选定内容才会发送到对应服务。'),
+    node('div',{class:'form-section'},node('h3',{},'本地数据'),node('p',{class:'caption'},'按群和北京时间筛选，先预览保留规则，再将消息移入可恢复的本地回收区。'),button('管理本地消息与回收区',()=>{draft.notionToken='';notionToken.value='';return showMessageCleanup();},'full',{id:'manage-local-data'})),
     accountKind()==='weibo'?node('div',{class:'form-section'},button('退出微博网页登录',async()=>{await api('logout');draft.notionToken='';notionToken.value='';closeModal();await refreshState();renderInspector();toast('已退出微博会话。本机保存的记录仍然保留。');},'danger')):null);
   if(model.state.credentialError)body.append(node('div',{class:'warning'},model.state.credentialError),check('重新初始化无法解密的旧凭据（需要重新登录微博）',draft.resetUnreadable,value=>draft.resetUnreadable=value));
   modal('设置与连接',body,[button('保存设置',async()=>{
     model.state=await api('settings.save',{notionToken:notionToken.value,deleteSecrets:draft.deleteSecrets,resetUnreadable:draft.resetUnreadable});
     draft.notionToken='';notionToken.value='';closeModal();renderSidebar();renderHeader();renderInspector();toast('设置已保存在本机。');
   },'primary',{id:'save-settings'})],{onClose:()=>{draft.notionToken='';notionToken.value='';closeModal();}});
+}
+function showAppearanceSettings(settingsDraft) {
+  const accountId=model.state.account?.id,epoch=model.accountEpoch;
+  return window.WeiyueAppearanceSettings.open({api,node,button,modal,toast,appearance:model.state.settings.appearance,accountId,
+    isCurrent:()=>accountId===model.state.account?.id && epoch===model.accountEpoch && !model.switching && !model.closing,
+    onBack:()=>showSettings(settingsDraft),
+    onSaved:state=>{if(state.account?.id!==accountId)throw new Error('账号已切换，外观结果未应用。');model.state.settings.appearance=appearance.normalizeAppearance(state.settings?.appearance);applyAppearance(model.state.settings.appearance);}
+  });
+}
+async function showMessageCleanup(){
+  const accountId=model.state.account?.id,epoch=model.accountEpoch;
+  await flushReading(false);
+  return window.WeiyueCleanup.open({api,node,button,field,check,modal,closeModal,toast,filters,accountId,groups:model.state.groups,groupId:model.groupId,
+    isCurrent:()=>accountId===model.state.account?.id&&epoch===model.accountEpoch&&!model.closing,
+    onChanged:async()=>{model.selected.clear();model.preview=null;model.aiRequest=null;await refreshState();renderSidebar();renderHeader();if(model.view==='read')await refreshReadingIncrementally(true);else if(model.view==='bookmarks')await loadBookmarks();else if(model.view==='summaries'){model.summaries=await api('summary.list');renderSummaries();}renderInspector();}});
 }
 async function showAiConfiguration(settingsDraft) {
   const dialog=$('modal'),owner=dialog.firstChild,epoch=model.accountEpoch,accountId=model.state.account?.id;

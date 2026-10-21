@@ -13,6 +13,13 @@ const META_PATH = '/2/mss/meta_query.json', MEDIA_PATH = '/2/mss/msget';
 const SOURCE = '209678993', CALLBACK = 'weiyueAttachmentMetadata';
 const MAX_METADATA_BYTES = 1024 * 1024;
 const MAX_PDF_BYTES = 50 * 1024 * 1024, MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
+const ARCHIVE_FORMATS = Object.freeze({
+  zip: Object.freeze({mime:'application/zip',aliases:Object.freeze(['application/x-zip-compressed'])}),
+  rar: Object.freeze({mime:'application/vnd.rar',aliases:Object.freeze(['application/x-rar-compressed','application/x-rar'])}),
+  '7z': Object.freeze({mime:'application/x-7z-compressed',aliases:Object.freeze([])}),
+});
+const archiveFormat=mime=>Object.values(ARCHIVE_FORMATS).find(value=>value.mime===mime);
 const MESSAGES = Object.freeze({
   ATTACHMENT_INVALID: '附件信息无效。',
   ATTACHMENT_URL: '附件地址不在允许范围内。',
@@ -26,7 +33,7 @@ const MESSAGES = Object.freeze({
   ATTACHMENT_NETWORK: '附件网络读取失败，请稍后再试。',
   ATTACHMENT_TIMEOUT: '附件读取超时。',
   ATTACHMENT_ABORT: '附件读取已取消。',
-  ATTACHMENT_TOO_LARGE: '附件超过本地预览大小限制。',
+  ATTACHMENT_TOO_LARGE: '附件超过本地读取大小限制。',
   ATTACHMENT_TYPE: '附件内容或格式暂不支持。',
 });
 class AttachmentError extends Error {
@@ -68,18 +75,22 @@ function safeAttachmentUrl(value) {
   }catch{return null;}
 }
 function normalizeAttachment(value) {
-  if(!object(value)||!['file','pdf','video'].includes(value.kind))return null;
+  if(!object(value)||!['file','pdf','video','archive'].includes(value.kind))return null;
   const fid=fidValue(value.fid);if(!fid)return null;
   if(value.state==='needs-metadata'){
     if(!['file','video'].includes(value.kind))return null;
-    return {kind:value.kind,fid,state:'needs-metadata',name:text(value.name,value.kind==='video'?'分享视频':'文件消息')};
+    return {kind:value.kind,fid,state:'needs-metadata',name:text(value.name,value.kind==='video'?'分享视频':'文件消息'),
+      ...(value.kind==='video'&&value.livePhoto===true?{livePhoto:true}:{})};
   }
-  if(value.state!=='ready'||!['pdf','video'].includes(value.kind))return null;
+  if(value.state!=='ready'||!['pdf','video','archive'].includes(value.kind))return null;
   const mime=value.kind==='pdf'?'application/pdf':value.mime;
   if(value.kind==='video'&&!['video/mp4','video/webm'].includes(mime))return null;
+  if(value.kind==='archive'&&!archiveFormat(mime))return null;
   const url=safeAttachmentUrl(value.url);
   if(!url||new URL(url).searchParams.get('fid')!==fid)return null;
-  const result={kind:value.kind,fid,state:'ready',name:text(value.name,value.kind==='pdf'?'文件.pdf':'视频.mp4'),mime,url};
+  const fallback=value.kind==='pdf'?'文件.pdf':value.kind==='archive'?'压缩文件.'+Object.keys(ARCHIVE_FORMATS).find(key=>ARCHIVE_FORMATS[key].mime===mime):'视频.mp4';
+  const result={kind:value.kind,fid,state:'ready',name:text(value.name,fallback),mime,url};
+  if(value.kind==='video'&&value.livePhoto===true)result.livePhoto=true;
   for(const key of ['size','width','height'])if(Number.isSafeInteger(value[key])&&value[key]>0&&value[key]<=
     (key==='size'?MAX_VIDEO_BYTES:32768))result[key]=value[key];
   if(Number.isFinite(value.duration)&&value.duration>0&&value.duration<=86400)result.duration=value.duration;
@@ -87,13 +98,27 @@ function normalizeAttachment(value) {
 }
 function normalizeAttachments(message) {
   if(!object(message))return [];
-  if(Array.isArray(message.attachments))return message.attachments.slice(0,20).map(normalizeAttachment).filter(Boolean);
-  const kind=message.media_type===5||message.media_type==='5'?'file':
-    message.media_type===10||message.media_type==='10'?'video':null;
-  if(!kind)return [];
-  const values=Array.isArray(message.fids)?message.fids:typeof message.fids==='string'?message.fids.split(','):[message.fids];
-  const fids=[...new Set(values.slice(0,20).map(fidValue).filter(Boolean))];
-  return fids.map(fid=>({kind,fid,state:'needs-metadata',name:kind==='video'?'分享视频':'文件消息'}));
+  let attachments=[];
+  if(Array.isArray(message.attachments))attachments=message.attachments.slice(0,20).map(normalizeAttachment).filter(Boolean);
+  else {
+    const kind=message.media_type===5||message.media_type==='5'?'file':
+      message.media_type===10||message.media_type==='10'?'video':null;
+    if(kind){
+      const values=Array.isArray(message.fids)?message.fids:typeof message.fids==='string'?message.fids.split(','):[message.fids];
+      const fids=[...new Set(values.slice(0,20).map(fidValue).filter(Boolean))];
+      attachments=fids.map(fid=>({kind,fid,state:'needs-metadata',name:kind==='video'?'分享视频':'文件消息'}));
+    }
+  }
+  // Official chat app's Live Photo helper reads this explicit field; the image
+  // FID alone does not imply a video. The official viewer's live_photo_request
+  // parameter is a cache-buster only, so retain the existing canonical MSS URL.
+  const liveFid=fidValue(message.live_photo_video_fid);
+  if(liveFid){
+    const existing=attachments.find(item=>item.fid===liveFid);
+    if(existing?.kind==='video')existing.livePhoto=true;
+    else if(!existing)attachments.push({kind:'video',fid:liveFid,state:'needs-metadata',name:'实况照片（Live Photo）',livePhoto:true});
+  }
+  return attachments.slice(0,20);
 }
 function attachmentSearchText(attachments) {
   return (Array.isArray(attachments)?attachments:[]).map(normalizeAttachment).filter(Boolean).map(a=>a.name).join('\n');
@@ -164,11 +189,13 @@ function normalizeAttachmentMetadata(descriptor,metadata) {
   const aliases=[metadata.fid,metadata.fidstr].filter(v=>v!==undefined&&v!==null);
   if(!aliases.length||aliases.some(v=>fidValue(v)!==pending.fid))fail('ATTACHMENT_INVALID');
   const extension=typeof metadata.extension==='string'?metadata.extension.toLowerCase():'';
-  const kind=extension==='pdf'?'pdf':['mp4','webm'].includes(extension)?'video':null;
+  const archive=Object.prototype.hasOwnProperty.call(ARCHIVE_FORMATS,extension)?ARCHIVE_FORMATS[extension]:null;
+  const kind=extension==='pdf'?'pdf':['mp4','webm'].includes(extension)?'video':archive?'archive':null;
   if(!kind||(pending.kind==='video'&&kind!=='video'))fail('ATTACHMENT_TYPE');
-  let name=text(metadata.filename,kind==='pdf'?'文件.pdf':'视频.'+extension);
+  let name=text(metadata.filename,(kind==='pdf'?'文件':kind==='archive'?'压缩文件':'视频')+'.'+extension);
   if(/%[a-f0-9]{2}/i.test(name)){try{name=text(decodeURIComponent(name),name);}catch{}}
-  const value={kind,fid:pending.fid,state:'ready',name,mime:kind==='pdf'?'application/pdf':'video/'+extension,url:sourceUrl(pending.fid)};
+  const value={kind,fid:pending.fid,state:'ready',name,mime:kind==='pdf'?'application/pdf':archive?archive.mime:'video/'+extension,url:sourceUrl(pending.fid)};
+  if(kind==='video'&&pending.livePhoto)value.livePhoto=true;
   const size=Number(metadata.filesize);
   if(Number.isSafeInteger(size)&&size>0){
     if(size>(kind==='pdf'?MAX_PDF_BYTES:MAX_VIDEO_BYTES))fail('ATTACHMENT_TOO_LARGE');
@@ -187,6 +214,16 @@ async function resolveAttachment(descriptor,{fetch,signal}={}) {
 }
 function detectedAttachmentMime(bytes) {
   if(!Buffer.isBuffer(bytes))return null;
+  // Fixed signatures at byte zero only; never accept executable/SFX prefixes.
+  // These identify downloadable containers, not their contents or integrity.
+  // References: PKWARE APPNOTE 4.3.7/4.3.16, RARLAB technote, ip7z/7zip DOC/7zFormat.txt.
+  if(bytes.length>=30&&bytes.readUInt32LE(0)===0x04034b50&&
+      30+bytes.readUInt16LE(26)+bytes.readUInt16LE(28)<=bytes.length)return 'application/zip';
+  if(bytes.length>=22&&bytes.readUInt32LE(0)===0x06054b50&&
+      22+bytes.readUInt16LE(20)<=bytes.length)return 'application/zip';
+  if((bytes.length>=14&&bytes.subarray(0,7).equals(Buffer.from([0x52,0x61,0x72,0x21,0x1a,0x07,0x00])))||
+      (bytes.length>=15&&bytes.subarray(0,8).equals(Buffer.from([0x52,0x61,0x72,0x21,0x1a,0x07,0x01,0x00]))))return 'application/vnd.rar';
+  if(bytes.length>=32&&bytes.subarray(0,6).equals(Buffer.from([0x37,0x7a,0xbc,0xaf,0x27,0x1c])))return 'application/x-7z-compressed';
   if(bytes.length>=8&&/^%PDF-[12]\.\d/.test(bytes.subarray(0,8).toString('ascii')))return 'application/pdf';
   if(bytes.length>=4&&bytes[0]===0x1a&&bytes[1]===0x45&&bytes[2]===0xdf&&bytes[3]===0xa3)return 'video/webm';
   if(bytes.length>=16&&bytes.subarray(4,8).toString('ascii')==='ftyp'){
@@ -204,20 +241,25 @@ function mergeAttachments(previous=[],incoming=[]) {
   for(const raw of [...previous,...incoming]){
     const item=normalizeAttachment(raw);if(!item)continue;
     const old=values.get(item.fid);
-    if(old?.state==='ready'&&item.state!=='ready')continue;
+    if(old?.state==='ready'&&item.state!=='ready'){
+      if(old.kind==='video'&&item.livePhoto)old.livePhoto=true;
+      continue;
+    }
+    if(item.kind==='video'&&old?.livePhoto)item.livePhoto=true;
     values.set(item.fid,item);
   }
   return [...values.values()].slice(0,20);
 }
 async function fetchAttachment({attachment,fetch,signal,timeoutMs=120000}={}) {
   const value=normalizeAttachment(attachment);if(!value||value.state!=='ready')fail('ATTACHMENT_INVALID');
-  const maxBytes=value.kind==='pdf'?MAX_PDF_BYTES:MAX_VIDEO_BYTES;
+  const maxBytes=value.kind==='pdf'?MAX_PDF_BYTES:value.kind==='archive'?MAX_ARCHIVE_BYTES:MAX_VIDEO_BYTES;
   const result=await requestBytes({url:value.url,fetch,signal,timeoutMs,maxBytes,accept:value.mime+', application/octet-stream'});
   const declared=String(result.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
   // The official MSS endpoint also returns MP4 as video/mpeg4. Keep the alias
   // limited to resolved MP4 metadata and require the same strict file signature.
   const acceptedMime=[value.mime,'application/octet-stream','binary/octet-stream'].includes(declared)||
-    (value.kind==='video'&&value.mime==='video/mp4'&&declared==='video/mpeg4');
+    (value.kind==='video'&&value.mime==='video/mp4'&&declared==='video/mpeg4')||
+    (value.kind==='archive'&&archiveFormat(value.mime)?.aliases.includes(declared));
   if(!acceptedMime||detectedAttachmentMime(result.bytes)!==value.mime)fail('ATTACHMENT_TYPE');
   return {bytes:result.bytes,mime:value.mime,name:value.name,kind:value.kind};
 }
@@ -225,4 +267,4 @@ module.exports={AttachmentError,normalizeAttachment,normalizeAttachments,attachm
   normalizeMessageAttachments:normalizeAttachments,mergeAttachments,
   normalizeAttachmentMetadata,resolveAttachment,
   fidValue,sourceUrl,metadataUrl,parseMetadata,fetchAttachmentMetadata,fetchAttachment,detectedAttachmentMime,
-  MAX_METADATA_BYTES,MAX_PDF_BYTES,MAX_VIDEO_BYTES,ORIGIN,META_PATH,MEDIA_PATH,CALLBACK};
+  MAX_METADATA_BYTES,MAX_PDF_BYTES,MAX_VIDEO_BYTES,MAX_ARCHIVE_BYTES,ARCHIVE_FORMATS,ORIGIN,META_PATH,MEDIA_PATH,CALLBACK};

@@ -14,12 +14,12 @@ const renderer = create({ manifest, links });
 const emoticons = text => renderer.tokenize(text).filter(part => part.type === 'emoticon');
 const reconstruct = text => renderer.tokenize(text).map(part => part.text).join('');
 
-test('all 308 official public names and both bracket forms render without changing original text or requesting absent icons', () => {
+test('all verified official names and both bracket forms render without changing original text or requesting absent icons', () => {
   const official=require('../app/renderer/emoticon-manifest.js');
   const document=fakeDocument(),full=create({manifest:official,links});
   const names=Object.keys(official),text=names.map(name=>`[${name}]【${name}】`).join('，\n');
   const parts=full.tokenize(text),images=parts.filter(part=>part.type==='emoticon');
-  assert.equal(names.length,308);assert.equal(images.length,616);
+  assert.equal(names.length,409);assert.equal(images.length,names.length*2);
   assert.equal(parts.map(part=>part.text).join(''),text);
   assert.equal(document.requests.length,0,'Constructing and tokenizing a full catalogue must not preload images');
   for(const [index,name] of names.entries()){
@@ -38,6 +38,17 @@ test('all 308 official public names and both bracket forms render without changi
     ['【大侦探皮卡丘微笑】','[正义联盟logo]']);
   for(const image of childrenByClass(shown,'emoticon-image'))image.dispatch('error');
   assert.equal(projectText(shown),selected,'Every failed long/short token still copies its complete original text');
+});
+
+test('long legacy path code failure retains its exact original copy text and fixed-size image slot',()=>{
+  const official=require('../app/renderer/emoticon-manifest.js'),document=fakeDocument(),full=create({manifest:official,links});
+  const shown=document.createElement('div'),text='[苦涩]【/ee8192.png】[/ee858c.png][/ee88a6.png]【/ee88a6.png】[/ee84a5.png]【/ee84a5.png】[/ee88ab.png]【/ee88ab.png】';
+  full.appendText(shown,text);
+  const images=childrenByClass(shown,'emoticon-image');
+  assert.equal(images.length,9);assert.equal(projectText(shown),text);
+  for(const image of images){assert.equal(image.width,IMAGE_SIZE);assert.equal(image.height,IMAGE_SIZE);image.dispatch('error');}
+  assert.equal(projectText(shown),text);
+  assert.deepEqual(childrenByClass(shown,'emoticon-fallback-compact').map(node=>node.textContent),['【/ee8192.png】','[/ee858c.png]','[/ee88a6.png]','【/ee88a6.png】','[/ee84a5.png]','【/ee84a5.png】','[/ee88ab.png]','【/ee88ab.png】']);
 });
 
 test('conflicting normalized names stay literal instead of selecting an arbitrary same-name emoticon',()=>{

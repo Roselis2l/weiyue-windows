@@ -1,6 +1,7 @@
 'use strict';
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const {inspectHevcMp4}=require('./video-decoder.cjs');
 const VIEWER_URL = 'app://local/attachment-viewer.html';
 const CHANNEL = 'weiyue:attachment-viewer';
 const LIMITS = Object.freeze({ pdf: 50 * 1024 * 1024, video: 200 * 1024 * 1024 });
@@ -70,7 +71,7 @@ function validateAttachment(value,expectedKind) {
       actualMime(value.bytes)!==value.mime) throw new Error(ERRORS.content);
   return {bytes:Buffer.from(value.bytes),mime:value.mime,kind:format.kind,name:safeName(value.name,value.mime)};
 }
-function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,getOwner,readAttachment,writeFile=fs.writeFile,readTimeoutMs=120000}={}) {
+function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,getOwner,readAttachment,decodeVideo,writeFile=fs.writeFile,readTimeoutMs=120000}={}) {
   if(typeof BrowserWindow!=='function'||typeof ipcMain?.handle!=='function'||typeof dialog?.showSaveDialog!=='function'||
       typeof appRoot!=='string'||typeof getOwner!=='function'||typeof readAttachment!=='function'||
       !Number.isSafeInteger(readTimeoutMs)||readTimeoutMs<1||readTimeoutMs>120000) throw new Error('附件查看器配置无效。');
@@ -78,8 +79,8 @@ function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,
   const current=r=>!disposed&&!r.window.isDestroyed()&&records.get(r.webContents)===r&&r.owner===getOwner();
   const check=r=>{if(!current(r))throw new Error(ERRORS.expired);};
   async function load(r,retry) {
-    check(r);if(r.pending)return r.pending;if(r.attachment&&!retry)return r.attachment;
-    r.attachment=null;
+    check(r);if(r.conversion)throw new Error(ERRORS.busy);if(r.pending)return r.pending;if(r.attachment&&!retry)return r.attachment;
+    r.attachment=null;r.displayAttachment=null;
     r.pending=(async()=>{
       const controller=new AbortController();r.controller=controller;let timer;
       try{
@@ -95,8 +96,22 @@ function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,
     })();
     return r.pending;
   }
+  async function convert(r){
+    check(r);if(r.pending||r.saving)throw new Error(ERRORS.busy);if(r.conversion)return r.conversion;
+    if(r.displayAttachment)return r.displayAttachment;
+    if(typeof decodeVideo!=='function'||r.attachment?.mime!=='video/mp4'||!inspectHevcMp4(r.attachment.bytes))throw new Error(ERRORS.content);
+    const controller=new AbortController();r.convertController=controller;
+    r.conversion=Promise.resolve().then(async()=>{
+      check(r);const value=await decodeVideo({bytes:r.attachment.bytes,mime:r.attachment.mime},{signal:controller.signal});check(r);
+      r.displayAttachment=validateAttachment({...value,name:r.attachment.name},'video');return r.displayAttachment;
+    }).catch(error=>{
+      if(!current(r))throw new Error(ERRORS.expired);
+      throw new Error(error?.code==='VIDEO_TIMEOUT'?'本机视频转换超时，可另存原文件。':error?.code==='VIDEO_ABORT'?'本机视频转换已取消。':'本机视频转换失败，可另存原文件后查看。');
+    }).finally(()=>{r.convertController=null;r.conversion=null;});
+    return r.conversion;
+  }
   async function save(r) {
-    check(r);if(r.pending||r.saving||!r.attachment)throw new Error(ERRORS.busy);r.saving=true;
+    check(r);if(r.pending||r.conversion||r.saving||!r.attachment)throw new Error(ERRORS.busy);r.saving=true;
     try{
       const value=r.attachment,format=FORMATS[value.mime];
       const chosen=await dialog.showSaveDialog(r.window,{title:'附件另存为',buttonLabel:'保存原文件',defaultPath:value.name,
@@ -112,15 +127,17 @@ function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,
     const r=records.get(event.sender);
     if(!r||r.window.isDestroyed()||event.senderFrame!==r.webContents.mainFrame||event.senderFrame?.url!==VIEWER_URL)return {ok:false,error:ERRORS.sender};
     try{
-      check(r);if(!['load','retry','save','close','maximize','minimize'].includes(action))throw new Error(ERRORS.action);
+      check(r);if(!['load','retry','convert','save','close','maximize','minimize'].includes(action))throw new Error(ERRORS.action);
       if(action==='close'){r.window.close();return {ok:true,value:true};}
       if(action==='maximize'){r.window.isMaximized()?r.window.unmaximize():r.window.maximize();return {ok:true,value:true};}
       if(action==='minimize'){r.window.minimize();return {ok:true,value:true};}
       if(action==='save')return {ok:true,value:await save(r)};
       if(r.saving)throw new Error(ERRORS.busy);
-      const value=await load(r,action==='retry');check(r);
-      return {ok:true,value:{title:r.title,name:value.name,kind:value.kind,mime:value.mime,byteLength:value.bytes.length,bytes:Uint8Array.from(value.bytes)}};
-    }catch(e){return {ok:false,error:[...Object.values(ERRORS),...Object.values(TRANSPORT_ERRORS)].includes(e?.message)?e.message:ERRORS.content};}
+      if(action==='convert')await convert(r);else await load(r,action==='retry');check(r);
+      const value=r.displayAttachment||r.attachment;
+      return {ok:true,value:{title:r.title,name:r.attachment.name,kind:value.kind,mime:value.mime,byteLength:value.bytes.length,bytes:Uint8Array.from(value.bytes),
+        converted:!!r.displayAttachment,canConvert:!r.displayAttachment&&typeof decodeVideo==='function'&&r.attachment.mime==='video/mp4'&&!!inspectHevcMp4(r.attachment.bytes)}};
+    }catch(e){return {ok:false,error:[...Object.values(ERRORS),...Object.values(TRANSPORT_ERRORS),'本机视频转换超时，可另存原文件。','本机视频转换已取消。','本机视频转换失败，可另存原文件后查看。'].includes(e?.message)?e.message:ERRORS.content};}
   }
   ipcMain.handle(CHANNEL,route);
   async function open({source,title,kind}={}) {
@@ -133,15 +150,15 @@ function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,
       parent:getParent?.(),title:kind==='video'?'视频播放 — 微阅':'文件预览 — 微阅',backgroundColor:'#15191c',autoHideMenuBar:true,
       webPreferences:{preload:path.join(appRoot,'attachment-viewer-preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,spellcheck:false}});
     const wc=window.webContents;
-    const r={window,webContents:wc,owner:getOwner(),source:accepted,kind,title:typeof title==='string'?title.replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,180):'附件预览',attachment:null,pending:null,saving:false,controller:null};
+    const r={window,webContents:wc,owner:getOwner(),source:accepted,kind,title:typeof title==='string'?title.replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,180):'附件预览',attachment:null,displayAttachment:null,pending:null,conversion:null,convertController:null,saving:false,controller:null};
     records.set(wc,r);wc.setWindowOpenHandler(()=>({action:'deny'}));
     wc.on('will-navigate',e=>e.preventDefault());wc.on('will-attach-webview',e=>e.preventDefault());
     wc.on('before-input-event',(event,input)=>{if(input.type==='keyDown'&&input.key==='Escape'){event.preventDefault();window.close();}});
-    window.on('closed',()=>{records.delete(wc);r.controller?.abort();r.attachment=null;});
+    window.on('closed',()=>{records.delete(wc);r.controller?.abort();r.convertController?.abort();r.attachment=null;r.displayAttachment=null;});
     try{await window.loadURL(VIEWER_URL);check(r);window.show();return {opened:true};}
     catch{if(!window.isDestroyed())window.close();throw new Error(ERRORS.content);}
   }
-  function closeAll(){for(const r of [...records.values()]){records.delete(r.webContents);r.controller?.abort();r.attachment=null;if(!r.window.isDestroyed())r.window.close();}}
+  function closeAll(){for(const r of [...records.values()]){records.delete(r.webContents);r.controller?.abort();r.convertController?.abort();r.attachment=null;r.displayAttachment=null;if(!r.window.isDestroyed())r.window.close();}}
   function dispose(){closeAll();disposed=true;ipcMain.removeHandler?.(CHANNEL);}
   return {open,closeAll,dispose};
 }

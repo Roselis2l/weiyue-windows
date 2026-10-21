@@ -6,6 +6,7 @@ const vm=require('node:vm');
 const source=fs.readFileSync(require.resolve('../app/renderer/app.js'),'utf8');
 const reading=require('../app/renderer/reading-state.js');
 const filters=require('../app/renderer/filter-controls.js');
+const paging=require('../app/renderer/auto-page.js');
 // Exercise actual renderer handlers, timers, queued writes and background refresh.
 // Only the DOM geometry, clock and IPC transport are faked. In particular neither
 // scheduleRead nor flushReading is stubbed: their interaction caused the regression.
@@ -34,7 +35,7 @@ function harness(){
     pointerReading:null,readingActivity:null,readingCommits:new Map(),pendingReadingRefresh:null,pendingReadingTimer:null,
     offset:0,limit:160,total:2,refreshRunning:false,members:[],filters:null,
     searchEditor:null,filterReturn:null,readNavigation:null};
-  const scroll={scrollTop:100,offsetWidth:100,clientWidth:90,clientHeight:400,scrollHeight:1000,childNodes:[],
+  const scroll={scrollTop:100,offsetWidth:100,clientWidth:90,clientHeight:400,scrollHeight:1000,childNodes:[],dataset:{},setAttribute(){},
     getBoundingClientRect:()=>({top:0,bottom:400,right:200}),addEventListener:(name,callback)=>listeners[name]=callback,
     querySelectorAll(selector){return this.childNodes.filter(n=>selector==='[data-message-id]'?n.dataset.messageId:selector==='[data-day]'?n.dataset.day:false);},
     insertBefore(child,cursor){const old=this.childNodes.indexOf(child);if(old>=0)this.childNodes.splice(old,1);const index=cursor?this.childNodes.indexOf(cursor):-1;if(index<0)this.childNodes.push(child);else this.childNodes.splice(index,0,child);}};
@@ -55,7 +56,13 @@ function harness(){
   const api=async(name,payload)=>{
     if(name==='read.set'){writes.push(JSON.parse(JSON.stringify(payload)));events.push({at:now,type:'read.set',payload:{...payload}});if(commitBarrier)await commitBarrier;return{readState:{readThroughId:payload.readThroughId||model.state.readStates[payload.groupId].readThroughId}};}
     if(name==='messages.locate')return{offset:0};
-    if(name==='messages.query'){const messages=backend.slice();events.push({at:now,type:'query'});if(queryBarrier)await queryBarrier;return{messages,total:messages.length};}
+    if(name==='messages.query'){
+      const all=backend.slice(),start=payload.startId===undefined?null:all.findIndex(message=>message.id===payload.startId),after=payload.afterId===undefined?null:all.findIndex(message=>message.id===payload.afterId);
+      const offset=start!==null?start:after!==null?after+1:payload.offset||0;
+      assert.ok(offset>=0,'the synthetic query must locate a stable message ID');
+      const messages=all.slice(offset,offset+payload.limit);events.push({at:now,type:'query'});
+      if(queryBarrier)await queryBarrier;return{messages,total:all.length,offset,revision:0};
+    }
     if(name==='state')return JSON.parse(JSON.stringify(model.state));
     if(name==='members.list')return[];
     throw Error('Unexpected fake IPC '+name);
@@ -66,12 +73,12 @@ function harness(){
     requestAnimationFrame:callback=>{const id=next++;frames.set(id,callback);return id;},cancelAnimationFrame:id=>frames.delete(id),
     getComputedStyle:()=>({paddingBottom:'0'}),measuredMessages:captureItems,
     findMessageElement:id=>scroll.childNodes.find(el=>el.dataset.messageId===id),
-    watchMessageSizes:()=>{},updateReadChrome:()=>{},updateUnreadBadges:()=>{},enrichVisibleMessages:async()=>{},
+    watchMessageSizes:()=>{},updateReadChrome:()=>{},updateUnreadBadges:()=>{},enrichVisibleMessages:async()=>{},applyAppearance:()=>{},
     renderSidebar:()=>events.push({at:now,type:'sidebar'}),renderHeader:()=>events.push({at:now,type:'header'}),
     messageSignature:JSON.stringify,messageCard:card,node:(_tag,props)=>element(props?.['data-day']?{day:props['data-day']}:{}),
     dateLabel:()=>'',emptyState:()=>element(),locateReadBoundary:async()=>null,
-    window:{addEventListener:(name,callback)=>windowListeners[name]=callback},scroll});
-  vm.runInContext(extracted+';model.filters=emptyFilters();bindReadingInput(scroll);',context);
+    window:{WeiyueAutoPage:paging,addEventListener:(name,callback)=>windowListeners[name]=callback},scroll});
+  vm.runInContext(extracted+section('const autoPage =','const loginFlow =')+';model.filters=emptyFilters();bindReadingInput(scroll);',context);
   const run=code=>vm.runInContext(code,context);
   async function settle(waitWrites=true){for(let i=0;i<16;i++)await Promise.resolve();if(waitWrites)await model.readWrite;}
   async function tick(ms,waitWrites=true){const target=now+ms;let iterations=0;for(;;){const due=[...timers].filter(([,t])=>t.due<=target).sort((a,b)=>a[1].due-b[1].due)[0];if(!due)break;assert.ok(iterations++<100,'deferred refresh must not spin');now=due[1].due;timers.delete(due[0]);due[1].callback();await settle(waitWrites);}now=target;await settle(waitWrites);}

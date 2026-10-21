@@ -2,10 +2,10 @@
 const $=id=>document.getElementById(id);
 const viewport=$('viewport'),canvas=$('page'),video=$('video');
 let documentTask=null,pdf=null,renderTask=null,renderChain=Promise.resolve(),blobUrl=null,epoch=0,renderEpoch=0;
-let pageNumber=1,pageCount=0,scale=1,fitted=true,saving=false,toastTimer;
+let pageNumber=1,pageCount=0,scale=1,fitted=true,saving=false,converting=false,hasOriginal=false,toastTimer;
 const pdfButtons=['previous','next','zoom-in','zoom-out','fit'].map($);
 function toast(text){clearTimeout(toastTimer);$('toast').textContent=text;$('toast').hidden=false;toastTimer=setTimeout(()=>{$('toast').hidden=true;},6000);}
-function showStatus(text,retry=false){$('notice').hidden=false;$('status').textContent=text;$('retry').hidden=!retry;}
+function showStatus(text,retry=false){$('notice').hidden=false;$('status').textContent=text;$('retry').hidden=!retry;$('convert').hidden=true;}
 function controls(){
   $('previous').disabled=!pdf||pageNumber<=1;$('next').disabled=!pdf||pageNumber>=pageCount;
   $('zoom-in').disabled=!pdf||scale>=3;$('zoom-out').disabled=!pdf||scale<=.25;$('fit').disabled=!pdf;
@@ -77,13 +77,16 @@ async function showPdf(bytes,currentEpoch){
     $('pdf-controls').hidden=false;controls();requestRender();
   }catch{if(currentEpoch===epoch)showStatus('此 PDF 暂时无法预览（文件损坏、加密或超过预览限制）。可另存原文件。',true);}
 }
-async function load(retry=false){
+async function load(retry=false,convert=false){
+  if(converting)return;if(convert)converting=true;
+  if(!convert)hasOriginal=false;
   const currentEpoch=++epoch;await clean();if(currentEpoch!==epoch)return;
-  $('save').disabled=true;showStatus('正在读取附件…');
+  $('save').disabled=true;showStatus(convert?'正在本机准备兼容预览；原文件保持不变。关闭窗口可取消。':'正在读取附件…');
   try{
-    const value=await window.attachmentViewer.call(retry?'retry':'load');
+    const value=await window.attachmentViewer.call(convert?'convert':retry?'retry':'load');
     if(currentEpoch!==epoch)return;
     if(!(value.bytes instanceof Uint8Array)||!['pdf','video'].includes(value.kind))throw new Error('invalid');
+    hasOriginal=true;
     $('title').textContent=value.title||'附件预览';$('filename').textContent=value.name;
     $('info').textContent=(value.byteLength/1024/1024).toFixed(2)+' MB · 文件仅在本机预览';$('save').disabled=saving;
     if(value.kind==='pdf')await showPdf(value.bytes,currentEpoch);
@@ -91,15 +94,33 @@ async function load(retry=false){
       if(!['video/mp4','video/webm'].includes(value.mime))throw new Error('invalid');
       blobUrl=URL.createObjectURL(new Blob([value.bytes],{type:value.mime}));
       video.autoplay=false;video.muted=false;video.hidden=false;
-      video.onloadedmetadata=()=>{if(currentEpoch===epoch){$('notice').hidden=true;$('info').textContent='视频 · 点击播放 · '+(value.byteLength/1024/1024).toFixed(2)+' MB';}};
-      video.onerror=()=>{if(currentEpoch===epoch){video.hidden=true;showStatus('此视频暂时无法播放（编码不受支持或文件损坏）。可另存原文件后查看。',true);}};
+      let fallbackStarted=false;
+      const unsupported=()=>{
+        if(currentEpoch!==epoch)return;video.pause();video.muted=true;video.hidden=true;
+        if(value.canConvert&&!convert&&!fallbackStarted){
+          fallbackStarted=true;showStatus('正在本机准备兼容预览，原文件保持不变。关闭窗口可取消。');
+          queueMicrotask(()=>{if(currentEpoch===epoch&&!converting)void load(false,true);});return;
+        }
+        showStatus(value.canConvert?'此短视频使用 HEVC 编码。可在本机生成兼容预览，原文件保持不变。':'此视频暂时无法播放（编码不受支持或文件损坏）。可另存原文件后查看。',true);
+        $('convert').hidden=!value.canConvert;$('convert').disabled=false;
+      };
+      video.onloadedmetadata=()=>{if(currentEpoch===epoch){if(!video.videoWidth||!video.videoHeight){unsupported();return;}$('notice').hidden=true;
+        $('info').textContent=(value.converted?'本机兼容预览 · 另存为仍是原文件':'视频')+' · '+(value.byteLength/1024/1024).toFixed(2)+' MB';
+        // Opening this preview is the user's play action. Wait for real video
+        // dimensions so an unsupported HEVC track cannot autoplay audio only.
+        // Keep browser playback policy and normal controls intact.
+        Promise.resolve(video.play()).catch(()=>{if(currentEpoch===epoch&&!video.error)toast('自动播放未获允许，请点播放器中的播放按钮。');});
+      }};
+      video.onerror=unsupported;
       video.src=blobUrl;video.load();
     }
   }catch(e){if(currentEpoch===epoch)showStatus(e?.message==='invalid'?'附件数据格式无效。':e?.message||'附件加载失败，请重试。',true);}
+  finally{if(convert)converting=false;if(currentEpoch===epoch)$('save').disabled=saving||!hasOriginal;}
 }
 function windowAction(action){window.attachmentViewer.call(action).catch(e=>toast(e.message));}
 for(const action of ['close','minimize','maximize'])$(action).addEventListener('click',()=>windowAction(action));
 $('retry').addEventListener('click',()=>load(true));
+$('convert').addEventListener('click',()=>{if(!converting)void load(false,true);});
 $('save').addEventListener('click',async()=>{
   if(saving)return;saving=true;$('save').disabled=true;
   try{const result=await window.attachmentViewer.call('save');if(result.saved)toast('已保存原文件：'+result.name);}
@@ -120,3 +141,4 @@ document.addEventListener('keydown',event=>{
 });
 window.addEventListener('beforeunload',()=>{epoch++;void clean();});
 void load();
+

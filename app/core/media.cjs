@@ -119,10 +119,10 @@ function cancelBody(body) {
   try { if (body?.cancel) Promise.resolve(body.cancel()).catch(() => {}); } catch { /* best effort only */ }
 }
 
-async function fetchImage({ url, fetch: request, signal, timeoutMs = 15000, maxBytes = DEFAULT_MAX_BYTES, allowHeif = false } = {}) {
+async function fetchImage({ url, fetch: request, signal, timeoutMs = 15000, maxBytes = DEFAULT_MAX_BYTES, allowHeif = false, allowRasterMimeCorrection = false } = {}) {
   let currentUrl = safeImageUrl(url);
   if (!currentUrl) fail('MEDIA_URL');
-  if (typeof request !== 'function' || typeof allowHeif !== 'boolean' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > DEFAULT_MAX_BYTES) fail('MEDIA_CONFIG');
+  if (typeof request !== 'function' || typeof allowHeif !== 'boolean' || typeof allowRasterMimeCorrection !== 'boolean' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > DEFAULT_MAX_BYTES) fail('MEDIA_CONFIG');
   if (signal && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) fail('MEDIA_CONFIG');
   if (signal?.aborted) fail('MEDIA_ABORT');
 
@@ -213,11 +213,17 @@ async function fetchImage({ url, fetch: request, signal, timeoutMs = 15000, maxB
       if (interruptError) throw interruptError;
       return { bytes, mime: 'image/heic' };
     }
-    if (actualMime !== mime) fail('MEDIA_TYPE', {
+    // The official MSS download can label a PNG as JPEG. Chat display may opt
+    // in to the actual supported raster type; the renderer and Save As then
+    // receive that same type. This never accepts a missing/HTML/SVG/unknown
+    // header or an unknown signature, and never re-encodes the original bytes.
+    // Avatar and AI transports remain strict unless their own caller opts in.
+    const correctedRaster = allowRasterMimeCorrection && ALLOWED_MIMES.has(mime) && ALLOWED_MIMES.has(actualMime);
+    if (actualMime !== mime && !correctedRaster) fail('MEDIA_TYPE', {
       validationStage: 'magic', declaredMime: mime, detectedMime: actualMime, byteLength: size,
     });
     if (interruptError) throw interruptError;
-    return { bytes, mime };
+    return { bytes, mime: correctedRaster ? actualMime : mime };
   } catch (error) {
     if (!controller.signal.aborted) controller.abort();
     try { if (reader) Promise.resolve(reader.cancel()).catch(() => {}); else cancelBody(response?.body); } catch { /* best effort only */ }

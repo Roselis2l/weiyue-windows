@@ -41,14 +41,15 @@ test('complete public official catalogue matches every bundled mapping and serve
   assert.equal(hash(sourceBytes),catalog.source.sha256);
   assert.equal(sourceBytes.length,catalog.source.bytes);
   assert.equal(catalog.source.url,'https://h5.sinaimg.cn/m/emoticon/all.json');
-  assert.deepEqual(Object.keys(manifest).sort(),Object.keys(source).sort());
+  const publicManifest=Object.fromEntries(Object.keys(source).map(name=>[name,manifest[name]]));
+  assert.deepEqual(Object.keys(publicManifest).sort(),Object.keys(source).sort());
   assert.equal(catalog.mappingCount,308);
-  assert.equal(catalog.mappingCount,Object.keys(manifest).length);
+  assert.equal(catalog.mappingCount,Object.keys(publicManifest).length);
   assert.equal(catalog.uniqueResourceCount,307);
   assert.equal(catalog.chatDirectory.publicAccess,false);
   assert.equal(catalog.chatDirectory.errorCode,21301);
   const categories={},unique=new Map();
-  for(const [name,descriptor] of Object.entries(manifest)){
+  for(const [name,descriptor] of Object.entries(publicManifest)){
     assert.equal(descriptor.sourceUrl,'https:'+source[name].source);
     assert.equal(descriptor.group,source[name].group);
     assert.deepEqual(catalog.entries.find(entry=>entry.name===name),{name,...descriptor});

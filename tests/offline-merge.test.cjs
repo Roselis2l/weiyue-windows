@@ -3,6 +3,16 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {mergeAccount}=require('../scripts/lib/offline-merge.cjs');
 const message=(id,time,text='message '+id)=>({id:String(id),groupId:'g',senderId:'member',senderName:'Member',text,time});
 const account=(messages=[])=>({schemaVersion:1,account:{id:'weibo-synthetic',name:'Synthetic',kind:'weibo'},groups:[{id:'g',name:'Synthetic',selected:true,nextCursor:'1'}],messages,bookmarks:[],summaries:[],exports:{},importantMembers:[],settings:{autoSyncEnabled:false},readPositions:{g:'2'},readStates:{g:{anchorId:'2',anchorOffset:12,atBottom:false,readThroughId:'2',unreadIds:['4'],updatedAt:100}}});
+
+test('historical merge refuses recyclable formats in either destination or source without changing either',()=>{
+ for(const mutate of [s=>{s.schemaVersion=2;},s=>{s.schemaVersion=99;},s=>{s.messageTrash=[{id:'synthetic'}];},s=>{s.messages[0].localDeletion={batchId:'synthetic',deletedAt:1};}]){
+  for(const destination of [true,false]){
+   const d=account([message(2,20),message(4,40)]),c=account([message(2,20)]);mutate(destination?d:c);
+   const before=JSON.stringify([d,c]);assert.throws(()=>mergeAccount(d,[{label:'synthetic',state:c}]),/does not support recyclable-message data/);
+   assert.equal(JSON.stringify([d,c]),before);
+  }
+ }
+});
 test('merge preserves destination reading fields and adds only recovered IDs after its high-water mark',()=>{const d=account([message(2,20),message(4,40)]),c=account([message(1,10),message(2,20),message(3,30)]),before=JSON.stringify(d);const {state,changes}=mergeAccount(d,[{label:'C',state:c}]);assert.deepEqual(state.messages.map(m=>m.id),['1','2','3','4']);assert.deepEqual(state.readStates.g.unreadIds,['4','3']);assert.deepEqual({...state.readStates.g,unreadIds:[]},{...d.readStates.g,unreadIds:[]});assert.equal(changes.addedUnread,1);assert.equal(JSON.stringify(d),before);const again=mergeAccount(state,[{label:'C',state:c}]);assert.equal(again.changes.addedMessages,0);assert.equal(again.changes.addedUnread,0);});
 test('nonempty text conflicts preserve destination and both original variants; summary references stay unchanged',()=>{const d=account([message(2,20,'D text'),message(4,40)]),c=account([message(2,20,'C text')]);c.summaries=[{id:'s',groupId:'g',refs:[{id:'2',text:'C text'}],body:'saved'}];const r=mergeAccount(d,[{label:'C',state:c}]);assert.equal(r.state.messages.find(m=>m.id==='2').text,'D text');assert.equal(r.conflicts[0].destination.text,'D text');assert.equal(r.conflicts[0].incoming.text,'C text');assert.deepEqual(r.state.summaries,c.summaries);});
 test('account mismatch is rejected before any original object changes',()=>{const d=account([message(2,20),message(4,40)]),c=account();c.account.id='another';assert.throws(()=>mergeAccount(d,[{label:'C',state:c}]),/Cross-account/);assert.equal(d.messages.length,2);});

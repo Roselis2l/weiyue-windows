@@ -6,6 +6,7 @@ const vm=require('node:vm');
 const source=fs.readFileSync(require.resolve('../app/renderer/app.js'),'utf8');
 const reading=require('../app/renderer/reading-state.js');
 const filters=require('../app/renderer/filter-controls.js');
+const paging=require('../app/renderer/auto-page.js');
 function section(start,end){
   const a=source.indexOf(start),b=source.indexOf(end,a);
   assert.ok(a>=0 && b>a,`renderer section ${start}`);return source.slice(a,b);
@@ -99,7 +100,8 @@ function harness(){
     if(action==='read.set'){writes.push(JSON.parse(JSON.stringify(payload)));return{readState:{readThroughId:'older',unreadCount:7}};}
     throw Error('Unexpected mock IPC '+action);
   };
-  const context=vm.createContext({model,reading,filters,document,node,$,api,
+  const autoPage=paging.createAutoPager({snapshot:()=>({enabled:false}),load:()=>{throw Error('search lifecycle fixture does not request paging');},apply:()=>{throw Error('unexpected append');}});
+  const context=vm.createContext({model,reading,filters,autoPage,window:{WeiyueAutoPage:paging},document,node,$,api,
     button:(text,fn,cls,props={})=>node('button',{...props,onclick:fn},text),
     field:(_label,input)=>node('label',{},input),
     check:(_label,checked,fn,props)=>node('label',{},node('input',{type:'checkbox',checked,...props,onchange:event=>fn(event.target.checked)})),

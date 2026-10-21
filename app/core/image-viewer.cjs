@@ -31,7 +31,7 @@ function normalizeSource(value) {
     if (u.protocol !== 'app:' || u.host !== 'media' || u.username || u.password || u.port || u.search || u.hash) return null;
     const pieces = u.pathname.slice(1).split('/').map(decodeURIComponent);
     if (pieces.length !== 6 || !/^[a-f0-9]{32}$/.test(pieces[0]) || !pieces[1] || !pieces[2] ||
-        !['message', 'post'].includes(pieces[3]) || !/^\d{1,3}$/.test(pieces[4]) || pieces[5] !== 'original' ||
+        !/^(?:message|post|reference-(?:[0-9]|1[0-9]))$/.test(pieces[3]) || !/^\d{1,3}$/.test(pieces[4]) || pieces[5] !== 'original' ||
         pieces.some(x => /[\u0000-\u001f\u007f]/.test(x)) || pieces[1].length > 256 || pieces[2].length > 256) return null;
     return u.href;
   } catch { return null; }

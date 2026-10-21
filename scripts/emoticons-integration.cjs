@@ -68,6 +68,10 @@ const raw={
   shared:'原微博合成正文[哈哈]【笑cry】与原文链接 https://example.com/post'
 };
 raw.unknown='未知[微阅QA115未收录代码]【QA115未知表情】[]【】普通括号保持原文 javascript:alert(1) <img src=x onerror=alert(1)>';
+const requestedLegacyCases=['/ee88ab.png','/ee84a5.png','/ee88a6.png'].map((name,index)=>({
+  name,messageIndex:36+index,url:`https://example.com/[${name}]?q=【${name}】`,
+  text:`旧版代码 [${name}]、【${name}】；连续[${name}][${name}]，链接 https://example.com/[${name}]?q=【${name}】`
+}));
 assert.ok(!Object.hasOwn(officialManifest,'微阅QA115未收录代码')&&!Object.hasOwn(officialManifest,'QA115未知表情'),'UNKNOWN_FIXTURE_BECAME_KNOWN');
 const group=key=>fixtures.groups.find(g=>g.key===key);
 fixtures.groups.push({key:'C',id:'9007199254742400003',name:'全部官方表情合成目录',
@@ -78,6 +82,7 @@ const messages=fixtures.groups.flatMap((g,gi)=>{
     id,groupId:g.id,senderId:String(71+i%4),senderName:names[i%4],
     time:base+i*60000+([99,120].includes(i)?59999:0),mediaVersion:1,attachmentVersion:1,
     text:g.key==='C'?catalogTexts[i]:g.key==='A'&&i>=30&&i<=34?[raw.mixed,raw.link,raw.unknown,raw.repeated,raw.failure][i-30]:
+      g.key==='A'&&requestedLegacyCases.some(entry=>entry.messageIndex===i)?requestedLegacyCases.find(entry=>entry.messageIndex===i).text:
       g.key==='A'&&i===200?'A 合成记录 200 [二哈]【哈哈】[笑cry]【笑cry】':`${g.key} 合成记录 ${i} [二哈]【哈哈】`,
     ...(g.key==='A'&&i===35?{sharedPost:{state:'ready',text:raw.shared,images:[],author:'合成作者',url:'https://weibo.com/71/SyntheticPost'}}:{})
   }));
@@ -337,26 +342,31 @@ async function verifyCompleteCatalog(){
   const counts=key=>Object.fromEntries([...new Set(catalog.map(item=>String(item[key]||'unspecified')))].map(value=>[value,catalog.filter(item=>String(item[key]||'unspecified')===value).length]));
   const metadataFile=path.join(appRoot,'renderer/emoticons/catalog-source.json'),
     catalogManifestFile=path.join(appRoot,'renderer/emoticons/catalog-manifest.json'),
-    catalogManifest=JSON.parse(fs.readFileSync(catalogManifestFile,'utf8'));
-  assert.equal(catalogManifest.mappingCount,catalog.length);
-  assert.equal(catalogManifest.uniqueResourceCount,unique.length);
+    catalogManifest=JSON.parse(fs.readFileSync(catalogManifestFile,'utf8')),
+    extensionManifestFile=path.join(appRoot,'renderer/emoticons/extensions-manifest.json'),
+    extensionSourceFile=path.join(appRoot,'renderer/emoticons/extensions-source.json'),
+    extensionManifest=JSON.parse(fs.readFileSync(extensionManifestFile,'utf8'));
+  assert.equal(catalogManifest.mappingCount+extensionManifest.mappingCount,catalog.length);
+  assert.equal(extensionManifest.combinedUniqueResourceCount,unique.length);
   assert.equal(catalogManifest.source.sha256,hash(metadataFile),'CATALOG_SOURCE_SNAPSHOT_HASH');
-  assert.equal(catalogManifest.entries.length,catalog.length);
-  for(const entry of catalogManifest.entries){
+  assert.equal(extensionManifest.source.sha256,hash(extensionSourceFile),'CATALOG_EXTENSION_SOURCE_SNAPSHOT_HASH');
+  assert.equal(catalogManifest.entries.length+extensionManifest.entries.length,catalog.length);
+  for(const entry of [...catalogManifest.entries,...extensionManifest.entries]){
     assert.equal(officialManifest[entry.name]?.src,entry.src,'CATALOG_PROVENANCE_MAPPING_MISMATCH');
     assert.equal(officialManifest[entry.name]?.sha256,entry.sha256,'CATALOG_PROVENANCE_HASH_MISMATCH');
   }
   result.catalogCoverage={mappingCount:catalog.length,uniqueResourceCount:unique.length,
     loadedMappings:new Set(rendered.map(row=>row.token.slice(1,-1))).size,failedMappings:0,
     metadataSha256:hash(metadataFile),manifestSha256:hash(catalogManifestFile),
+    extensionSourceSha256:hash(extensionSourceFile),extensionManifestSha256:hash(extensionManifestFile),
     mappingSha256:hash(path.join(appRoot,'renderer/emoticon-manifest.js')),
     renderedTokens:rendered.length,allMappingsLoaded:false,categoryCounts:counts('group'),formatCounts:counts('format'),
     officialAnimatedGifCount:catalog.filter(item=>item.animated===true&&item.format==='gif').length,
     localProtocolResponses:responses,protocolFetchContext:'electron-main; renderer CSP unchanged',
     longestToken:longestCatalogToken,
     longestTokenFits:result.catalogFallbackWidths.every(row=>row.fits)};
-  assert.equal(catalog.length,308,'OFFICIAL_CATALOG_MAPPING_COUNT');
-  assert.equal(unique.length,307,'OFFICIAL_CATALOG_RESOURCE_COUNT');
+  assert.equal(catalog.length,extensionManifest.combinedMappingCount,'VERIFIED_CATALOG_MAPPING_COUNT');
+  assert.equal(unique.length,extensionManifest.combinedUniqueResourceCount,'VERIFIED_CATALOG_RESOURCE_COUNT');
   assert.ok(Object.keys(result.catalogCoverage.categoryCounts).length>1,'OFFICIAL_CATALOG_CATEGORY_COVERAGE');
   assert.equal(result.catalogCoverage.loadedMappings,catalog.length);
   assert.equal(result.catalogCoverage.officialAnimatedGifCount,0,'OFFICIAL_GIF_COVERAGE_CHANGED_REQUIRES_REVIEW');
@@ -417,13 +427,32 @@ async function verifyCompleteCatalog(){
     assert.ok(partial.end>=0);
     await copyText(30,raw.mixed.split('\n')[0],{startNode:0,startOffset:0,endNode:partial.end,endOffset:partial.offset});
     await copyText(31,raw.link);
+    result.requestedLegacyCodes=[];
+    for(const entry of requestedLegacyCases){
+      const descriptor=officialManifest[entry.name],host=card(entry.messageIndex);
+      assert.ok(descriptor,'REQUESTED_LEGACY_PATH_MISSING '+entry.name);
+      await until(()=>host.locator('img.emoticon-image').evaluateAll(images=>images.length===4&&images.every(img=>img.complete&&img.naturalWidth>0)),
+        'REQUESTED_LEGACY_PATH_NOT_RENDERED '+entry.name);
+      assert.deepEqual(await host.locator('img.emoticon-image').evaluateAll(images=>images.map(img=>img.src)),Array(4).fill(descriptor.src));
+      const expectedTokens=['['+entry.name+']','【'+entry.name+'】','['+entry.name+']','['+entry.name+']'];
+      assert.deepEqual(await host.locator('.inline-emoticon').evaluateAll(elements=>elements.map(el=>el.dataset.originalToken)),expectedTokens);
+      const legacyLink=host.locator('a.message-link');assert.equal(await legacyLink.count(),1);
+      assert.equal(await legacyLink.textContent(),entry.url);assert.equal(await legacyLink.locator('img').count(),0);
+      assert.equal(await legacyLink.getAttribute('rel'),'noopener noreferrer');
+      await copyText(entry.messageIndex,entry.text);
+      result.requestedLegacyCodes.push({code:'['+entry.name+']',messageIndex:entry.messageIndex,inlineInstances:4,
+        originalTokens:expectedTokens,fullwidthAndRepeated:true,urlUntouched:true,url:entry.url,
+        nativeCopyExact:true,assetSha256:descriptor.sha256});
+    }
+    assert.equal(result.requestedLegacyCodes.length,requestedLegacyCases.length,'ALL_NEW_AND_PREVIOUS_LEGACY_CODES_REQUIRED');
     sameRead(await snapshot(),initial);sameAnchor(await snapshot(),initial);
     check('Actual Ctrl+C preserves exact original tokens, both bracket forms, links, newlines and partial selected text');
 
     stage='store-search-bookmark';
     const query=await api('messages.query',{groupId:group('A').id,keyword:'【笑cry】',limit:1000,offset:0});
     assert.ok(query.messages.some(m=>m.id===group('A').ids[30]&&m.text===raw.mixed),'RAW_TOKEN_QUERY_CHANGED');
-    await card(30).locator('.message-check').check();await card(31).locator('.message-check').check();
+    await card(30).locator('.avatar').hover();await card(30).locator('.message-check').check();
+    await card(31).locator('.avatar').hover();await card(31).locator('.message-check').check();
     await page.locator('#bookmark-note').fill('合成收藏：保留[二哈]原文');await page.locator('#bookmark-tags').fill('表情验收, 原文');
     await page.locator('#save-bookmark').click();await pause(400);
     const saved=await api('bookmark.list',{query:'【笑cry】'});

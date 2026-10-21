@@ -11,7 +11,7 @@
 <body>
   <header class="chrome"><div class="heading"><strong id="title">附件预览</strong><span id="filename"></span></div><nav aria-label="窗口控制"><button id="minimize" aria-label="最小化">—</button><button id="maximize" aria-label="最大化或还原">□</button><button id="close" aria-label="关闭">×</button></nav></header>
   <main id="viewport" tabindex="0">
-    <div id="notice" role="status" aria-live="polite"><p id="status">正在读取附件…</p><button id="retry" hidden>重新加载</button></div>
+    <div id="notice" role="status" aria-live="polite"><p id="status">正在读取附件…</p><button id="retry" hidden>重新加载</button><button id="convert" hidden title="仅在本机转换兼容预览，另存为保留原文件">转换为兼容预览（本机）</button></div>
     <section id="pdf-stage" hidden aria-label="PDF 页面"><canvas id="page" aria-label="PDF 页面画布"></canvas></section>
     <video id="video" controls preload="metadata" playsinline hidden aria-label="视频播放器"></video>
   </main>

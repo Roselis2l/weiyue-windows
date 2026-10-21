@@ -43,4 +43,6 @@ Desktop.ini
 *.trace
 *.sqlite
 *.sqlite3
-/docs/screenshots/
+/docs/screenshots/*
+!/docs/screenshots/reading-1.1.21.png
+!/docs/screenshots/appearance-1.1.21.png

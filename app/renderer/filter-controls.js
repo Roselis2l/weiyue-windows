@@ -53,7 +53,7 @@
     return result;
   }
 
-  function createMemberPicker({ container, members = [], selectedIds = [], onChange, onInteraction } = {}) {
+  function createMemberPicker({ container, members = [], selectedIds = [], onChange, onInteraction, emptyLabel = '全部成员', selectionLabel = '筛选成员' } = {}) {
     if (!container || typeof container.appendChild !== 'function' || !container.ownerDocument)
       throw new Error('成员筛选需要有效的容器。');
     const doc = container.ownerDocument;
@@ -107,8 +107,8 @@
       }
     }
     function updateSelection() {
-      toggle.textContent = selected.size ? `已选 ${selected.size} 位成员` : '全部成员';
-      toggle.setAttribute('aria-label', selected.size ? `筛选成员，已选 ${selected.size} 位` : '筛选成员，全部成员');
+      toggle.textContent = selected.size ? `已选 ${selected.size} 位成员` : emptyLabel;
+      toggle.setAttribute('aria-label', selected.size ? `${selectionLabel}，已选 ${selected.size} 位` : `${selectionLabel}，${emptyLabel}`);
       clear.disabled = selected.size === 0;
       for (const [id, row] of rows) row.checkbox.checked = selected.has(id);
     }

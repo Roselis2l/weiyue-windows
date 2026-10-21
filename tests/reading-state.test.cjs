@@ -2,11 +2,17 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const {createAutoPager} = require('../app/renderer/auto-page.js');
 const { captureViewport, restoredScrollTop, chooseWindow, mediaReadyForRead, trailingSpaceHeight, createReadIntentGate, recentGroupId, unreadLabel } = require('../app/renderer/reading-state.js');
 
 function viewport(items, extra = {}) {
   return captureViewport({ items, viewportTop: 100, viewportHeight: 400,
     scrollTop: 200, scrollHeight: 1500, loadedAtEnd: true, ...extra });
+}
+// These focused input tests exercise read authorization, without a rendered
+// account/list that could be eligible for automatic pagination.
+function inactiveAutoPager() {
+  return createAutoPager({snapshot:()=>({enabled:false}),load:()=>{throw new Error('No pageable list in this focused read test');},apply:()=>{throw new Error('No page should be applied');}});
 }
 
 test('partly visible anchor preserves negative offset and exact large string IDs', () => {
@@ -240,9 +246,9 @@ test('trusted passive wheel still grants reading when the compositor has already
   const start=source.indexOf('function bindReadingInput('),end=source.indexOf('function handleReadingScroll()',start);
   const listeners={},scroll={scrollTop:170,addEventListener:(name,callback)=>listeners[name]=callback};
   const gate=createReadIntentGate(),model={scrollTop:100,restoring:true,restoreFrame:1};
-  const context=vm.createContext({model,readIntent:gate,canAdvanceRead:()=>true,hasFilters:()=>false,
+  const context=vm.createContext({model,readIntent:gate,autoPage:inactiveAutoPager(),canAdvanceRead:()=>true,hasFilters:()=>false,
     readingContext:()=> 'current',readingOwner:()=> 'current',scheduleRead:()=>{},clearTimeout:()=>{},
-    performance:{now:()=>10},cancelAnimationFrame:()=>{},invalidateReadingIntent:()=>gate.reset(),scroll});
+    performance:{now:()=>10},setTimeout:()=>1,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{},invalidateReadingIntent:()=>gate.reset(),window:{},scroll});
   vm.runInContext(source.slice(start,end)+';bindReadingInput(scroll);',context);
   listeners.wheel({deltaY:70,isTrusted:true});
   assert.deepEqual(gate.scroll('current',170,10,'M4'),{context:'current',kind:'scroll',readThroughId:'M4'});
@@ -262,7 +268,7 @@ test('held native scrollbar renews only accepted movement and release or cancell
   const scroll={scrollTop:100,offsetWidth:100,clientWidth:90,
     getBoundingClientRect:()=>({right:200}),addEventListener:(name,callback)=>listeners[name]=callback};
   const model={scrollTop:100,restoring:false,restoreFrame:1,intentVersion:0,pointerScrolling:false};
-  const context=vm.createContext({model,readIntent:gate,canAdvanceRead:()=>eligible,hasFilters:()=>filtered,
+  const context=vm.createContext({model,readIntent:gate,autoPage:inactiveAutoPager(),canAdvanceRead:()=>eligible,hasFilters:()=>filtered,
     isCurrentReadingRendered:()=>rendered,readingContext:()=>`current:${model.intentVersion}`,readingOwner:()=> 'current',
     scheduleReadingRefresh:()=>{},
     performance:{now:()=>now},cancelAnimationFrame:()=>{},clearTimeout:()=>{},

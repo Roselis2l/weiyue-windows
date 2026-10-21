@@ -89,12 +89,12 @@ if(!process.versions.electron){
     kind='video';await manager.open({source:source.replace('/1/','/2/'),title:'合成视频播放',kind:'video'});
     w=BrowserWindow.getAllWindows().find(x=>!x.isDestroyed());wc=w.webContents;
     await wait(()=>run('document.getElementById("video").readyState>=1'),'Video metadata did not load');
-    assert.equal(await run('document.getElementById("video").paused'),true);assert.equal(await run('document.getElementById("video").autoplay'),false);
+    await wait(()=>run('!document.getElementById("video").paused && document.getElementById("video").currentTime>0'),'Video did not start automatically');
     assert.equal(await run('document.getElementById("video").controls'),true);
-    record('video loads metadata with controls and never autoplays',{bytes:videoBytes.length});
-    await run('document.getElementById("video").play()');await sleep(250);
+    record('video automatically plays after opening with controls retained',{bytes:videoBytes.length});
+    await sleep(250);
     assert.ok(await run('document.getElementById("video").currentTime>0'));
-    await run('document.getElementById("video").pause()');record('video plays and pauses on explicit control');
+    await run('document.getElementById("video").pause()');assert.equal(await run('document.getElementById("video").paused'),true);record('video automatically plays and explicit pause works');
     saveTarget=path.join(output,'saved-synthetic.webm');await run('document.getElementById("save").click()');
     await wait(()=>fs.existsSync(saveTarget),'Video save failed');assert.equal(hash(fs.readFileSync(saveTarget)),hash(videoBytes));record('video original bytes saved unchanged');
     owner='synthetic|2';assert.equal(await run('window.attachmentViewer.call("load").then(()=>false,()=>true)'),true);

@@ -2,15 +2,19 @@
 const {app,BrowserWindow,ipcMain,session,dialog,safeStorage,shell,protocol,net,Menu,screen}=require('electron');
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {pathToFileURL}=require('node:url');
-const {Store,compareMessages}=require('./core/store.cjs');
+const {Store,compareMessages,visibleMessages}=require('./core/store.cjs');
 const {Vault,officialUrl,safeExternal,redact}=require('./core/security.cjs');
 const {WeiboClient}=require('./core/weibo.cjs');
+const {isImageQuoteText}=require('./core/message-references.cjs');
 const {prepareSummary,localSummary,aiSummary,validateEndpoint,prepareAiRequest,prepareAiSummary,inspectAiVision}=require('./core/summary.cjs');
 const {prepareSummaryContent}=require('./core/summary-content.cjs');
 const {AiPreviewStore,waitForAiOperation}=require('./core/ai-preview.cjs');
 const {SummaryDeletePreviewStore,fingerprint:summaryFingerprint}=require('./core/summary-delete-preview.cjs');
+const {createMessageCleanupController}=require('./core/message-cleanup-controller.cjs');
+const {createAttachmentDownload}=require('./core/attachment-download.cjs');
 const {createImageViewer}=require('./core/image-viewer.cjs');
 const {createHeifDecoder}=require('./core/heif-decoder.cjs');
+const {createVideoDecoder}=require('./core/video-decoder.cjs');
 const {normalizeHttpUrl}=require('./renderer/linkify.js');
 const {createEmoticonAssets}=require('./core/emoticon-assets.cjs');
 const emoticonAssets=createEmoticonAssets({root:path.join(__dirname,'renderer'),manifest:require('./renderer/emoticon-manifest.js')});
@@ -18,6 +22,8 @@ const {createAttachmentViewer,normalizeSource:normalizeAttachmentSource}=require
 const {resolveAttachment,fetchAttachment,mergeAttachments}=require('./core/attachments.cjs');
 const pdfAssets=new Set(require('./pdfjs/assets.json').files.map(item=>'/pdfjs/'+item.path));
 const {listAiProviders,prepareAiSettingsSave,prepareLegacyAiSettingsSave,assertAiKeyScope}=require('./core/ai-settings.cjs');
+const {normalizeAppearance}=require('./renderer/appearance.js');
+const {saveAppearanceSettings}=require('./core/appearance-settings.cjs');
 const {NotionClient,buildPreview,buildEditablePreview,resolveNotionSource}=require('./core/notion.cjs');
 const {syncAccount}=require('./core/sync-service.cjs');
 const {LoginFlow}=require('./core/login-flow.cjs');
@@ -38,7 +44,7 @@ protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,se
 const lock=app.requestSingleInstanceLock(); if(!lock) app.quit();
 let win,loginWindow,pendingLogin,store,vault,activeId,busy=false;
 let autoSync,revision=0,activeSync,accountEpoch=0,closeReady=false,closeTimer;
-let imageViewer,activeAi,heifDecoder,attachmentViewer;
+let imageViewer,activeAi,heifDecoder,videoDecoder,attachmentViewer,attachmentDownload,messageCleanup;
 const aiPreviews=new AiPreviewStore();
 const summaryDeletePreviews=new SummaryDeletePreviewStore();
 const automaticAccounts=new AccountAutoSync();
@@ -48,7 +54,7 @@ const sessions=new Map();
 const sessionRegistry=new AccountSessionRegistry({sessions,createSession:()=>{const s=session.fromPartition('weiyue-account-'+crypto.randomUUID());hardenSession(s);return s;},readCookies:id=>secrets(id).cookies||[],officialUrl});
 const avatars=new AvatarService({getContext:()=>({owner:activeId,epoch:accountEpoch,revision,closing:closing()}),getState:id=>store.get(id),restoreSession:accountSession,defaultSession:()=>session.defaultSession,request:imageRequest});
 function preferences(){try{return JSON.parse(fs.readFileSync(path.join(dataRoot,'preferences.json'),'utf8'));}catch{return {};}}
-function clearMedia(){accountEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();heifDecoder?.dispose();heifDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
+function clearMedia(){accountEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
 function setActive(id){const changed=activeId!==id;activeId=id;fs.writeFileSync(path.join(dataRoot,'preferences.json'),JSON.stringify({activeId:id}));if(changed){clearMedia();revision++;configureAutomatic();}}
 function account(){return store.get(activeId);}
 function secrets(id=activeId){return vault.read(id);}
@@ -56,7 +62,7 @@ function publicReadStats(id=activeId,groupId){const all=store.getReadStats(id,gr
 function snapshot(){
   const s=account(); let sec={};let credentialError='';try{sec=secrets();}catch(e){credentialError=e.message;}
   const readStates=publicReadStats();
-  return {accounts:store.accounts(),account:s.account,groups:s.groups.map(g=>{const {avatarUrl,...rest}=g;return {...rest,...readStates[g.id],avatarSrc:avatars.source('group',g.id)};}),readPositions:s.readPositions,readStates,importantMembers:s.importantMembers,settings:s.settings,stats:{messages:s.messages.length,bookmarks:s.bookmarks.length,summaries:s.summaries.length},sessionReady:!!sec.cookies?.length,credentials:{ai:!!sec.aiKey,notion:!!sec.notionToken},credentialError,dataRoot,revision};
+  return {accounts:store.accounts(),account:s.account,groups:s.groups.map(g=>{const {avatarUrl,...rest}=g;return {...rest,...readStates[g.id],avatarSrc:avatars.source('group',g.id)};}),readPositions:s.readPositions,readStates,importantMembers:s.importantMembers,settings:{...s.settings,appearance:normalizeAppearance(s.settings.appearance)},stats:{messages:visibleMessages(s.messages).length,recycledMessages:s.messages.filter(m=>m.localDeletion).length,bookmarks:s.bookmarks.length,summaries:s.summaries.length},sessionReady:!!sec.cookies?.length,credentials:{ai:!!sec.aiKey,notion:!!sec.notionToken},credentialError,dataRoot,revision};
 }
 function syncStatus(){return {...(autoSync?.status()||{enabled:false,intervalMs:60000,running:false}),running:!!activeSync||!!autoSync?.status().running,accountId:activeId,revision};}
 function configureAutomatic(){
@@ -95,7 +101,7 @@ function decorateMessage(m,id=activeId){
   const images=(list,section)=>(list||[]).map((image,index)=>{const base='app://media/'+[mediaToken(id),m.groupId,m.id,section,index].map(encodeURIComponent).join('/');return {...image,src:base+'/preview',originalSrc:base+'/original'};});
   const {senderAvatarUrl,...rest}=m;
   const attachments=(m.attachments||[]).map((item,index)=>({...item,src:'app://attachment/'+[mediaToken(id),m.groupId,m.id,index].map(encodeURIComponent).join('/')}));
-  return {...rest,senderAvatarSrc:id===activeId?avatars.source('member',m.senderId):undefined,...(m.images?{images:images(m.images,'message')}:{}),...(m.sharedPost?{sharedPost:{...m.sharedPost,images:images(m.sharedPost.images,'post')}}:{}),...(attachments.length?{attachments}:{})};
+  return {...rest,senderAvatarSrc:id===activeId?avatars.source('member',m.senderId):undefined,...(m.images?{images:images(m.images,'message')}:{}),...(m.sharedPost?{sharedPost:{...m.sharedPost,images:images(m.sharedPost.images,'post')}}:{}),...(m.references?.length?{references:m.references.map((ref,index)=>({...ref,images:images(ref.images,'reference-'+index)}))}:{}),...(attachments.length?{attachments}:{})};
 }
 // net.request exposes manual redirects before following them; session.fetch does
 // not surface that event reliably on every Electron runtime. No Cookie header is copied.
@@ -111,8 +117,8 @@ function imageRequest(s,url,options){return new Promise((resolve,reject)=>{
 async function serveImage(request,u,returnImage=false){
   const imageWeight=value=>value.bytes.length+(value.original?.bytes.length||0);
   const id=activeId,epoch=accountEpoch;let parts;try{parts=u.pathname.slice(1).split('/').map(decodeURIComponent);}catch{return new Response('Invalid image',{status:400});}
-  if(request.method!=='GET'||parts.length!==6||parts[0]!==mediaToken(id)||!['message','post'].includes(parts[3])||!/^\d{1,3}$/.test(parts[4])||!['preview','original'].includes(parts[5]))return new Response('Not found',{status:404});
-  const state=store.get(id),m=state.messages.find(m=>m.groupId===parts[1]&&m.id===parts[2]);const descriptor=(parts[3]==='post'?m?.sharedPost?.images:m?.images)?.[Number(parts[4])];
+  if(request.method!=='GET'||parts.length!==6||parts[0]!==mediaToken(id)||!/^(?:message|post|reference-(?:[0-9]|1[0-9]))$/.test(parts[3])||!/^\d{1,3}$/.test(parts[4])||!['preview','original'].includes(parts[5]))return new Response('Not found',{status:404});
+  const state=store.get(id),m=state.messages.find(m=>!m.localDeletion&&m.groupId===parts[1]&&m.id===parts[2]);const descriptor=(parts[3].startsWith('reference-')?m?.references?.[Number(parts[3].slice(10))]?.images:parts[3]==='post'?m?.sharedPost?.images:m?.images)?.[Number(parts[4])];
   const url=safeImageUrl(parts[5]==='original'?(descriptor?.originalUrl||descriptor?.url):(descriptor?.thumbnailUrl||descriptor?.url));if(!url)return new Response('Image unavailable',{status:404});
   const key=mediaToken(id)+'|'+url;let cached=imageCache.get(key);
   if(!cached){
@@ -123,7 +129,7 @@ async function serveImage(request,u,returnImage=false){
         let acquired=false;try{
           if(activeImages>=4)await new Promise((resolve,reject)=>{if(imageWaiters.length>=100)return reject(new Error('Image queue full'));imageWaiters.push(resolve);});
           activeImages++;acquired=true;const check=()=>{if(controller.signal.aborted||epoch!==accountEpoch||closing())throw new Error('Canceled');};check();const s=state.account.kind==='weibo'?await accountSession(id,{check}):session.defaultSession;check();
-          let value=await fetchImage({url,fetch:(target,options)=>imageRequest(s,target,options),signal:controller.signal,allowHeif:true});check();
+          let value=await fetchImage({url,fetch:(target,options)=>imageRequest(s,target,options),signal:controller.signal,allowHeif:true,allowRasterMimeCorrection:true});check();
           if(value.mime==='image/heic'){
             const original=value;
             heifDecoder ||= createHeifDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});
@@ -149,7 +155,7 @@ function attachmentRecord(source){
   const safe=normalizeAttachmentSource(source);if(!safe)throw new Error('附件地址无效。');
   const parts=new URL(safe).pathname.slice(1).split('/').map(decodeURIComponent);
   if(parts[0]!==mediaToken(activeId))throw new Error('附件所属账号已变化。');
-  const state=account(),message=state.messages.find(m=>m.groupId===parts[1]&&m.id===parts[2]);
+  const state=account(),message=state.messages.find(m=>!m.localDeletion&&m.groupId===parts[1]&&m.id===parts[2]);
   const index=Number(parts[3]),attachment=message?.attachments?.[index];
   if(!attachment)throw new Error('本地附件记录不存在，请补全消息。');
   return {state,message,index,attachment};
@@ -185,13 +191,16 @@ async function enrichMessages(id,p){
     catch(error){if(error?.code!=='ABORTED')syncPolicy?.recordFailure(error);throw error;}
   };
   const job=(async()=>{
-    const state=store.get(id),targets=[...new Set(p.messageIds)].map(mid=>state.messages.find(m=>m.groupId===p.groupId&&m.id===mid)).filter(Boolean);if(!targets.length)return {count:0};
+    const needsContext=m=>m.contextVersion!==1&&(isImageQuoteText(m.text)||m.senderName==='粉丝群');
+    const complete=m=>m.referenceVersion===1&&m.mediaVersion===1&&(m.attachmentVersion===1||!/^(?:文件消息|分享视频)$/.test((m.text||'').trim()))&&!needsContext(m);
+    const state=store.get(id),targets=[...new Set(p.messageIds)].map(mid=>state.messages.find(m=>!m.localDeletion&&m.groupId===p.groupId&&m.id===mid)).filter(m=>m&&(!complete(m)||p.retry));if(!targets.length)return {count:0};
     check();syncPolicy?.assertAllowed();
     const s=await accountSession(id,{check}),c=client(s,{timeoutMs:10000,maxAttempts:1});const identity=await read(()=>c.identity());check();
     if('weibo-'+identity.id!==id){const error=Object.assign(new Error('登录账号不一致，请重新登录。'),{code:'ACCOUNT_MISMATCH'});syncPolicy?.recordFailure(error);throw error;}let count=0;
-    for(const old of targets){check();const attemptKey=key+'|'+old.id;if(old.mediaVersion===1&&(old.attachmentVersion===1||!/^(?:文件消息|分享视频)$/.test((old.text||'').trim()))&&!p.retry)continue;if(Date.now()-(enrichmentAttempts.get(attemptKey)||0)<60000)continue;
-      const detail=await read(()=>{enrichmentAttempts.set(attemptKey,Date.now());return c.messageDetail(old.groupId,old.id);});check();const patch={...old,mediaVersion:1,attachmentVersion:1};if(detail.attachments)patch.attachments=detail.attachments;if(detail.images)patch.images=detail.images;if(detail.sharedPost)patch.sharedPost=detail.sharedPost;if(detail.senderId===old.senderId&&detail.senderAvatarUrl)patch.senderAvatarUrl=detail.senderAvatarUrl;
-      store.mergeMessages(id,[],[patch],{history:true});revision++;count++;if(count<targets.length)await new Promise(r=>setTimeout(r,350));
+    for(const old of targets){check();const attemptKey=key+'|'+old.id;if(Date.now()-(enrichmentAttempts.get(attemptKey)||0)<60000)continue;
+      const detail=await read(()=>{enrichmentAttempts.set(attemptKey,Date.now());return c.messageDetail(old.groupId,old.id);});check();const patch={...old,mediaVersion:1,attachmentVersion:1,referenceVersion:1};if(detail.references)patch.references=detail.references;if(detail.attachments)patch.attachments=detail.attachments;if(detail.images)patch.images=detail.images;if(detail.sharedPost)patch.sharedPost=detail.sharedPost;if(detail.senderId===old.senderId&&detail.senderAvatarUrl)patch.senderAvatarUrl=detail.senderAvatarUrl;
+      if(detail.contextVersion===1){patch.contextVersion=1;delete patch.systemNotice;delete patch.quotePreview;if(detail.systemNotice)patch.systemNotice=detail.systemNotice;if(detail.quotePreview)patch.quotePreview=detail.quotePreview;}
+      store.mergeMessages(id,[],[patch],{history:true});revision++;count++;if(count<targets.length)await new Promise(r=>setTimeout(r,1000));
     }return {count};
   })();enrichmentJobs.set(key,job);try{return await job;}finally{enrichmentJobs.delete(key);}
 }
@@ -203,7 +212,7 @@ async function rememberCookies(id,s){
 }
 function client(s,options={}){return new WeiboClient({...options,fetch:(url,options)=>s.fetch(url,{...options,credentials:'include'})});}
 function group(s,id){const g=s.groups.find(x=>x.id===id);if(!g)throw new Error('群聊不存在');return g;}
-function summaryFor(p){const s=account();return prepareSummary({messages:s.messages.filter(m=>m.groupId===p.groupId),group:group(s,p.groupId),start:Number(p.start),end:Number(p.end)});}
+function summaryFor(p){const s=account();return prepareSummary({messages:visibleMessages(s.messages).filter(m=>m.groupId===p.groupId),group:group(s,p.groupId),start:Number(p.start),end:Number(p.end)});}
 const aiOwner=()=>activeId+'|'+accountEpoch;
 function checkAiOperation(operation){if(operation.controller.signal.aborted||operation.owner!==aiOwner()||closing())throw new Error('本次 AI 操作已取消。');}
 async function prepareAiPreview(p){
@@ -211,7 +220,7 @@ async function prepareAiPreview(p){
   const id=activeId,state=account(),settings={...state.settings},profile=prepareAiRequest(settings);
   assertAiKeyScope(settings,secrets(id));
   const pre=summaryFor(p);if(!pre.messages.length)throw new Error('选定时段没有可发送的消息。');
-  const rawMessages=structuredClone(state.messages.filter(m=>m.groupId===p.groupId&&m.time>=pre.range.start&&m.time<pre.range.end));
+  const rawMessages=structuredClone(visibleMessages(state.messages).filter(m=>m.groupId===p.groupId&&m.time>=pre.range.start&&m.time<pre.range.end));
   const operation={requestId:String(p.requestId||crypto.randomUUID()),owner:aiOwner(),controller:new AbortController(),stage:'prepare'};
   if(!/^[\w-]{1,100}$/.test(operation.requestId))throw new Error('请求标识无效。');
   busy=true;activeAi=operation;aiPreviews.clear();
@@ -273,19 +282,25 @@ function saveSummary(id,s){store.update(id,state=>{state.summaries.unshift(s);})
 async function saveText(defaultPath,text,extensions){const r=await dialog.showSaveDialog(win,{defaultPath,filters:[{name:'导出文件',extensions}]});if(r.canceled)return {canceled:true};fs.writeFileSync(r.filePath,text,'utf8');return {path:r.filePath};}
 async function handle(action,p){
   const id=activeId;
-  if(busy&&['account.switch','demo','login.open','login.complete','logout','settings.save','settings.ai.save','import','groups.select'].includes(action))throw new Error('操作正在进行，请完成后再切换账号或设置。');
+  if(busy&&['account.switch','demo','login.open','login.complete','logout','settings.save','settings.ai.save','settings.appearance.save','import','groups.select'].includes(action))throw new Error('操作正在进行，请完成后再切换账号或设置。');
   switch(action){
     case 'state':return snapshot();
     case 'ai.providers':return listAiProviders();
     case 'account.switch':if(!store.accounts().some(a=>a.id===p.id))throw new Error('账号不存在');setActive(p.id);return snapshot();
     case 'demo':{const a=store.seedDemo();setActive(a.id);return snapshot();}
     case 'groups.select':{if(!Array.isArray(p.ids))throw new Error('请选择群聊');store.update(id,s=>{s.groups.forEach(g=>g.selected=p.ids.includes(g.id));});revision++;return snapshot();}
-    case 'messages.query':{const result=store.queryMessages(id,p);return {...result,messages:result.messages.map(m=>decorateMessage(m,id))};}
+    case 'messages.query':{const result=store.queryMessages(id,p);return {...result,revision,messages:result.messages.map(m=>decorateMessage(m,id))};}
     case 'messages.enrich':return enrichMessages(id,p);
-    case 'image.open':return imageViewer.open({source:p.source,title:p.title,caption:p.caption});
-    case 'attachment.open':{const {attachment}=attachmentRecord(p.source);return attachmentViewer.open({source:p.source,title:attachment.name,kind:attachment.kind});}
-    case 'members.list':{const map=new Map();for(const m of account().messages)if(m.groupId===p.groupId)map.set(m.senderId,m.senderName);return [...map].map(([id,name])=>({id,name}));}
-    case 'messages.locate':{const s=account();const messages=s.messages.filter(m=>m.groupId===p.groupId).sort(compareMessages);const offset=messages.findIndex(m=>m.id===p.messageId);if(offset<0)throw new Error('原文未在本机找到，请补充同步或重新导入。');return {message:decorateMessage(messages[offset],id),offset};}
+    case 'image.open':attachmentViewer?.closeAll();return imageViewer.open({source:p.source,title:p.title,caption:p.caption});
+    case 'attachment.open':{const {attachment}=attachmentRecord(p.source);imageViewer?.closeAll();return attachmentViewer.open({source:p.source,title:attachment.name,kind:attachment.kind});}
+    case 'attachment.download':return attachmentDownload.download({source:p.source});
+    case 'messages.cleanup.info':return messageCleanup.info(p);
+    case 'messages.cleanup.preview':return messageCleanup.preview(p);
+    case 'messages.cleanup.apply':return messageCleanup.apply(p);
+    case 'messages.trash.list':return messageCleanup.list(p);
+    case 'messages.trash.restore':return messageCleanup.restore(p);
+    case 'members.list':{const map=new Map();for(const m of visibleMessages(account().messages))if(m.groupId===p.groupId)map.set(m.senderId,m.senderName);return [...map].map(([id,name])=>({id,name}));}
+    case 'messages.locate':{const s=account();const messages=visibleMessages(s.messages).filter(m=>m.groupId===p.groupId).sort(compareMessages);const offset=messages.findIndex(m=>m.id===p.messageId);if(offset<0)throw new Error('原文未在本机找到，请补充同步或重新导入。');return {message:decorateMessage(messages[offset],id),offset};}
     case 'read.set':{if(p.anchorId!==undefined){store.setReadPosition(id,p.groupId,p.anchorId,{offset:p.anchorOffset,followTail:p.atBottom,seenId:p.readThroughId});}else store.setReadPosition(id,p.groupId,p.messageId);return publicReadStats(id,p.groupId);}
     case 'important.set':store.setImportant(id,p.senderId,!!p.enabled);return true;
     case 'bookmark.add':return store.bookmark(id,p);
@@ -331,6 +346,9 @@ async function handle(action,p){
     case 'summary.delete.preview':return previewSummaryDeletion(p);
     case 'summary.delete':return deleteSavedSummary(p);
     case 'summary.export':{const s=account().summaries.find(s=>s.id===p.summaryId);if(!s)throw new Error('摘要不存在');return saveText('微阅摘要.md',s.body+'\n\n'+s.refs.map(r=>`[${r.label||r.id}] ${r.groupId}/${r.id} ${new Date(r.time).toISOString()}\n${r.text}`).join('\n\n'),['md']);}
+    case 'settings.appearance.save':{
+      saveAppearanceSettings({store,payload:p,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy,closing:closing()})});return snapshot();
+    }
     case 'settings.ai.save':{
       const next=prepareAiSettingsSave(account().settings,secrets(id),p);
       vault.write(id,next.credentials);store.update(id,s=>{s.settings=next.settings;});aiPreviews.clear();return snapshot();
@@ -398,6 +416,7 @@ async function handle(action,p){
 }
 async function start(){
   store=new Store(path.join(dataRoot,'accounts'));vault=new Vault(path.join(dataRoot,'credentials'),safeStorage);
+  messageCleanup=createMessageCleanupController({store,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||enrichmentJobs.size>0,closing:closing()}),onChange:()=>{revision++;aiPreviews.clear();}});
   const all=store.accounts();if(!all.length)store.seedDemo();const saved=preferences().activeId;setActive(store.accounts().some(a=>a.id===saved)?saved:store.accounts()[0].id);
    protocol.handle('app',request=>{
     const u=new URL(request.url);
@@ -406,7 +425,7 @@ async function start(){
     if(request.method!=='GET'||u.host!=='local')return new Response('Not found',{status:404});
     if(u.pathname.startsWith('/emoticons/'))return emoticonAssets.serve(request,u);
     if(pdfAssets.has(u.pathname))return net.fetch(pathToFileURL(path.join(__dirname,'pdfjs',u.pathname.slice('/pdfjs/'.length))).href);
-    if(!['/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
+    if(!['/auto-page.js','/appearance.js','/appearance-settings.js','/drag-scroll.js','/message-references.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
     return net.fetch(pathToFileURL(path.join(__dirname,'renderer',u.pathname.slice(1))).href);
   });
   hardenSession(session.defaultSession);Menu.setApplicationMenu(null);
@@ -414,7 +433,8 @@ async function start(){
   imageViewer=createImageViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,
     getWorkArea:()=>screen.getDisplayMatching(win.getBounds()).workAreaSize,
     readImage:async source=>{const image=await serveImage({method:'GET'},new URL(source),true);if(image instanceof Response)throw new Error('原图加载失败，请重试。');return image;}});
-  attachmentViewer=createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment});
+  attachmentViewer=createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment,decodeVideo:(value,options)=>{videoDecoder ||= createVideoDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return videoDecoder.decode(value,options);}});
+  attachmentDownload=createAttachmentDownload({dialog,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));win.webContents.on('will-navigate',e=>e.preventDefault());win.webContents.on('will-attach-webview',e=>e.preventDefault());
   win.on('close',event=>{if(closeReady)return;event.preventDefault();if(closeTimer)return;autoSync?.stop();activeSync?.controller.abort();clearMedia();closeTimer=setTimeout(()=>{closeTimer=null;closeReady=true;win.close();},2000);win.webContents.send('weiyue:before-close');});
   ipcMain.handle('weiyue:call',async(e,action,payload)=>{

@@ -28,6 +28,7 @@ function fixture(t,options={}){
   }
   const oldPolicy=policy(),newPolicy=policy(),calls=[],restores=[];
   const context={activeId:'weibo-1',accountEpoch:1,busy:false,revision:0,store,autoSync:oldPolicy.controller,
+    isImageQuoteText:require('../app/core/message-references.cjs').isImageQuoteText,
     enrichmentJobs:new Map(),enrichmentAttempts:new Map(),closing:()=>false,
     account:()=>store.get(context.activeId),
     accountSession:async(id,{check})=>{restores.push(id);check();if(options.restore)await options.restore(context);return {};},
@@ -111,4 +112,21 @@ test('storage errors and ABORTED transport cancellation do not become account se
   await assert.rejects(f.run(),/synthetic disk failure/);assert.equal(f.oldPolicy.records.length,0);
   const cancelled=fixture(t,{identity:async()=>{throw Object.assign(new Error('synthetic cancellation'),{code:'ABORTED'});}});
   await assert.rejects(cancelled.run(),{code:'ABORTED'});assert.equal(cancelled.oldPolicy.records.length,0);
+});
+
+test('old completed media still verifies context once; same-name ordinary sender is never classified by label',async t=>{
+  const quotePreview={kind:'image',state:'unavailable',reasonCode:'WEB_REFERENCE_TARGET_UNAVAILABLE'};
+  const f=fixture(t,{detail:async id=>({id,senderId:'7',contextVersion:1,...(id==='20'?{quotePreview}:{})})});
+  f.store.update('weibo-1',s=>{for(const m of s.messages){m.referenceVersion=1;m.mediaVersion=1;m.attachmentVersion=1;}
+    s.messages[0].text='「图片」\n- - - - - - - - - - - - - - -\nSynthetic reply';s.messages[1].senderName='粉丝群';});
+  const before=f.store.getReadStats('weibo-1','2');
+  const request={groupId:'2',messageIds:['20','21','22']};
+  assert.equal((await f.context.enrichMessages('weibo-1',request)).count,2);
+  assert.deepEqual(f.calls,['identity','detail:20','detail:21']);
+  const messages=f.store.get('weibo-1').messages;assert.deepEqual(messages[0].quotePreview,quotePreview);
+  assert.equal(messages[1].contextVersion,1);assert.equal(messages[1].systemNotice,undefined);assert.equal(messages[2].contextVersion,undefined);
+  assert.deepEqual(f.store.getReadStats('weibo-1','2'),before);
+  f.context.enrichmentAttempts.clear();
+  assert.equal((await f.context.enrichMessages('weibo-1',request)).count,0);
+  assert.deepEqual(f.calls,['identity','detail:20','detail:21']);
 });

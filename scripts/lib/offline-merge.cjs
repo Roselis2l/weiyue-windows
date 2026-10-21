@@ -9,6 +9,13 @@ const messageKey=m=>JSON.stringify([m.groupId,m.id]);
 const own=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);
 const set=(o,k,v)=>Object.defineProperty(o,k,{value:v,enumerable:true,writable:true,configurable:true});
 function mergeAccount(primary,others){
+ // This historical migration tool predates recyclable messages. It must not
+ // normalize away local tombstones or guess how to merge recovery batches.
+ for(const candidate of [primary,...others.map(item=>item.state)]){
+  assert(candidate&&!(candidate.schemaVersion>=2)&&!(Array.isArray(candidate.messageTrash)&&candidate.messageTrash.length)&&
+   !(Array.isArray(candidate.messages)&&candidate.messages.some(message=>message&&Object.prototype.hasOwnProperty.call(message,'localDeletion'))),
+   'This historical offline merge tool does not support recyclable-message data; preserve the account and use a compatible migration tool.');
+ }
  const state=clone(primary),conflicts=[],changes={addedMessages:0,addedBookmarks:0,addedSummaries:0,addedExports:0,addedUnread:0,groups:[]};
  const groupMap=new Map(state.groups.map(g=>[g.id,g])),messages=new Map(state.messages.map(m=>[messageKey(m),m]));
  const originalKeys=new Set(messages.keys()),newMessages=[];

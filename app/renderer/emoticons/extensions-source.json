@@ -1,0 +1,814 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-21T09:46:04.798Z",
+  "chatPicker": {
+    "url": "https://api.weibo.com/chat/",
+    "category": "默认",
+    "entries": [
+      {
+        "name": "[不愧是你]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/2b/2025_ItsYou_mobile.png"
+      },
+      {
+        "name": "[流鼻血]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/89/2025_liubixie_mobile.png"
+      },
+      {
+        "name": "[泪奔]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/d6/2025_ShedTears_mobile.png"
+      },
+      {
+        "name": "[期待]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/37/2025_qidai_mobile.png"
+      },
+      {
+        "name": "[无聊]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/5c/2025_bored_mobile.png"
+      },
+      {
+        "name": "[皱眉]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/5f/2025_frown_mobile.png"
+      },
+      {
+        "name": "[震惊]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/54/2025_shock_mobile.png"
+      },
+      {
+        "name": "[点赞]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/07/2025_like_mobile.png"
+      },
+      {
+        "name": "[呵呵]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/d4/2025_hehe_mobile.png"
+      },
+      {
+        "name": "[拜托]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/52/2025_please_mobile.png"
+      },
+      {
+        "name": "[yeah]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/56/2025_yeah_mobile.png"
+      },
+      {
+        "name": "[惊恐]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e8/2025_jingkong_mobile.png"
+      },
+      {
+        "name": "[卡皮巴拉]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e3/2025_kapibala_mobile.png"
+      },
+      {
+        "name": "[手指比心]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/2f/2025_HandHeart_mobile.png"
+      },
+      {
+        "name": "[奶牛猫]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/ce/2025_CowCat_mobile.png"
+      },
+      {
+        "name": "[柯基]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/05/2025_Corgi_mobile.png"
+      },
+      {
+        "name": "[达咩]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/2d/2025_damie_mobile.png"
+      },
+      {
+        "name": "[药]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/69/2025_medicine_mobile.png"
+      },
+      {
+        "name": "[祈祷]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/49/2025_pray_mobile.png"
+      },
+      {
+        "name": "[加油]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/6b/201810_jiayou_mobile.png"
+      },
+      {
+        "name": "[鸡腿]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/cf/2025_chicken_mobile.png"
+      },
+      {
+        "name": "[便便]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/08/2025_feces_mobile.png"
+      },
+      {
+        "name": "[锦鲤附体]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/d3/2022_cometrue_mobile.png"
+      },
+      {
+        "name": "[爱慕]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/2a/2023_adore_mobile.png"
+      },
+      {
+        "name": "[么么哒]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/a5/2025_memeda_mobile.png"
+      },
+      {
+        "name": "[流汗]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/56/2025_liuhan_mobile.png"
+      },
+      {
+        "name": "[捂嘴哭]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/b4/2025_wuzuiku_mobile.png"
+      },
+      {
+        "name": "[蛋糕]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/01/201810_dangao_mobile.png"
+      },
+      {
+        "name": "[快乐打卡]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/68/2025_Happytravels_mobile.png"
+      },
+      {
+        "name": "[假期开启]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/af/2025_Holiday_mobile.png"
+      },
+      {
+        "name": "[团圆时刻]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/fc/2025_Mid-AutumnFestival_mobile.png"
+      },
+      {
+        "name": "[好事甜圆]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/06/2025_Mooncake_mobile.png"
+      },
+      {
+        "name": "[大学生能飞]",
+        "src": "https://face.t.sinajs.cn/emoji/pic/20260828150135/35_Students.png"
+      },
+      {
+        "name": "[迪迦奥特曼]",
+        "src": "https://face.t.sinajs.cn/emoji/pic/20260920180818/18_Ultraman_Tiga.png"
+      },
+      {
+        "name": "[嫁金钗]",
+        "src": "https://face.t.sinajs.cn/emoji/pic/20261016180004/04_Where_the_Mask_Ends.png"
+      },
+      {
+        "name": "[来赴来福]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/b2/2025_getFSHgethappiness_mobile.png"
+      },
+      {
+        "name": "[园丁]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/67/2025_gardener_mobile.png"
+      },
+      {
+        "name": "[写作业]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/f5/2025_Domyhomework_mobile.png"
+      },
+      {
+        "name": "[摸鱼撸猫]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/dc/2025_MOONLITREUNION_mobile.png"
+      },
+      {
+        "name": "[顾子尧]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e3/2025_GuZiyao_mobile.png"
+      },
+      {
+        "name": "[林致]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/74/2025_LinZhi_mobile.png"
+      },
+      {
+        "name": "[乔殊]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/3e/2025_QiaoShu_mobile.png"
+      },
+      {
+        "name": "[夏予扬]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/5a/2025_XiaYuyang_mobile.png"
+      },
+      {
+        "name": "[柏闻]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/07/2025_BaiWen_mobile.png"
+      },
+      {
+        "name": "[江恪]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/d0/2025_JiangKe_mobile.png"
+      },
+      {
+        "name": "[季少一]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/7b/2025_JiShaoyi_mobile.png"
+      },
+      {
+        "name": "[许向安]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/25/2025_XuXiangan_mobile.png"
+      },
+      {
+        "name": "[许向宁]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/7c/2025_XuXiangning_mobile.png"
+      },
+      {
+        "name": "[桃里桃气]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/20/2023_TaoLiTaoQi_mobile.png"
+      },
+      {
+        "name": "[黄鸡大笑]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/95/2025_JX3CHICKENLAUGH_mobile.png"
+      },
+      {
+        "name": "[哪吒嘟嘴]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/54/2025_innocent_mobile.png"
+      },
+      {
+        "name": "[哪吒使坏]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/1b/2025_crafty_mobile.png"
+      },
+      {
+        "name": "[毕业快乐]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/6d/2024_Happygraduation_mobile.png"
+      },
+      {
+        "name": "[有票了]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/20/2023_Igotit_mobile.png"
+      },
+      {
+        "name": "[开摆]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/8c/2024_takeeasy_mobile.png"
+      },
+      {
+        "name": "[淡淡的]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/70/2024_takearest_mobile.png"
+      },
+      {
+        "name": "[微笑]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/f4/201810_hehe_mobile.png"
+      },
+      {
+        "name": "[可爱]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/78/201810_keai_mobile.png"
+      },
+      {
+        "name": "[太开心]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/a6/201810_taikaixin_mobile.png"
+      },
+      {
+        "name": "[鼓掌]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/32/201810_guzhang_mobile.png"
+      },
+      {
+        "name": "[嘻嘻]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/8e/201810_xixi_mobile.png"
+      },
+      {
+        "name": "[哈哈]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/c5/201810_haha_mobile.png"
+      },
+      {
+        "name": "[笑cry]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/f1/201810_xiaoku_mobile.png"
+      },
+      {
+        "name": "[挤眼]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/dd/201810_jiyan_mobile.png"
+      },
+      {
+        "name": "[馋嘴]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e9/201810_chanzui_mobile.png"
+      },
+      {
+        "name": "[黑线]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/2e/201810_heixian_mobile.png"
+      },
+      {
+        "name": "[汗]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/4b/201810_han_mobile.png"
+      },
+      {
+        "name": "[挖鼻]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/4d/201810_wabishi_mobile.png"
+      },
+      {
+        "name": "[哼]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/5b/201810_heng_mobile.png"
+      },
+      {
+        "name": "[怒]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/90/201810_nu_mobile.png"
+      },
+      {
+        "name": "[委屈]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/8b/201810_weiqu_mobile.png"
+      },
+      {
+        "name": "[可怜]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/44/201810_kelian_mobile.png"
+      },
+      {
+        "name": "[失望]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/3d/201810_shiwang_mobile.png"
+      },
+      {
+        "name": "[悲伤]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/49/201810_beishang_mobile.png"
+      },
+      {
+        "name": "[泪]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/87/201810_lei_mobile.png"
+      },
+      {
+        "name": "[允悲]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/65/201810_ybnew_mobile.png"
+      },
+      {
+        "name": "[苦涩]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/5f/2021_bitter_mobile.png"
+      },
+      {
+        "name": "[害羞]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/c1/201810_haixiu_mobile.png"
+      },
+      {
+        "name": "[污]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e6/201810_wu_mobile.png"
+      },
+      {
+        "name": "[爱你]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/db/201810_aini_mobile.png"
+      },
+      {
+        "name": "[亲亲]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/8f/201810_qinqin_mobile.png"
+      },
+      {
+        "name": "[抱一抱]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/84/2020_hug_mobile.png"
+      },
+      {
+        "name": "[色]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/23/201810_huaxin_mobile.png"
+      },
+      {
+        "name": "[舔屏]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/da/201810_tian_mobile.png"
+      },
+      {
+        "name": "[憧憬]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/77/201810_xingxingyan_mobile.png"
+      },
+      {
+        "name": "[哇]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/79/2022_wow_mobile.png"
+      },
+      {
+        "name": "[坏笑]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/63/201810_huaixiao_mobile.png"
+      },
+      {
+        "name": "[阴险]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/a5/201810_yinxian_mobile.png"
+      },
+      {
+        "name": "[笑而不语]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/24/201810_heiheihei_mobile.png"
+      },
+      {
+        "name": "[偷笑]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/df/201810_touxiao_mobile.png"
+      },
+      {
+        "name": "[666]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/b9/2022_666_mobile.png"
+      },
+      {
+        "name": "[酷]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/af/201810_ku_mobile.png"
+      },
+      {
+        "name": "[并不简单]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/ce/201810_bingbujiandan_mobile.png"
+      },
+      {
+        "name": "[思考]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/9e/201810_sikao_mobile.png"
+      },
+      {
+        "name": "[疑问]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/09/201810_yiwen_mobile.png"
+      },
+      {
+        "name": "[费解]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/dd/201810_feijie_mobile.png"
+      },
+      {
+        "name": "[晕]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/94/201810_yun_mobile.png"
+      },
+      {
+        "name": "[衰]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/0a/201810_shuai_mobile.png"
+      },
+      {
+        "name": "[骷髅]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/94/201810_kulou_mobile.png"
+      },
+      {
+        "name": "[嘘]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/35/201810_xu_mobile.png"
+      },
+      {
+        "name": "[闭嘴]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/05/201810_bizui_mobile.png"
+      },
+      {
+        "name": "[傻眼]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/9a/201810_shayan_mobile.png"
+      },
+      {
+        "name": "[感冒]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/5d/2022_cold_mobile.png"
+      },
+      {
+        "name": "[吃惊]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/00/201810_chijing_mobile.png"
+      },
+      {
+        "name": "[裂开]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/6d/202011_liekai_mobile.png"
+      },
+      {
+        "name": "[生病]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/7c/201810_shengbing_mobile.png"
+      },
+      {
+        "name": "[吐]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/4f/201810_tu_mobile.png"
+      },
+      {
+        "name": "[拜拜]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/8d/201810_baibai_mobile.png"
+      },
+      {
+        "name": "[鄙视]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/71/201810_bishi_mobile.png"
+      },
+      {
+        "name": "[白眼]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/a0/201810_landelini_mobile.png"
+      },
+      {
+        "name": "[左哼哼]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/a9/201810_zuohengheng_mobile.png"
+      },
+      {
+        "name": "[右哼哼]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/39/201810_youhengheng_mobile.png"
+      },
+      {
+        "name": "[抓狂]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/02/201810_zhuakuang_mobile.png"
+      },
+      {
+        "name": "[怒骂]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/d4/201810_numa_mobile.png"
+      },
+      {
+        "name": "[打脸]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/c6/201810_dalian_mobile.png"
+      },
+      {
+        "name": "[努力]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/0d/2022_Keepgoing_mobile.png"
+      },
+      {
+        "name": "[顶]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/80/201810_ding_mobile.png"
+      },
+      {
+        "name": "[钱]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/91/201810_qian_mobile.png"
+      },
+      {
+        "name": "[哈欠]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/1c/201810_dahaqi_mobile.png"
+      },
+      {
+        "name": "[困]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/cb/201810_kun_mobile.png"
+      },
+      {
+        "name": "[求饶]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/ec/moren_qiurao_mobile.png"
+      },
+      {
+        "name": "[睡]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/aa/201810_shuijiao_mobile.png"
+      },
+      {
+        "name": "[awsl]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/8b/moren_awsl_mobile.png"
+      },
+      {
+        "name": "[吃瓜]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/0b/201810_chigua_mobile.png"
+      },
+      {
+        "name": "[打call]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/2a/moren_dacall_mobile.png"
+      },
+      {
+        "name": "[彩虹屁]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/c0/2022_praise_mobile.png"
+      },
+      {
+        "name": "[送花花]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/0b/2022_Flowers_mobile.png"
+      },
+      {
+        "name": "[赢牛奶]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/83/2021_yingniunai_mobile.png"
+      },
+      {
+        "name": "[开学季]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/0a/2021_kaixueji_mobile.png"
+      },
+      {
+        "name": "[上课了]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/d1/2022_Forclass_mobile.png"
+      },
+      {
+        "name": "[比耶]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/49/2023_yeahyeah_mobile.png"
+      },
+      {
+        "name": "[打工人]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/0b/2023_earner_mobile.png"
+      },
+      {
+        "name": "[干饭人]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/3c/2022_Foodie_mobile.png"
+      },
+      {
+        "name": "[钢镚儿]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/58/2022_coin_mobile.png"
+      },
+      {
+        "name": "[老师夸夸]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/7a/2023_Theteacherpraises_mobile.png"
+      },
+      {
+        "name": "[看书]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/7e/2023_read_mobile.png"
+      },
+      {
+        "name": "[融化]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/03/2022_melt_mobile.png"
+      },
+      {
+        "name": "[狗粮]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/9d/2023_PDA_mobile.png"
+      },
+      {
+        "name": "[相爱]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/1c/2023_fallinlove_mobile.png"
+      },
+      {
+        "name": "[你好老师]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/a2/2023_Helloteacher_mobile.png"
+      },
+      {
+        "name": "[老师爱你]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/86/2023_Teacherlovesyou_mobile.png"
+      },
+      {
+        "name": "[揣手]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/7f/2022_chuaishou_mobile.png"
+      },
+      {
+        "name": "[举手]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/3f/2022_raisehand_mobile.png"
+      },
+      {
+        "name": "[抱抱]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/8b/201810_baobao_mobile.png"
+      },
+      {
+        "name": "[摊手]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/07/201810_tanshou_mobile.png"
+      },
+      {
+        "name": "[跪了]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/2f/201810_guile_mobile.png"
+      },
+      {
+        "name": "[老师好]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/dd/2022_Teacher_mobile.png"
+      },
+      {
+        "name": "[收到]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/19/2022_get_mobile.png"
+      },
+      {
+        "name": "[上岸]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/fe/2022_Getin_mobile.png"
+      },
+      {
+        "name": "[你好]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/8e/2023_hello_mobile.png"
+      },
+      {
+        "name": "[我来了]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/4d/2023_herewego_mobile.png"
+      },
+      {
+        "name": "[我走了]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/16/2023_seeyou_mobile.png"
+      },
+      {
+        "name": "[春游家族]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/d5/2021_YoungFamily_mobile.png"
+      },
+      {
+        "name": "[客厅狂欢]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/86/2023_Bedazzling_mobile.png"
+      },
+      {
+        "name": "[许愿星]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/24/2022_WishingStar_mobile.png"
+      },
+      {
+        "name": "[航天员]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/0d/2021_yuhangyuan_mobile.png"
+      },
+      {
+        "name": "[奶瓶]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/97/2021_naiping_mobile.png"
+      },
+      {
+        "name": "[丘比特]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e7/2021_qiubite_mobile.png"
+      },
+      {
+        "name": "[单身狗]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/86/2021_alongdog_mobile.png"
+      },
+      {
+        "name": "[酸]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/86/hot_wosuanle_mobile.png"
+      },
+      {
+        "name": "[二哈]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/4a/2018_erha_mobile.png"
+      },
+      {
+        "name": "[喵喵]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/4b/201810_miao_mobile.png"
+      },
+      {
+        "name": "[doge]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e6/2018_doge_mobile.png"
+      },
+      {
+        "name": "[雪糕]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e6/2022_icecream_mobile.png"
+      },
+      {
+        "name": "[咖啡]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/de/2022_coffee_mobile.png"
+      },
+      {
+        "name": "[给你小心心]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/c8/qixi2018_xiaoxinxin_mobile.png"
+      },
+      {
+        "name": "[雪花]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/62/yunying2020_snowflakes_mobile.png"
+      },
+      {
+        "name": "[微风]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/0e/201810_weifeng_mobile.png"
+      },
+      {
+        "name": "[中国赞]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/88/moren_zhongguozan_mobile.png"
+      },
+      {
+        "name": "[鲜花]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/c8/201810_xianhua_mobile.png"
+      },
+      {
+        "name": "[杰瑞]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/36/2021_jerry_mobile.png"
+      },
+      {
+        "name": "[汤姆]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/55/2021_tom_mobile.png"
+      },
+      {
+        "name": "[海王]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/7b/2023_Aquaman_mobile.png"
+      },
+      {
+        "name": "[奥姆]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/3e/2023_Orm_mobile.png"
+      },
+      {
+        "name": "[畅游]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/5f/2023_Swim_mobile.png"
+      },
+      {
+        "name": "[吹风车]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/27/2023_Windmill_mobile.png"
+      },
+      {
+        "name": "[流浪地球2]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e7/2023_TheWanderingEarth%E2%85%A1_mobile.png"
+      },
+      {
+        "name": "[点亮平安灯]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/97/feiyan_dianliangpingan_mobile.png"
+      },
+      {
+        "name": "[绿丝带]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/23/201810_lvsidai_mobile.png"
+      },
+      {
+        "name": "[蜡烛]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/7f/201810_lazhu_mobile.png"
+      },
+      {
+        "name": "[白蜡烛]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/a9/2022_whitecandle_mobile.png"
+      },
+      {
+        "name": "[来抱抱]",
+        "src": "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/d9/2024_Comeandhug_mobile.png"
+      }
+    ]
+  },
+  "pathCodes": {
+    "basis": {
+      "sourceUrl": "https://h5.sinaimg.cn/m/pcweibochat/js/app.48f8ddda.js",
+      "sha256": "572ee8cdb4a0d4b9401ab4f5aca0c5bd1f043fe310063632694a47d76bb30aae",
+      "route": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage",
+      "excerpt": ".id,null)},convertEmoji:function(t){var e=/\\[(\\/[0-9a-z]+.png)\\]/gi,r=\"\";while(r=e.exec(t))t=t.replace(\"[\"+r[1]+\"]\",'<img style=\"max-width: 18px; max-height: 18px;\" src=\"https://img.t.sinajs.cn/t4/appstyle/expression/emimage'+r[1]+'\" />');return t},jump:funct"
+    },
+    "entries": [
+      {
+        "name": "/ee8192.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee8192.png"
+      },
+      {
+        "name": "/ee8cb0.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee8cb0.png"
+      },
+      {
+        "name": "/ee9092.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9092.png"
+      },
+      {
+        "name": "/ee808e.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee808e.png"
+      },
+      {
+        "name": "/ee819a.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee819a.png"
+      },
+      {
+        "name": "/ee858c.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee858c.png"
+      },
+      {
+        "name": "/ee88a6.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee88a6.png",
+        "verifiedAt": "2026-10-21T11:23:03.564Z",
+        "sha256": "663f97e1ce619f72d02f3d901c5b3d70a56da67db1f6114dbc7c7bfe99991573",
+        "bytes": 893,
+        "historicalEncoding": {
+          "source": "https://raw.githubusercontent.com/google/emoji4unicode/master/data/emoji4unicode.xml",
+          "utf8Hex": "ee88a6",
+          "pua": "E226",
+          "unicode": "1F250",
+          "meaning": "circled ideograph advantage"
+        }
+      },
+      {
+        "name": "/ee84a5.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee84a5.png",
+        "verifiedAt": "2026-10-21T12:30:22.022Z",
+        "sha256": "b280fb9d9deb94883731533aa4251e22b1bfcb5b1a857d63b8c938108d9c8114",
+        "bytes": 696,
+        "historicalEncoding": {
+          "source": "https://raw.githubusercontent.com/google/emoji4unicode/master/data/emoji4unicode.xml",
+          "utf8Hex": "ee84a5",
+          "pua": "E125",
+          "unicode": "1F3AB",
+          "meaning": "ticket"
+        }
+      },
+      {
+        "name": "/ee88ab.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee88ab.png",
+        "verifiedAt": "2026-10-21T13:32:59.058Z",
+        "sha256": "7b8f4e08f3f704b1470e4c2191f8cf1ecf4f395796e1c719730f8b3e16332533",
+        "bytes": 1023,
+        "historicalEncoding": {
+          "source": "https://raw.githubusercontent.com/google/emoji4unicode/master/data/emoji4unicode.xml",
+          "utf8Hex": "ee88ab",
+          "pua": "E22B",
+          "unicode": "1F233",
+          "meaning": "squared CJK ideograph 空; empty or vacant"
+        }
+      }
+    ]
+  }
+}

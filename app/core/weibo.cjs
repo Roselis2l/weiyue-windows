@@ -7,6 +7,7 @@ const ORIGIN = 'https://api.weibo.com';
 const {normalizeImage, safeImageUrl, safePostUrl} = require('./media.cjs');
 const {firstAvatarUrl} = require('./avatar.cjs');
 const {normalizeMessageAttachments}=require('./attachments.cjs');
+const {postPermalink,collectPostReferences,normalizeMessageContext}=require('./message-references.cjs');
 const PATHS = Object.freeze({
   identity: '/webim/query_primary_info.json',
   groups: '/webim/2/direct_messages/contacts.json',
@@ -140,12 +141,24 @@ function normalizeImages(message, {allowFids = true} = {}) {
     if (!image || seen.has(image.originalUrl || image.url)) return;
     seen.add(image.originalUrl || image.url); images.push(image);
   };
+  // The official web client calls the first pic_infos item pic_gifs when it
+  // builds a display record. Preserve its explicit original resource, never
+  // infer an animated URL from a thumbnail filename or FID.
+  if (object(message.pic_gifs)) add(message.pic_gifs);
   const infos = Array.isArray(message.pic_infos) ? message.pic_infos : object(message.pic_infos) ? Object.values(message.pic_infos) : [];
   infos.forEach(add);
   if (Array.isArray(message.pic_urls)) message.pic_urls.forEach(add);
   if (Array.isArray(message.pics)) message.pics.forEach(add);
   if (message.original_pic || message.bmiddle_pic || message.thumbnail_pic) add(message);
   if (message.pic) add(message.pic);
+  // Official card9 metadata carries an explicit GIF resource in
+  // url_objects[].object.object.{gif_name,url}. A collection with only pic_ids
+  // needs an official lookup; no CDN path is guessed from those IDs here.
+  if (Array.isArray(message.url_objects)) for (const entry of message.url_objects.slice(0, 50)) {
+    const outer = object(entry?.object);
+    const gif = object(outer?.object) || outer;
+    if (typeof gif?.gif_name === 'string' && gif.gif_name.trim()) add(gif.url);
+  }
   // Explicit originals take priority over constructing a second URL for the same
   // attachment. FIDs remain lexical; unsafe Number values are skipped.
   if (!images.length && allowFids && (message.media_type === 1 || message.media_type === '1')) {
@@ -208,7 +221,7 @@ function normalizeSharedPost(message) {
   const status = object(entry?.status) || object(message.status);
   const notification = isPublishedPostNotification(message.content ?? message.text);
   if (!status && !notification) return undefined;
-  const url = shareUrl(entry, status || {}) || (notification ? entries.map(item => shareUrl(item)).find(Boolean) || safePostUrl(message.url) || undefined : undefined);
+  const url = shareUrl(entry, status || {}) || postPermalink(status) || (notification ? entries.map(item => shareUrl(item)).find(Boolean) || safePostUrl(message.url) || undefined : undefined);
   if (!status && !url) return undefined;
   if (!status) return {text: '', images: [], state: 'unavailable', url,
     reason: '分享通知未附微博正文，请打开原微博查看'};
@@ -239,6 +252,13 @@ function normalizeSharedPost(message) {
       : incompleteReasons.length ? {reason: incompleteReasons.join('；')} : {})};
 }
 
+function normalizeMessageReferences(message) {
+  return collectPostReferences(message,(status,entry)=>normalizeSharedPost({
+    status,
+    ...(entry ? {url_objects:[{...entry,status}]} : {})
+  }));
+}
+
 function normalizeMessages(data, groupId) {
   groupId = identifier(groupId);
   if (!Array.isArray(data?.messages)) throw invalid('微博消息列表格式无法确认。');
@@ -257,12 +277,16 @@ function normalizeMessages(data, groupId) {
     if (typeof text !== 'string') throw invalid('消息正文格式无法确认。');
     const images = normalizeImages(message);
     const sharedPost = normalizeSharedPost(message);
+    const references = normalizeMessageReferences(message);
     const attachments = normalizeMessageAttachments(message);
+    const context = normalizeMessageContext(message);
     return {id, groupId, senderId: normalizedSenderId,
       senderName: typeof senderName === 'string' && senderName.trim() ? senderName : '发送者待确认',
-      text: text || (images.length ? '分享图片' : '[非文字或空消息；未返回可显示的媒体，请在微博官方查看。]'), time: messageTime(message), mediaVersion: 1,
+      text: text || (images.length ? '分享图片' : '[非文字或空消息；未返回可显示的媒体，请在微博官方查看。]'), time: messageTime(message), mediaVersion: 1, referenceVersion: 1,
       ...(images.length ? {images} : {}), ...(sharedPost ? {sharedPost} : {}),
+      ...(references.length ? {references} : {}),
       ...(attachments.length ? {attachments,attachmentVersion:1} : {}),
+      ...context,
       ...(senderAvatarUrl ? {senderAvatarUrl} : {})};
   });
 }
@@ -476,4 +500,4 @@ class WeiboClient {
 }
 
 module.exports = {WeiboClient, WeiboError, parsePrecisionJson, identifier, previousId, normalizeIdentity, normalizeGroups,
-  normalizeMessages, normalizeImages, normalizeSharedPost, postText, postIncomplete, isPublishedPostNotification, messageTime, retryDelay, ORIGIN, PATHS};
+  normalizeMessages, normalizeImages, normalizeSharedPost, normalizeMessageReferences, postText, postIncomplete, isPublishedPostNotification, messageTime, retryDelay, ORIGIN, PATHS};

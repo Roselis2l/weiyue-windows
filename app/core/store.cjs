@@ -5,9 +5,14 @@ const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { safeAvatarUrl } = require('./avatar.cjs');
 const {normalizeAttachment,mergeAttachments,attachmentSearchText}=require('./attachments.cjs');
+const {normalizeReferences,mergeReferences,normalizeQuotePreview}=require('./message-references.cjs');
+const {normalizeSystemNotice}=require('./system-notices.cjs');
+const messageCleanup = require('./message-cleanup.cjs');
 
 const SCHEMA_VERSION = 1;
+const RECYCLE_SCHEMA_VERSION = 2;
 const MAX_MESSAGES = 500000;
+const MAX_STATE_BYTES = 512 * 1024 * 1024;
 const MAX_TIME = 8640000000000000;
 const FILE_PATTERN = /^account-[a-f0-9]{64}\.json$/;
 const SECRET_KEY = /^(?:api[_-]?key|key|token|access[_-]?token|refresh[_-]?token|notion[_-]?token|ai[_-]?key|cookie|cookies|password|secret|authorization)$/i;
@@ -80,12 +85,23 @@ function normalizeMessage(message) {
     text: stringValue(message.text, '消息正文', 1000000, ''),
     time: timestamp(message.time, '消息时间'),
   };
+  if (message.systemNotice !== undefined) normalized.systemNotice = normalizeSystemNotice(message.systemNotice);
+  if (message.contextVersion !== undefined) {
+    if (message.contextVersion !== 1) fail('消息上下文版本不受支持');
+    normalized.contextVersion = 1;
+  }
+  if (message.quotePreview !== undefined) normalized.quotePreview = normalizeQuotePreview(message.quotePreview);
   if (message.mediaVersion !== undefined) {
     if (message.mediaVersion !== 1) fail('媒体数据版本不受支持');
     normalized.mediaVersion = 1;
   }
   if (message.images !== undefined) normalized.images = normalizeImages(message.images);
   if (message.sharedPost !== undefined) normalized.sharedPost = normalizeSharedPost(message.sharedPost);
+  if (message.referenceVersion !== undefined) {
+    if (message.referenceVersion !== 1) fail('引用数据版本不受支持');
+    normalized.referenceVersion = 1;
+  }
+  if (message.references !== undefined) normalized.references = normalizeReferences(message.references);
   if (message.attachmentVersion !== undefined) {
     if (message.attachmentVersion !== 1) fail('附件数据版本不受支持');
     normalized.attachmentVersion = 1;
@@ -154,6 +170,12 @@ function mergeSharedPost(previous, incoming) {
 function mergeRichMessage(previous, incoming) {
   if (!previous) return incoming;
   const result = { ...previous, ...incoming };
+  // An official context refresh also clears stale classification. Legacy imports
+  // without that marker cannot erase already verified context.
+  if (incoming.contextVersion === 1) {
+    if (incoming.systemNotice === undefined) delete result.systemNotice;
+    if (incoming.quotePreview === undefined) delete result.quotePreview;
+  }
   // A refreshed identity may replace an initially unknown/corrected sender.
   // An avatar from the old stable sender ID must not survive that correction.
   if (previous.senderId !== incoming.senderId && !incoming.senderAvatarUrl) delete result.senderAvatarUrl;
@@ -161,11 +183,13 @@ function mergeRichMessage(previous, incoming) {
   if (!incoming.senderName.trim() || incoming.senderName === '未知成员') result.senderName = previous.senderName;
   if (previous.images !== undefined || incoming.images !== undefined) result.images = mergeImages(previous.images, incoming.images);
   if (previous.sharedPost !== undefined || incoming.sharedPost !== undefined) result.sharedPost = mergeSharedPost(previous.sharedPost, incoming.sharedPost);
+  if (previous.references !== undefined || incoming.references !== undefined) result.references = mergeReferences(previous.references, incoming.references);
   if (previous.attachments !== undefined || incoming.attachments !== undefined) result.attachments = mergeAttachments(previous.attachments,incoming.attachments);
   return result;
 }
 function searchableMessage(message) {
-  return [message.text, message.senderName, message.sharedPost?.text || '', message.sharedPost?.author || '',attachmentSearchText(message.attachments)].join('\n');
+  return [message.text, message.senderName, message.sharedPost?.text || '', message.sharedPost?.author || '',
+    ...(message.references || []).map(reference => [reference.text, reference.author || ''].join('\n')), attachmentSearchText(message.attachments)].join('\n');
 }
 function normalizePendingRange(value) {
   const pending = record(value, '最近消息续读状态');
@@ -249,6 +273,7 @@ function normalizeReadState(input, groupId, messages, legacyId = null) {
     if (value === null) return null;
     const id = identifier(value, label);
     if (!messages.has(messageKey({ groupId, id }))) fail(`${label}引用的消息不存在`);
+    if (messages.get(messageKey({ groupId, id })).localDeletion) fail(`${label}不能引用本地回收区消息`);
     return id;
   };
   const anchorId = reference(input.anchorId === undefined ? legacyId : input.anchorId, '阅读锚点');
@@ -273,13 +298,19 @@ function validateState(state, expectedId) {
     return group;
   }) };
   assertJson(state);
-  if (state.schemaVersion !== SCHEMA_VERSION) fail('本地数据版本不受支持，请保留原文件并升级应用');
+  if (state.schemaVersion !== SCHEMA_VERSION && state.schemaVersion !== RECYCLE_SCHEMA_VERSION) fail('本地数据版本不受支持，请保留原文件并升级应用');
   const account = normalizeAccount(state.account);
   if (account.id !== expectedId) fail('账号数据不匹配');
   const groups = array(state.groups, '群列表', 10000).map(normalizeGroup);
   const groupIds = new Set(groups.map(group => group.id));
   if (groupIds.size !== groups.length) fail('群列表含重复 ID');
-  const messages = array(state.messages, '消息').map(normalizeMessage);
+  const messages = array(state.messages, '消息').map(message => {
+    const normalized = normalizeMessage(message);
+    // These are trusted local-state fields, never accepted from a sync/import
+    // descriptor. Repeated imports cannot hide or restore a saved message.
+    if (message.localDeletion !== undefined) normalized.localDeletion = messageCleanup.normalizeLocalDeletion(message.localDeletion);
+    return normalized;
+  });
   const messageKeys = new Set();
   for (const message of messages) {
     if (!groupIds.has(message.groupId)) fail('消息所属群不存在');
@@ -287,6 +318,8 @@ function validateState(state, expectedId) {
     if (messageKeys.has(key)) fail('消息含重复 ID');
     messageKeys.add(key);
   }
+  const messageTrash = messageCleanup.validateMessageTrash(state.messageTrash, messages, groups);
+  const hiddenKeys = new Set(messages.filter(message => message.localDeletion).map(messageKey));
   for (const group of groups) {
     for (const pending of group.latestPendingRanges || []) if (!messageKeys.has(messageKey({ groupId: group.id, id: pending.arrivalAfterId }))) fail('最近消息续读起点引用的同群消息不存在；请保留原文件后检查数据');
   }
@@ -295,7 +328,11 @@ function validateState(state, expectedId) {
     const groupId = identifier(bookmark.groupId, '收藏群 ID');
     if (!groupIds.has(groupId)) fail('收藏所属群不存在');
     if (!array(bookmark.messageIds, '收藏消息', 10000).length) fail('收藏必须包含消息');
-    for (const id of bookmark.messageIds) if (!messageKeys.has(messageKey({ groupId, id: identifier(id) }))) fail('收藏引用的消息不存在');
+    for (const id of bookmark.messageIds) {
+      const key = messageKey({ groupId, id: identifier(id) });
+      if (!messageKeys.has(key)) fail('收藏引用的消息不存在');
+      if (hiddenKeys.has(key)) fail('收藏不能引用本地回收区消息，请先恢复消息');
+    }
     stringValue(bookmark.note, '备注', 100000); normalizeTags(bookmark.tags); timestamp(bookmark.createdAt, '收藏时间');
     return { ...bookmark, id: identifier(bookmark.id), groupId, messageIds: [...new Set(bookmark.messageIds.map(id => identifier(id)))], tags: normalizeTags(bookmark.tags) };
   });
@@ -305,6 +342,7 @@ function validateState(state, expectedId) {
   const readPositions = {};
   for (const [groupId, id] of Object.entries(state.readPositions)) {
     if (!messageKeys.has(messageKey({ groupId, id: identifier(id) }))) fail('阅读位置引用的消息不存在');
+    if (hiddenKeys.has(messageKey({ groupId, id: identifier(id) }))) fail('阅读位置不能引用本地回收区消息');
     setProperty(readPositions, groupId, identifier(id));
   }
   const readStates = {}, rawReadStates = state.readStates === undefined ? {} : record(state.readStates, '阅读状态');
@@ -319,7 +357,12 @@ function validateState(state, expectedId) {
   record(state.settings, '设置'); assertJson(state.settings, '设置', 0, true);
   record(state.exports, '导出记录');
   // Normalize identifiers even when update() callers supply safe numeric IDs.
-  return { ...state, account, groups, messages, bookmarks, readPositions, readStates, importantMembers };
+  // Once recycling is used, older applications must reject this account rather
+  // than silently discard tombstones during their normalization. Restoring a
+  // batch does not downgrade the account. Normalize early unreleased schema-1
+  // recycle fixtures in memory too; reading alone never rewrites their bytes.
+  const schemaVersion = messageTrash.length ? RECYCLE_SCHEMA_VERSION : state.schemaVersion;
+  return { ...state, schemaVersion, account, groups, messages, bookmarks, readPositions, readStates, importantMembers, messageTrash };
 }
 
 function filterMessages(messages, query = {}, importantMembers = []) {
@@ -336,7 +379,7 @@ function filterMessages(messages, query = {}, importantMembers = []) {
   const end = query.end === undefined || query.end === null || query.end === '' ? MAX_TIME : timestamp(query.end, '结束时间');
   if (start > end) fail('开始时间不能晚于结束时间');
   const important = new Set(importantMembers);
-  return messages.filter(message => (!groupId || message.groupId === groupId)
+  return messages.filter(message => !message.localDeletion && (!groupId || message.groupId === groupId)
     && (!senderId || message.senderId === senderId)
     && (!senderIds?.size || senderIds.has(message.senderId))
     && message.time >= start && message.time < end
@@ -357,7 +400,7 @@ class Store {
   _read(file, expectedId) {
     let state;
     try {
-      if (fs.statSync(file).size > 512 * 1024 * 1024) fail('数据文件过大');
+      if (fs.statSync(file).size > MAX_STATE_BYTES) fail('数据文件过大');
       state = JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch (error) {
       if (error.code === 'ENOENT') return null;
@@ -367,11 +410,15 @@ class Store {
   }
   _write(id, state) {
     const normalized = validateState(state, id);
+    const serialized = JSON.stringify(normalized);
+    // Never publish a state that the next read would reject. Recycling keeps
+    // recovery records, so enforce the same byte budget before creating a file.
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_STATE_BYTES) fail('本地账号数据超过 512 MiB 保存上限；未写入更改，请保留现有数据。');
     const file = this._file(id), temporary = `${file}.${randomUUID()}.tmp`;
     let fd;
     try {
       fd = fs.openSync(temporary, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify(normalized), 'utf8');
+      fs.writeFileSync(fd, serialized, 'utf8');
       fs.fsyncSync(fd);
       fs.closeSync(fd); fd = undefined;
       fs.renameSync(temporary, file);
@@ -474,10 +521,38 @@ class Store {
   queryMessages(accountId, query = {}) {
     const state = this.get(accountId), found = filterMessages(state.messages, query, state.importantMembers);
     const limit = query.limit === undefined ? 200 : query.limit;
-    const offset = query.offset === undefined ? 0 : query.offset;
+    let offset = query.offset === undefined ? 0 : query.offset;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2000) fail('每页条数必须是 1 到 2000 的整数');
     if (!Number.isSafeInteger(offset) || offset < 0) fail('分页位置必须是非负整数');
-    return { messages: found.slice(offset, offset + limit), total: found.length };
+    const hasStart = own(query, 'startId'), hasAfter = own(query, 'afterId');
+    if (hasStart && hasAfter) fail('分页起点不能同时指定两种位置');
+    if (hasStart || hasAfter) {
+      if (typeof query.groupId !== 'string' || !query.groupId.trim()) fail('按消息定位分页必须指定群聊');
+      const id = query[hasStart ? 'startId' : 'afterId'];
+      if (typeof id !== 'string' || identifier(id, '分页消息 ID') !== id) fail('分页消息 ID 必须是规范字符串');
+      const index = found.findIndex(message => message.id === id);
+      if (index < 0) {const error = new Error('分页位置已不在当前筛选结果中，请重新打开当前阅读页。'); error.code = 'PAGE_ANCHOR_MISSING'; throw error;}
+      offset = index + (hasAfter ? 1 : 0);
+    }
+    return { messages: found.slice(offset, offset + limit), total: found.length, ...(hasStart || hasAfter ? {offset} : {}) };
+  }
+  previewMessageCleanup(accountId, selection) {
+    return messageCleanup.previewMessageCleanup(this.get(accountId), selection);
+  }
+  applyMessageCleanup(accountId, selection, expectedFingerprint) {
+    const state = this.get(accountId);
+    const result = messageCleanup.applyMessageCleanup(state, selection, expectedFingerprint);
+    if (result.deleted) this._write(identifier(accountId), state);
+    return result;
+  }
+  listMessageTrash(accountId, query = {}) {
+    return messageCleanup.listMessageTrash(this.get(accountId), query);
+  }
+  restoreMessageTrash(accountId, batchId) {
+    const state = this.get(accountId);
+    const result = messageCleanup.restoreMessageTrash(state, batchId);
+    if (result.restored) this._write(identifier(accountId), state);
+    return result;
   }
   bookmark(accountId, input) {
     record(input, '收藏');
@@ -487,7 +562,7 @@ class Store {
     const note = stringValue(input.note, '备注', 100000, ''), tags = normalizeTags(input.tags);
     let saved;
     this.update(accountId, state => {
-      const known = new Set(state.messages.filter(message => message.groupId === groupId).map(message => message.id));
+      const known = new Set(state.messages.filter(message => message.groupId === groupId && !message.localDeletion).map(message => message.id));
       if (messageIds.some(id => !known.has(id))) fail('收藏包含当前群中不存在的消息');
       const signature = [...messageIds].sort(compareIds).join('\u0000');
       const existing = state.bookmarks.find(item => item.groupId === groupId && [...item.messageIds].sort(compareIds).join('\u0000') === signature);
@@ -539,7 +614,7 @@ class Store {
     if (options.followTail !== undefined && typeof options.followTail !== 'boolean') fail('尾部跟随状态必须是布尔值');
     const seenId = legacyCall ? messageId : options.seenId === undefined || options.seenId === null ? null : identifier(options.seenId, '可见末行 ID');
     this.update(accountId, state => {
-      const messages = new Map(state.messages.filter(message => message.groupId === groupId).map(message => [message.id, message]));
+      const messages = new Map(state.messages.filter(message => message.groupId === groupId && !message.localDeletion).map(message => [message.id, message]));
       if (!messages.has(messageId)) fail('阅读位置对应的消息不存在');
       if (seenId !== null && !messages.has(seenId)) fail('可见末行引用的消息不存在');
       const current = state.readStates[groupId];
@@ -556,7 +631,7 @@ class Store {
   }
   getReadStats(accountId, groupId) {
     const state = this.get(accountId), byGroup = new Map(state.groups.map(group => [group.id, []]));
-    for (const message of state.messages) byGroup.get(message.groupId).push(message);
+    for (const message of state.messages) if (!message.localDeletion) byGroup.get(message.groupId).push(message);
     const stats = {};
     for (const [id, messages] of byGroup) {
       messages.sort(compareMessages);
@@ -663,4 +738,4 @@ function createDemoData(now = Date.now()) {
   return { groups, messages: messages.sort(compareMessages) };
 }
 
-module.exports = { Store, normalizeMessage, filterMessages, compareIds, compareMessages, createDemoData };
+module.exports = { Store, normalizeMessage, filterMessages, compareIds, compareMessages, createDemoData, visibleMessages: messageCleanup.visibleMessages };

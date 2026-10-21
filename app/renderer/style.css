@@ -184,3 +184,156 @@
 .inline-emoticon[data-original-token="【笑cry】"] .emoticon-fallback{font-size:7px}
 .emoticon-fallback.emoticon-fallback-long{top:50%;transform:translateY(-50%);font-size:7px;line-height:8px;white-space:normal;word-break:break-all;line-break:anywhere;overflow-wrap:anywhere;max-height:24px}
 .emoticon-fallback.emoticon-fallback-compact{font-size:6px}
+
+/* Compact workspace chrome: navigation owns titles; this strip keeps controls. */
+.workspace-header{padding-top:7px;padding-bottom:7px}
+.header-utility-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.header-status-area{display:flex;align-items:center;gap:12px;flex:1;min-width:0}
+.header-status-area .sync-status-stack{min-width:0}
+.header-status-area:has(.sync-status-stack:not([hidden])) .header-status{max-width:74px;overflow:hidden}
+.header-utility-row .header-actions{flex-wrap:wrap}
+
+/* Pagination now sits between both independent navigation actions. The footer
+   remains outside the scrolling viewport and reflows by its own available width. */
+.reading-footer{display:block;padding-top:7px;padding-bottom:7px;container-type:inline-size}
+.reading-navigation{display:grid;grid-template-columns:max-content minmax(220px,1fr) max-content;align-items:center;gap:10px}
+.reading-navigation .new-messages-notice{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;margin:0;min-width:0}
+.reading-navigation .pagination{margin:0;min-width:0;gap:6px}
+.reading-navigation #jump-latest-read{justify-self:end;min-height:28px}
+#new-messages-count{text-align:left}
+@container (max-width:440px){
+  .reading-navigation{grid-template-columns:minmax(0,1fr);gap:7px}
+  .reading-navigation .new-messages-notice{grid-column:1;grid-row:1;flex-direction:row;align-items:center;flex-wrap:wrap}
+  .reading-navigation .pagination{grid-column:1;grid-row:2;flex-wrap:wrap}
+  .reading-navigation #jump-latest-read{grid-column:1;grid-row:3}
+}
+@media(max-width:1130px){.header-status-area{gap:7px}.header-status-area:has(.sync-status-stack:not([hidden])){flex-direction:column;align-items:stretch;gap:2px}.header-status-area:has(.sync-status-stack:not([hidden])) .header-status{max-width:none}.header-utility-row .header-actions{max-width:52%}}
+
+/* Hover starts at the avatar, then stays open across its compact control region.
+   Opacity preserves geometry and tab order; hidden controls cannot intercept clicks.
+   Keyboard focus reveals the region, while mouse focus alone does not pin it open. */
+.message{padding-left:6px;gap:9px}
+.message-affordance{display:flex;align-items:flex-start;align-self:flex-start;gap:9px;flex:none}
+.message-rail{display:flex;flex-direction:column;align-items:center;gap:5px;flex:0 0 54px;min-width:54px}
+.message-rail .message-tools{display:flex;align-items:center;justify-content:center;gap:2px;opacity:1;margin:0;transition:none}
+.message .message-affordance .message-check,.message .message-affordance .message-tools{opacity:0;pointer-events:none}
+.message .message-affordance.is-expanded .message-check,.message .message-affordance.is-expanded .message-tools,
+.message .message-affordance:not(.pointer-mode):has(:focus-visible) .message-check,.message .message-affordance:not(.pointer-mode):has(:focus-visible) .message-tools{opacity:1;pointer-events:auto}
+.message-tools .button.message-icon{display:inline-grid;place-items:center;min-width:26px;width:26px;min-height:26px;height:26px;padding:0;border:1px solid transparent;border-radius:5px;color:#66745f;background:transparent}
+.message-tools .button.message-icon:hover{color:var(--green-dark);background:#e7eddf}
+.message-tools .button.message-icon:focus-visible{outline:2px solid var(--green-dark);outline-offset:2px}
+.message-tools .button.message-icon-bookmark.active{color:#805213;background:#f7edd9;border-color:#ceb888}
+.message-tools .button.message-icon-important.active{color:var(--green);background:#e7f0e9;border-color:#b0c5b8}
+.message-tools .message-icon-important.active svg{fill:currentColor}
+.message-scroll{background:var(--chat-bg,#f1f3f2)}
+/* The copy lane stays full width for blank-area dragging; only the body shrinks.
+   Fixed media preferences avoid percentage/intrinsic-size cycles in fit-content. */
+.message:not(.message-system)>.message-copy>.message-content,
+.bookmark-message:not(.message-system)>.message-content{--bubble-bg:var(--member-bubble,#fff);position:relative;display:block;width:fit-content;min-width:min(54px,100%);min-height:42px;max-width:min(680px,100%);padding:9px 12px;border:1px solid #e5e9e6;border-radius:10px;background:var(--bubble-bg);box-shadow:0 2px 5px #243c3410;color:var(--member-text,#34483d);overflow-wrap:anywhere}
+.message:not(.message-system)>.message-copy>.message-content::before,
+.bookmark-message:not(.message-system)>.message-content::before{content:'';position:absolute;left:-7px;top:12px;width:12px;height:12px;background:var(--bubble-bg);clip-path:polygon(0 0,100% 0,100% 100%);pointer-events:none}
+.message:not(.message-system) .message-top{margin-bottom:7px}
+.message-content>.message-text:empty{display:none}
+.message-content>.message-media{width:460px;max-width:100%}
+.message-content>.message-media.single{width:350px;max-width:100%}
+.message-content>.message-media:first-child,.message-content>.message-text:empty+.message-media{margin-top:0}
+.message-content .shared-post{max-width:100%;min-width:0;color:#34483d}
+.message-content .shared-post .message-media{width:460px;max-width:100%}
+.message-content .shared-post .message-media.single{width:350px;max-width:100%}
+.message-content .shared-post-title{flex-wrap:wrap;overflow-wrap:anywhere}
+.message-content .attachment-card{width:400px;max-width:100%;color:#34483d}
+.message-content .attachment-copy{min-width:0;flex-basis:160px}
+.message-content .attachment-open,.message-content .attachment-download{max-width:100%;white-space:normal}
+.bookmark-chat-surface{background:var(--chat-bg,#f1f3f2);padding:3px 8px;margin:8px 0}
+.bookmark-message{background:transparent;border-left-color:transparent;padding:10px 4px}
+.message-scroll.is-dragging,.message-scroll.is-dragging *{cursor:grabbing!important;user-select:none!important}
+.message.is-important:not(.message-system)>.message-copy>.message-content,
+.bookmark-message.is-important:not(.message-system)>.message-content{--bubble-bg:var(--important-bubble,#fcd3d4);color:var(--important-text,#860000);border-color:var(--important-bubble,#fcd3d4)}
+.message:not(.message-system)>.message-copy>.message-content>.message-text,
+.bookmark-message:not(.message-system)>.message-content>.message-text{color:var(--member-text,#34483d)}
+.message:not(.message-system)>.message-copy>.message-content>.button.text,
+.bookmark-message:not(.message-system)>.message-content>.button.text,
+.message:not(.message-system)>.message-copy>.message-content>.message-text .message-link,
+.bookmark-message:not(.message-system)>.message-content>.message-text .message-link{color:var(--member-link,#244f42)}
+.message.is-important:not(.message-system)>.message-copy>.message-content>.message-text,
+.bookmark-message.is-important:not(.message-system)>.message-content>.message-text{color:var(--important-text,#860000)}
+.message.is-important:not(.message-system)>.message-copy>.message-content>.message-text .message-link,
+.bookmark-message.is-important:not(.message-system)>.message-content>.message-text .message-link,
+.message.is-important:not(.message-system)>.message-copy>.message-content>.button.text,
+.bookmark-message.is-important:not(.message-system)>.message-content>.button.text{color:var(--important-link,#860000)}
+.message.is-important:not(.message-system)>.message-copy>.message-content>.message-text .message-link:hover,
+.bookmark-message.is-important:not(.message-system)>.message-content>.message-text .message-link:hover{color:var(--important-link,#860000)}
+.message.is-important:not(.message-system)>.message-copy>.message-content>.message-text .message-link:focus-visible,
+.bookmark-message.is-important:not(.message-system)>.message-content>.message-text .message-link:focus-visible{outline-color:var(--important-link,#860000)}
+.message:not(.chosen):not(.target):hover{background:transparent}
+.quote-image-note{background:#f0f2ee;color:#657164}
+.message .sender-name,.bookmark-message .sender-name{color:var(--member-name,#52634b)}
+.message.is-important:not(.message-system) .sender-name,.bookmark-message.is-important:not(.message-system) .sender-name{font-weight:750;color:var(--important-name,#860000)}
+.bookmark-message.is-important{border-left-color:transparent}
+@media(forced-colors:active){.message.is-important .sender-name,.bookmark-message.is-important .sender-name{color:LinkText}.message-tools .button.message-icon.active{outline:1px solid Highlight}}
+
+/* Confirmed service notices remain compact; ordinary same-name senders do not. */
+.message.message-system{display:block;padding:5px 8px}
+.system-notice-line{display:flex;align-items:center;gap:8px;min-width:0;min-height:24px}
+.system-notice-affordance{align-items:center;gap:6px}
+.system-notice-affordance .message-check{margin:0}
+.system-notice-icon{display:inline-grid;place-items:center;min-width:20px;height:24px;color:#87947e}
+.system-notice-line>.message-time{flex:none}
+.system-notice-toggle{display:flex;align-items:center;gap:5px;flex:1;min-width:0;min-height:24px;padding:0;text-align:left;font-size:11px;color:#6f7d66}
+.system-notice-toggle,.system-notice-toggle:hover{background:transparent;border:0;border-radius:0;box-shadow:none}
+.system-notice-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.system-notice-arrow{flex:none}
+.system-notice-full{margin-left:54px}
+
+/* Account colors are consumed only by chat/collection fragments. Auxiliary
+   colors follow their actual background; explicitly chosen names are retained. */
+.message .message-top{background:var(--chat-bg,#f1f3f2)}
+.message .message-time,.bookmark-message .message-time,.message-scroll .day-divider,
+.system-notice-toggle,.system-notice-icon{color:var(--chat-text,#53604f)}
+.message-scroll .day-divider:before,.message-scroll .day-divider:after{background:var(--chat-text,#53604f);opacity:.2}
+.bookmark-message>.button.text{color:var(--chat-focus,#356f64)}
+.message.chosen{background:var(--chat-bg,#f1f3f2);border-color:var(--chat-focus,#356f64);box-shadow:inset 3px 0 var(--chat-focus,#356f64)}
+.message.target{background:var(--chat-bg,#f1f3f2);border-color:var(--chat-target,#965d15);box-shadow:inset 3px 0 var(--chat-target,#965d15);animation:none}
+.message .message-icon:focus-visible,.message .message-check:focus-visible,.system-notice-toggle:focus-visible,
+.bookmark-message>.button:focus-visible{outline-color:var(--chat-focus,#356f64)}
+.message-tools .button.message-icon:not(.active){color:var(--chat-text,#53604f);background:var(--chat-bg,#f1f3f2)}
+.message-tools .button.message-icon:focus-visible{outline-color:var(--chat-focus,#356f64)}
+.message:not(.message-system)>.message-copy>.message-content>.button.text:focus-visible,
+.bookmark-message:not(.message-system)>.message-content>.button.text:focus-visible,
+.message:not(.message-system)>.message-copy>.message-content>.message-text .message-link:focus-visible,
+.bookmark-message:not(.message-system)>.message-content>.message-text .message-link:focus-visible{outline-color:var(--member-link,#356f64)}
+.message.is-important:not(.message-system)>.message-copy>.message-content>.button.text:focus-visible,
+.bookmark-message.is-important:not(.message-system)>.message-content>.button.text:focus-visible,
+.message.is-important:not(.message-system)>.message-copy>.message-content>.message-text .message-link:focus-visible,
+.bookmark-message.is-important:not(.message-system)>.message-content>.message-text .message-link:focus-visible{outline-color:var(--important-link,#860000)}
+.message-system .message-content,.bookmark-message.message-system>.message-content{background:transparent;border:0;box-shadow:none;padding:0;min-width:0;min-height:0;width:auto;max-width:100%;border-radius:0;color:var(--chat-text,#53604f)}
+.message-system .message-content::before,.bookmark-message.message-system>.message-content::before{content:none}
+.message-system .message-text,.bookmark-message.message-system .message-text{font-size:11px;color:var(--chat-text,#53604f);line-height:1.7}
+.message-system .message-text .message-link{color:var(--chat-focus,#356f64)}
+.bookmark-message.message-system .sender-name{font-size:11px;font-weight:400;color:var(--chat-text,#53604f)}
+
+.modal[data-context=appearance][open]{display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden;max-height:90vh}
+.modal[data-context=appearance] .modal-body{min-height:0;max-height:none}
+.modal[data-context=appearance] .modal-footer{flex-wrap:wrap}
+.appearance-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;margin-bottom:16px}
+.appearance-field{min-width:0;display:grid;gap:7px;font-size:12px}
+.appearance-color-controls{display:flex;gap:8px;min-width:0}
+.appearance-color-controls input[type=color]{width:44px;height:35px;padding:3px;flex:none;cursor:pointer}
+.appearance-color-controls input[type=text]{width:110px;min-width:0;font-family:Consolas,monospace}
+.appearance-field .error-note{font-size:11px;color:var(--danger)}
+.appearance-preview{background:var(--chat-bg,#f1f3f2);padding:16px;border:1px solid var(--line);border-radius:9px;margin-top:16px}
+.appearance-preview-label{font-size:11px;color:var(--chat-text,#53604f);margin-bottom:14px}
+.appearance-example{display:flex;gap:12px;margin:12px 0}
+.appearance-example-avatar{display:grid;place-items:center;width:32px;height:32px;flex:none;background:#e1e7da;border-radius:9px;color:#52634b}
+.appearance-example-copy{min-width:0;flex:1}
+.appearance-example .message-top{margin-bottom:6px}
+.appearance-example .sender-name{color:var(--member-name,#52634b)}
+.appearance-example.is-important .sender-name{font-weight:750;color:var(--important-name,#860000)}
+.appearance-example .message-time{color:var(--chat-text,#53604f)}
+.appearance-example-bubble{width:fit-content;max-width:100%;min-width:54px;min-height:42px;padding:9px 12px;border-radius:10px;background:var(--member-bubble,#fff);color:var(--member-text,#53604f);line-height:1.8;overflow-wrap:anywhere}
+.appearance-example-link{color:var(--member-link,#356f64);text-decoration:underline}
+.appearance-example.is-important .appearance-example-bubble{background:var(--important-bubble,#fcd3d4);color:var(--important-text,#860000)}
+.appearance-example.is-important .appearance-example-link{color:var(--important-link,#860000)}
+.appearance-status{font-size:11px;line-height:1.7;margin-top:12px;color:var(--muted)}
+@media(max-width:600px){.appearance-fields{grid-template-columns:1fr}}
+@media(forced-colors:active){.message .sender-name,.bookmark-message .sender-name,.message.is-important .sender-name,.bookmark-message.is-important .sender-name{color:CanvasText}}
