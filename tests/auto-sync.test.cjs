@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { AutoSync, MIN_INTERVAL_MS, BUSY_DELAY_MS, MAX_BACKOFF_MS } = require('../app/core/auto-sync.cjs');
+const { AutoSync, MIN_INTERVAL_MS, BUSY_DELAY_MS, MAX_BACKOFF_MS, FAILURE_BASE_MS, RATE_LIMIT_MIN_MS } = require('../app/core/auto-sync.cjs');
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
@@ -25,14 +25,16 @@ function fixture(options = {}) {
   const clock = new Clock(), changes = [];
   let calls = 0;
   const run = options.run || (async () => { calls++; return { count: 3 }; });
-  const controller = new AutoSync({ run, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer,
+  // Preserve the historical 60-second scenarios independently of the new
+  // default; dedicated fast-refresh cases below exercise the five-second mode.
+  const controller = new AutoSync({ run, intervalMs: 60000, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer,
     onChange: status => changes.push(status), ...options });
   return { clock, controller, changes, calls: () => calls };
 }
 function enable(controller) { controller.configure({ enabled: true }); controller.start(); }
 const failed = (code, properties = {}) => Object.assign(new Error('Cookie=secret-sentinel https://private.invalid Authorization: test'), { code, ...properties });
 
-test('disabled by default; first update waits a full interval, and success repeats from completion', async () => {
+test('disabled by default; an explicit 60-second interval repeats from completion', async () => {
   const f = fixture();
   assert.equal(f.controller.status().enabled, false);
   f.controller.start(); await f.clock.advance(120000); assert.equal(f.calls(), 0);
@@ -86,7 +88,9 @@ test('a long run never overlaps; reconfigure while running schedules only after 
   await f.clock.advance(90000); assert.equal(calls, 1); assert.equal(f.controller.status().running, true);
   pending.resolve(); await flush(); assert.equal(f.controller.status().running, false);
   assert.equal(f.controller.status().lastSuccessAt, null); // Earlier configuration result was invalidated.
-  await f.clock.advance(5000); assert.equal(calls, 2);
+  assert.equal(f.controller.status().nextRunAt,f.clock.time+60000);
+  await f.clock.advance(59999); assert.equal(calls, 1);
+  await f.clock.advance(1); assert.equal(calls, 2);
 });
 
 test('stop does not claim to cancel a running request, and its late success cannot restart scheduling', async () => {
@@ -111,7 +115,7 @@ test('failures back off from 60 seconds to 15 minutes; success resets the sequen
   assert.doesNotMatch(JSON.stringify(f.changes), /secret-sentinel|private.invalid|Authorization/);
   fail = false; await f.clock.advance(MAX_BACKOFF_MS); assert.equal(f.controller.status().error, '');
   fail = true; await f.clock.advance(60000);
-  assert.equal(f.controller.status().nextRunAt - f.clock.time, MIN_INTERVAL_MS);
+  assert.equal(f.controller.status().nextRunAt - f.clock.time, FAILURE_BASE_MS);
   assert.ok(calls > 7);
 });
 
@@ -209,7 +213,7 @@ test('unrepresentable server cooldown pauses safely, and invalid options never c
   f.controller.configure({ enabled: true }); await f.clock.advance(3600000);
   assert.equal(f.controller.status().nextRunAt, null);
   assert.equal(f.controller.status().errorCode, 'RATE_LIMIT'); assert.equal(f.controller.status().blocked, true);
-  for (const value of [0, -1, 59999, 86400001, NaN, Infinity, '60000']) assert.throws(() => f.controller.configure({ enabled: true, intervalMs: value }));
+  for (const value of [0, -1, 4999, 86400001, NaN, Infinity, '60000']) assert.throws(() => f.controller.configure({ enabled: true, intervalMs: value }));
   assert.throws(() => f.controller.configure({ enabled: 'yes' }));
   assert.equal(f.clock.timers.size, 0);
 });
@@ -364,7 +368,7 @@ test('manual transient and busy errors retain automatic retry behavior without i
   assert.equal(f.controller.failures, 0); assert.equal(f.controller.status().nextRunAt, f.clock.time + BUSY_DELAY_MS);
   f.controller.recordFailure(failed('NETWORK'));
   assert.equal(f.controller.failures, 1); assert.equal(f.controller.status().errorCode, 'NETWORK');
-  assert.equal(f.controller.status().nextRunAt, f.clock.time + MIN_INTERVAL_MS);
+  assert.equal(f.controller.status().nextRunAt, f.clock.time + FAILURE_BASE_MS);
   assert.equal(f.controller.assertAllowed(), true); assert.equal(f.controller.status().blocked, false);
   assert.doesNotMatch(JSON.stringify(f.changes), /secret-sentinel|private.invalid|Authorization/);
 });
@@ -387,4 +391,145 @@ test('a late oversized rate limit remains a safe manual block after stopping the
   assert.equal(f.controller.status().blocked, true); assert.equal(f.controller.status().errorCode, 'RATE_LIMIT');
   assert.throws(() => f.controller.assertAllowed(), error => error.code === 'RATE_LIMIT' && error.retryAfterMs === undefined);
   assert.equal(f.clock.timers.size, 0);
+});
+
+test('the default is five seconds and each successful run schedules a single next interval', async () => {
+  const f = fixture({intervalMs:undefined});
+  assert.equal(MIN_INTERVAL_MS,5000);assert.equal(f.controller.status().intervalMs,5000);
+  enable(f.controller);
+  await f.clock.advance(4999);assert.equal(f.calls(),0);
+  await f.clock.advance(1);assert.equal(f.calls(),1);
+  assert.equal(f.controller.status().nextRunAt,f.clock.time+5000);
+  assert.equal(f.clock.timers.size,1);
+  await f.clock.advance(5000);assert.equal(f.calls(),2);assert.equal(f.clock.timers.size,1);
+});
+
+test('five-second refreshes wait for slow requests to settle without catch-up or overlap', async () => {
+  const pending=deferred();let calls=0;
+  const f=fixture({intervalMs:5000,run:async()=>{calls++;if(calls===1)await pending.promise;}});enable(f.controller);
+  await f.clock.advance(5000);assert.equal(calls,1);assert.equal(f.controller.running,true);
+  await f.clock.advance(37000);assert.equal(calls,1);assert.equal(f.clock.timers.size,0);
+  pending.resolve();await flush();
+  assert.equal(f.controller.running,false);assert.equal(f.controller.status().nextRunAt,f.clock.time+5000);
+  await f.clock.advance(4999);assert.equal(calls,1);
+  await f.clock.advance(1);assert.equal(calls,2);assert.equal(f.clock.timers.size,1);
+});
+
+test('five-second interval validation rejects faster or malformed input without replacing the current timer', async () => {
+  const f=fixture({intervalMs:5000});enable(f.controller);
+  const due=f.controller.status().nextRunAt;
+  for(const intervalMs of [0,1,4999,4999.9,5000.1,'5000',null,NaN,Infinity,86400001]){
+    assert.throws(()=>f.controller.configure({intervalMs}),/5 秒/);
+    assert.equal(f.controller.status().nextRunAt,due);assert.equal(f.clock.timers.size,1);
+  }
+  await f.clock.advance(5000);assert.equal(f.calls(),1);
+});
+
+test('fast refresh retains the independent 60-second transient backoff and returns to five seconds after recovery', async () => {
+  assert.equal(FAILURE_BASE_MS,60000);assert.equal(RATE_LIMIT_MIN_MS,60000);
+  for(const code of ['NETWORK','TIMEOUT','SERVER_ERROR','ABORTED']){
+    let calls=0;
+    const f=fixture({intervalMs:5000,run:async()=>{if(++calls<=2)throw failed(code);}});enable(f.controller);
+    await f.clock.advance(5000);assert.equal(calls,1);assert.equal(f.controller.status().nextRunAt,f.clock.time+60000);
+    await f.clock.advance(59999);assert.equal(calls,1);
+    await f.clock.advance(1);assert.equal(calls,2);assert.equal(f.controller.status().nextRunAt,f.clock.time+120000);
+    await f.clock.advance(120000);assert.equal(calls,3);assert.equal(f.controller.status().nextRunAt,f.clock.time+5000);
+    await f.clock.advance(5000);assert.equal(calls,4);assert.equal(f.controller.failures,0);
+  }
+});
+
+test('fast refresh respects short, missing and malformed 429 headers with a 60-second floor', async () => {
+  for(const retryAfter of [undefined,'0','1','nonsense','Wed, 01 Jan 2020 00:00:00 GMT']){
+    let calls=0;
+    const f=fixture({intervalMs:5000,run:async()=>{calls++;if(calls===1)throw failed('RATE_LIMIT',{retryAfter});}});enable(f.controller);
+    await f.clock.advance(5000);const due=f.clock.time+60000;
+    assert.equal(f.controller.status().nextRunAt,due);assert.equal(f.controller.cooldownUntil,due);
+    await f.clock.advance(1000);f.controller.configure({enabled:false});f.controller.configure({enabled:true,intervalMs:5000});
+    assert.equal(f.controller.status().nextRunAt,due);
+    await f.clock.advance(due-f.clock.time-1);assert.equal(calls,1);
+    await f.clock.advance(1);assert.equal(calls,2);assert.equal(f.controller.status().nextRunAt,f.clock.time+5000);
+  }
+});
+
+test('late short 429 after a five-second pause/resume keeps the independent cooldown floor', async () => {
+  const pending=deferred();let calls=0;
+  const f=fixture({intervalMs:5000,run:async()=>{calls++;if(calls===1)await pending.promise;}});enable(f.controller);
+  await f.clock.advance(5000);
+  f.controller.configure({enabled:false});f.controller.stop();f.controller.configure({enabled:true});f.controller.start();
+  pending.reject(failed('RATE_LIMIT',{retryAfter:'1'}));await flush();
+  assert.equal(f.controller.status().nextRunAt,f.clock.time+60000);
+  assert.throws(()=>f.controller.assertAllowed(),error=>error.code==='RATE_LIMIT'&&error.retryAfterMs===60000);
+  await f.clock.advance(59999);assert.equal(calls,1);
+  await f.clock.advance(1);assert.equal(calls,2);
+});
+
+test('fast refresh still stops 401 and 403 until explicit recovery and never repeats during a stop', async () => {
+  for(const status of [401,403]){
+    let calls=0,blocked=true;
+    const f=fixture({intervalMs:5000,run:async()=>{calls++;if(blocked)throw failed('unknown',{status});}});enable(f.controller);
+    await f.clock.advance(5000);assert.equal(calls,1);assert.equal(f.controller.status().blocked,true);
+    f.controller.stop();f.controller.start();await f.clock.advance(3600000);assert.equal(calls,1);
+    blocked=false;f.controller.configure({enabled:true});
+    await f.clock.advance(4999);assert.equal(calls,1);
+    await f.clock.advance(1);assert.equal(calls,2);
+  }
+});
+
+test('reconfiguring a slow five-second request preserves single flight and waits a full interval after settling', async () => {
+  const pending=deferred();let calls=0;
+  const f=fixture({intervalMs:5000,run:async()=>{calls++;if(calls===1)await pending.promise;}});enable(f.controller);
+  await f.clock.advance(5000);assert.equal(calls,1);
+  f.controller.configure({enabled:true,intervalMs:5000});
+  await f.clock.advance(21000);assert.equal(calls,1);assert.equal(f.controller.running,true);
+  pending.resolve();await flush();assert.equal(f.controller.running,false);
+  assert.equal(f.controller.status().lastSuccessAt,null);
+  assert.equal(f.clock.timers.size,1);
+  assert.equal(f.controller.status().nextRunAt,f.clock.time+5000);
+  await f.clock.advance(4999);assert.equal(calls,1);
+  await f.clock.advance(1);assert.equal(calls,2);
+});
+
+test('settling 200ms before the configuration timer replaces that timer with a full completion interval', async () => {
+  const pending=deferred();let calls=0;
+  const f=fixture({intervalMs:5000,run:async()=>{calls++;if(calls===1)await pending.promise;}});enable(f.controller);
+  const initial=f.clock.time;
+  await f.clock.advance(5000);assert.equal(calls,1);
+  await f.clock.advance(100);f.controller.configure({enabled:true});
+  assert.equal(f.controller.status().nextRunAt,initial+10100);
+  await f.clock.advance(4800);pending.resolve();await flush();
+  assert.equal(f.clock.time,initial+9900);
+  assert.equal(f.controller.status().nextRunAt,initial+14900);
+  assert.equal(f.controller.status().lastSuccessAt,null);assert.equal(f.clock.timers.size,1);
+  await f.clock.advance(200);assert.equal(calls,1);
+  await f.clock.advance(4799);assert.equal(calls,1);
+  await f.clock.advance(1);assert.equal(calls,2);
+});
+
+test('a transient failure 200ms before the configuration timer applies full backoff from failure time', async () => {
+  for(const code of ['NETWORK','TIMEOUT','SERVER_ERROR','ABORTED']){
+    const pending=deferred();let calls=0;
+    const f=fixture({intervalMs:5000,run:async()=>{calls++;if(calls===1)await pending.promise;}});enable(f.controller);
+    const initial=f.clock.time;
+    await f.clock.advance(5000);await f.clock.advance(100);f.controller.configure({enabled:true});
+    await f.clock.advance(4800);pending.reject(failed(code));await flush();
+    assert.equal(f.controller.status().nextRunAt,initial+69900);
+    assert.equal(f.controller.status().errorCode,code);assert.equal(f.controller.failures,1);assert.equal(f.clock.timers.size,1);
+    await f.clock.advance(200);assert.equal(calls,1);
+    await f.clock.advance(59799);assert.equal(calls,1);
+    await f.clock.advance(1);assert.equal(calls,2);assert.equal(f.controller.status().nextRunAt,f.clock.time+5000);
+  }
+});
+
+test('late ordinary failures while stopped or disabled cannot restart automatic scheduling', async () => {
+  for(const deactivate of [controller=>controller.stop(),controller=>controller.configure({enabled:false})]){
+    const pending=deferred();let calls=0;
+    const f=fixture({intervalMs:5000,run:async()=>{calls++;if(calls===1)await pending.promise;}});enable(f.controller);
+    await f.clock.advance(5000);await f.clock.advance(100);deactivate(f.controller);
+    await f.clock.advance(4800);pending.reject(failed('NETWORK'));await flush();
+    assert.equal(f.controller.running,false);assert.equal(f.controller.status().nextRunAt,null);assert.equal(f.clock.timers.size,0);
+    await f.clock.advance(120000);assert.equal(calls,1);assert.equal(f.clock.timers.size,0);
+    f.controller.configure({enabled:true});f.controller.start();
+    await f.clock.advance(4999);assert.equal(calls,1);
+    await f.clock.advance(1);assert.equal(calls,2);
+  }
 });

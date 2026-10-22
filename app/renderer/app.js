@@ -1071,7 +1071,7 @@ async function pollUpdates() {
   model.polling=true;
   try{
     const epoch=model.accountEpoch;
-    const status=await api('sync.status');
+    const status=await api('sync.status',{accountId:model.state.account?.id,groupId:model.view==='read'?model.groupId:null});
     if(epoch!==model.accountEpoch || status?.accountId && status.accountId!==model.state.account?.id)return;
     const changed=model.syncRevision!==status.revision;
     model.syncStatus=status;if(readingBusy())queueReadingRefresh();else renderSyncStatus();

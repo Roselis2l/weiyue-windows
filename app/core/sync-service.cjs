@@ -2,6 +2,9 @@
 const {compareMessages}=require('./store.cjs');
 const GAP_NOTE='平台返回不能证明记录完整；撤回、删除、权限变化或未抓取时段可能形成缺口。';
 const activeStores=new WeakSet();
+// Automatic batches yield after a short budget. Keep their next successful
+// scheduling slot across yields without adding scheduling state to user data.
+const scheduledStores=new WeakMap();
 function mergedCoverage(previous,next,note){
   const pairs=[previous,next].filter(c=>c&&Number.isFinite(c.oldest)&&Number.isFinite(c.newest));
   if(!pairs.length)return undefined;
@@ -67,7 +70,7 @@ async function syncLegacy({store,accountId,client,groupId,history=false,maxPages
       count+=store.mergeMessages(accountId,[target],page.messages,{history:!!history,arrivalAfter:{[g.id]:arrivalAfterId}});
       groupPages++;
       checkAbort(signal);
-      if(onChange)await onChange({accountId,groupId:g.id,count,pages:pages+groupPages,history:!!history});
+      if(onChange)await onChange({accountId,groupId:g.id,count,pages:pages+groupPages,history:!!history,kind:history?'history':pending?'gap':groupPages===1?'head':incremental?'gap':'initial'});
       checkAbort(signal);
     }});
     checkAbort(signal);
@@ -97,12 +100,15 @@ function delay(ms,signal){return new Promise((resolve,reject)=>{
   signal?.addEventListener('abort',aborted,{once:true});
 });}
 const BLOCK_REASONS={AUTH_REQUIRED:'登录已失效，补扫已停止；请重新登录。',ACCESS_DENIED:'微博拒绝访问，补扫已停止；请在官方页面检查权限。',RATE_LIMIT:'微博暂时限流，本轮补扫已停止并等待服务器要求的时间。',API_REJECTED:'微博拒绝读取，补扫已停止；请在官方页面检查提示。',RISK_CONTROL:'微博要求验证，补扫已停止；请在官方页面处理。',RISK_REQUIRED:'微博要求验证，补扫已停止；请在官方页面处理。'};
-async function syncContinuous({store,accountId,client,groupId,history=false,maxPages=60,timeBudgetMs=40000,pageDelayMs=600,headEveryPages=12,signal,onChange,now=Date.now,sleep=delay}){
+async function syncContinuous({store,accountId,client,groupId,history=false,maxPages=60,timeBudgetMs=40000,pageDelayMs=600,headEveryPages=12,preferredGroupId,headGroupIds,retryUnresolvedGroupIds,signal,onChange,now=Date.now,sleep=delay}){
   if(!Number.isSafeInteger(maxPages)||maxPages<1||maxPages>200)throw new TypeError('每轮最多读取 1 到 200 页。');
   if(!Number.isSafeInteger(timeBudgetMs)||timeBudgetMs<1||timeBudgetMs>120000)throw new TypeError('补扫时间预算无效。');
   if(!Number.isSafeInteger(pageDelayMs)||pageDelayMs<500||pageDelayMs>5000)throw new TypeError('补扫请求间隔须为 500 到 5000 毫秒。');
   if(!Number.isSafeInteger(headEveryPages)||headEveryPages<1||headEveryPages>100)throw new TypeError('最新消息检查间隔无效。');
   if(typeof now!=='function'||typeof sleep!=='function')throw new TypeError('补扫时钟无效。');
+  if(preferredGroupId!==undefined&&preferredGroupId!==null&&typeof preferredGroupId!=='string')throw new TypeError('优先群聊须使用稳定字符串 ID。');
+  if(headGroupIds!==undefined&&(!Array.isArray(headGroupIds)||headGroupIds.some(id=>typeof id!=='string')))throw new TypeError('最新消息检查群聊须为字符串 ID 列表。');
+  if(retryUnresolvedGroupIds!==undefined&&(!Array.isArray(retryUnresolvedGroupIds)||retryUnresolvedGroupIds.some(id=>typeof id!=='string')))throw new TypeError('未闭合区间检查群聊须为字符串 ID 列表。');
   const state=store.get(accountId);
   if(state.account.kind!=='weibo')throw new Error('演示与导入账号不连接微博。');
   const selected=state.groups.filter(g=>g.selected&&(!groupId||g.id===groupId)).sort((a,b)=>(a.syncProgress?.updatedAt||0)-(b.syncProgress?.updatedAt||0));
@@ -113,23 +119,91 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
   const withinBudget=()=>pages<maxPages&&now()-start<timeBudgetMs;
   const getGroup=id=>store.get(accountId).groups.find(g=>g.id===id&&g.selected);
   const key=(id,range)=>`${id}:${range.baselineId}:${range.arrivalAfterId}`;
+  // Automatic callers supply the due head groups; manual/default callers keep
+  // the original scheduling behavior. Head eligibility never removes gap work.
+  const scheduled=!history&&(preferredGroupId!==undefined||headGroupIds!==undefined||retryUnresolvedGroupIds!==undefined);
+  const headSet=headGroupIds===undefined?null:new Set(headGroupIds);
+  const unresolvedSet=retryUnresolvedGroupIds===undefined?null:new Set(retryUnresolvedGroupIds);
+  const selectedIds=new Set(selected.map(g=>g.id));
+  // The caller orders due heads by their last head refresh, independently of
+  // recent gap writes. Fair gap rotation instead uses stable store group order.
+  const heads=[...new Set(headGroupIds??selected.map(g=>g.id))].filter(id=>selectedIds.has(id));
+  const preferred=selectedIds.has(preferredGroupId)?preferredGroupId:null;
+  const fairIds=state.groups.filter(g=>selectedIds.has(g.id)).map(g=>g.id);
+  const completedHeads=new Set(),retriedUnresolved=new Set();
+  let schedules,schedule;
+  if(scheduled){
+    schedules=scheduledStores.get(store);if(!schedules){schedules=new Map();scheduledStores.set(store,schedules);}
+    schedule=schedules.get(accountId)||{preferred:null,front:null,phase:'head',lastGapId:null,sincePreferred:0,idle:true};
+    if(schedule.preferred!==preferred)schedule={...schedule,preferred,front:preferred?'head':null,sincePreferred:0};
+  }
+  const backgroundHeads=heads.filter(id=>id!==preferred);
+  function makeHead(id){
+    if(!getGroup(id))return null;
+    return {id,kind:'head',before:undefined,...frontier(store.get(accountId).messages.filter(m=>m.groupId===id))};
+  }
+  function makeGap(id){
+    const g=getGroup(id);if(!g)return null;
+    if(history||initialContinuations.has(id)){
+      return !g.historyExhausted&&g.nextCursor?{id,kind:history?'history':'initial',before:g.nextCursor,arrivalAfterId:null,baselineId:null}:null;
+    }
+    const ranges=pendingRanges(g).filter(r=>!parked.has(key(id,r)));
+    // An independently due unresolved retry gets one slot per group per batch;
+    // a long ordinary pending range must not permanently hide it.
+    const canRetry=!scheduled||((!unresolvedSet||unresolvedSet.has(id))&&!retriedUnresolved.has(id));
+    const range=scheduled?(canRetry&&ranges.find(r=>r.status==='unresolved')||ranges.find(r=>r.status!=='unresolved')):ranges[0];
+    return range?{id,kind:'gap',before:range.cursor,baselineId:range.baselineId,arrivalAfterId:range.arrivalAfterId,...(range.status==='unresolved'?{retriedUnresolved:true}:{})}:null;
+  }
   function gapJob(){
     for(let i=0;i<selected.length;i++){
-      const id=selected[gapIndex++%selected.length].id,g=getGroup(id);if(!g)continue;
-      if(history||initialContinuations.has(id)){
-        if(!g.historyExhausted&&g.nextCursor)return {id,kind:history?'history':'initial',before:g.nextCursor,arrivalAfterId:null,baselineId:null};
-        continue;
-      }
-      const range=pendingRanges(g).find(r=>!parked.has(key(id,r)));
-      if(range)return {id,kind:'gap',before:range.cursor,baselineId:range.baselineId,arrivalAfterId:range.arrivalAfterId};
+      const job=makeGap(selected[gapIndex++%selected.length].id);if(job)return job;
     }
+    return null;
+  }
+  function dueHead(){
+    for(const id of backgroundHeads){if(completedHeads.has(id))continue;const job=makeHead(id);if(job)return job;}
+    return null;
+  }
+  function fairGap(lastId){
+    const after=fairIds.indexOf(lastId);
+    for(let i=1;i<=fairIds.length;i++){const job=makeGap(fairIds[(after+i)%fairIds.length]);if(job)return job;}
+    return null;
+  }
+  function scheduledJob(){
+    const next={...schedule,idle:false},canHead=preferred&&(!headSet||headSet.has(preferred));
+    // A completed idle cycle refreshes the foreground first next time. A busy
+    // cycle retains its owed slot even when only one slow page fits each batch.
+    if(schedule.idle||(pages===0&&!next.front&&!dueHead()&&!fairGap(next.lastGapId)))next.front=canHead?'head':null;
+    function chosen(job){
+      if(job.kind==='head'&&job.id===preferred)next.sincePreferred=0;
+      else next.sincePreferred++;
+      return {job,next};
+    }
+    if(next.front==='head'){
+      next.front='gap';const job=canHead?makeHead(preferred):null;if(job)return chosen(job);
+    }
+    if(next.front==='gap'){
+      next.front=null;const job=makeGap(preferred);if(job)return chosen(job);
+    }
+    if(canHead&&next.sincePreferred>=headEveryPages){
+      const job=makeHead(preferred);if(job){next.front='gap';return chosen(job);}
+    }
+    let job;
+    if(next.phase==='head'){
+      job=dueHead();if(job){next.phase='gap';return chosen(job);}
+    }
+    job=fairGap(next.lastGapId);
+    if(job){next.lastGapId=job.id;next.phase='head';return chosen(job);}
+    job=dueHead();if(job){next.phase='gap';return chosen(job);}
     return null;
   }
   try{
     while(withinBudget()){
       checkAbort(signal);
-      let job;
-      if(!history&&initialIndex<selected.length){
+      let job,scheduledChoice;
+      if(scheduled){
+        scheduledChoice=scheduledJob();job=scheduledChoice?.job;
+      }else if(!history&&initialIndex<selected.length){
         const id=selected[initialIndex++].id,g=getGroup(id);if(!g)continue;
         const pending=g.syncNext==='gap'?pendingRanges(g).find(r=>!parked.has(key(id,r))):null;
         if(pending)job={id,kind:'gap',before:pending.cursor,baselineId:pending.baselineId,arrivalAfterId:pending.arrivalAfterId};
@@ -139,7 +213,7 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
         const local=frontier(store.get(accountId).messages.filter(m=>m.groupId===id));
         job={id,kind:'head',before:undefined,...local};sinceHead=0;
       }else job=gapJob();
-      if(!job)break;
+      if(!job){if(scheduled){schedule={...schedule,idle:true};schedules.set(accountId,schedule);}break;}
       if(pages){await sleep(pageDelayMs,signal);checkAbort(signal);if(!withinBudget())break;}
       if(!getGroup(job.id))continue;
       activeGroup=job.id;
@@ -155,7 +229,7 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
           if(page.reachedStop!==true){
             unresolved=page.nextCursor===null;
             const range={cursor:page.nextCursor??page.resumeCursor??job.before??null,baselineId:job.baselineId,arrivalAfterId:job.arrivalAfterId,status:unresolved?'unresolved':'pending'};
-            if(job.kind==='gap')ranges.unshift(range);else ranges.push(range);
+            if(job.kind==='gap'&&!(job.retriedUnresolved&&unresolved))ranges.unshift(range);else ranges.push(range);
             if(unresolved)parked.add(key(job.id,range));
           }
           ranges=compactRanges(ranges,messages);setRanges(target,ranges);
@@ -176,8 +250,16 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
         const combined=mergedCoverage(current.coverage,page.coverage,`${reason} ${GAP_NOTE}`);if(combined)target.coverage=combined;
         checkAbort(signal);
         count+=store.mergeMessages(accountId,[target],page.messages,{history:history||job.kind==='initial',arrivalAfter:{[job.id]:job.arrivalAfterId}});
-        pages++;sinceHead++;checkAbort(signal);
-        if(onChange)await onChange({accountId,groupId:job.id,count,pages,history:!!history,phase:target.syncProgress.phase,pendingRanges:ranges.length,progress:target.syncProgress});
+        pages++;sinceHead++;
+        if(scheduled){
+          // Commit the slot only after the messages and cursor are durable.
+          // Budget checks, selection changes and failed requests cannot spend it.
+          schedule=scheduledChoice.next;schedules.set(accountId,schedule);
+          if(job.kind==='head')completedHeads.add(job.id);
+          if(job.retriedUnresolved)retriedUnresolved.add(job.id);
+        }
+        checkAbort(signal);
+        if(onChange)await onChange({accountId,groupId:job.id,count,pages,history:!!history,kind:job.kind,...(job.retriedUnresolved?{retriedUnresolved:true}:{}),phase:target.syncProgress.phase,pendingRanges:ranges.length,progress:target.syncProgress});
         checkAbort(signal);
       }});
       checkAbort(signal);

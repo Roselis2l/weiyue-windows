@@ -30,6 +30,7 @@ const {LoginFlow}=require('./core/login-flow.cjs');
 const {AccountSessionRegistry}=require('./core/account-session.cjs');
 const {AutoSync}=require('./core/auto-sync.cjs');
 const {AccountAutoSync}=require('./core/account-auto-sync.cjs');
+const {RefreshPlan,AUTOMATIC_INTERVAL_MS,BACKGROUND_HEAD_INTERVAL_MS,AUTOMATIC_TIME_BUDGET_MS,AUTOMATIC_MAX_PAGES,AUTOMATIC_HEAD_EVERY_PAGES,AUTOMATIC_DEADLINE_MS}=require('./core/refresh-plan.cjs');
 const {fetchImage,safeImageUrl}=require('./core/media.cjs');
 const {AvatarService}=require('./core/avatar-service.cjs');
 const {refreshGroupAvatars}=require('./core/avatar-refresh.cjs');
@@ -48,6 +49,8 @@ let imageViewer,activeAi,heifDecoder,videoDecoder,attachmentViewer,attachmentDow
 const aiPreviews=new AiPreviewStore();
 const summaryDeletePreviews=new SummaryDeletePreviewStore();
 const automaticAccounts=new AccountAutoSync();
+const refreshPlans=new Map();let preferredRefreshGroup=null;
+function refreshPlan(id){if(!refreshPlans.has(id))refreshPlans.set(id,new RefreshPlan());return refreshPlans.get(id);}
 const enrichmentJobs=new Map(),enrichmentAttempts=new Map(),imageCache=new Map(),imageJobs=new Map();
 let cachedImageBytes=0,activeImages=0;const imageWaiters=[];
 const sessions=new Map();
@@ -55,7 +58,7 @@ const sessionRegistry=new AccountSessionRegistry({sessions,createSession:()=>{co
 const avatars=new AvatarService({getContext:()=>({owner:activeId,epoch:accountEpoch,revision,closing:closing()}),getState:id=>store.get(id),restoreSession:accountSession,defaultSession:()=>session.defaultSession,request:imageRequest});
 function preferences(){try{return JSON.parse(fs.readFileSync(path.join(dataRoot,'preferences.json'),'utf8'));}catch{return {};}}
 function clearMedia(){accountEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
-function setActive(id){const changed=activeId!==id;activeId=id;fs.writeFileSync(path.join(dataRoot,'preferences.json'),JSON.stringify({activeId:id}));if(changed){clearMedia();revision++;configureAutomatic();}}
+function setActive(id){const changed=activeId!==id;activeId=id;fs.writeFileSync(path.join(dataRoot,'preferences.json'),JSON.stringify({activeId:id}));if(changed){preferredRefreshGroup=null;clearMedia();revision++;configureAutomatic();}}
 function account(){return store.get(activeId);}
 function secrets(id=activeId){return vault.read(id);}
 function publicReadStats(id=activeId,groupId){const all=store.getReadStats(id,groupId);const clean=s=>{const {unreadIds,...rest}=s;return rest;};return groupId===undefined?Object.fromEntries(Object.entries(all).map(([key,value])=>[key,clean(value)])):clean(all);}
@@ -64,14 +67,19 @@ function snapshot(){
   const readStates=publicReadStats();
   return {accounts:store.accounts(),account:s.account,groups:s.groups.map(g=>{const {avatarUrl,...rest}=g;return {...rest,...readStates[g.id],avatarSrc:avatars.source('group',g.id)};}),readPositions:s.readPositions,readStates,importantMembers:s.importantMembers,settings:{...s.settings,appearance:normalizeAppearance(s.settings.appearance)},stats:{messages:visibleMessages(s.messages).length,recycledMessages:s.messages.filter(m=>m.localDeletion).length,bookmarks:s.bookmarks.length,summaries:s.summaries.length},sessionReady:!!sec.cookies?.length,credentials:{ai:!!sec.aiKey,notion:!!sec.notionToken},credentialError,dataRoot,revision};
 }
-function syncStatus(){return {...(autoSync?.status()||{enabled:false,intervalMs:60000,running:false}),running:!!activeSync||!!autoSync?.status().running,accountId:activeId,revision};}
+function syncStatus(){return {...(autoSync?.status()||{enabled:false,intervalMs:AUTOMATIC_INTERVAL_MS,running:false}),backgroundIntervalMs:BACKGROUND_HEAD_INTERVAL_MS,running:!!activeSync||!!autoSync?.status().running,accountId:activeId,revision};}
+function captureRefreshContext(p){
+  // A delayed poll from a previous account cannot change the current priority.
+  if(p.accountId!==activeId)return;
+  preferredRefreshGroup=typeof p.groupId==='string'&&account().groups.some(g=>g.selected&&g.id===p.groupId)?p.groupId:null;
+}
 function configureAutomatic(){
   if(!store||!activeId)return;
   const owner=activeId;
   autoSync=automaticAccounts.activate(owner,()=>{
     const controller=new AutoSync({run:()=>runSync({},true),isBusy:()=>busy||enrichmentJobs.size>0,
       isEligible:()=>{if(activeId!==owner||closing())return false;const s=store.get(owner);return s.account.kind==='weibo'&&s.groups.some(g=>g.selected)&&!!secrets(owner).cookies?.length;}});
-    controller.configure({enabled:account().account.kind==='weibo'&&account().settings.autoSyncEnabled!==false,intervalMs:60000});
+    controller.configure({enabled:account().account.kind==='weibo'&&account().settings.autoSyncEnabled!==false,intervalMs:AUTOMATIC_INTERVAL_MS});
     return controller;
   });
 }
@@ -81,8 +89,11 @@ async function runSync(p={},automatic=false){
   const syncPolicy=autoSync;syncPolicy?.assertAllowed();
   const id=activeId,state=account();if(state.account.kind!=='weibo')throw new Error('演示与导入账号不连接微博。请先登录官方账号。');
   if(!state.groups.some(g=>g.selected&&(!p.groupId||g.id===p.groupId)))throw new Error('请先选择允许同步的群聊。');
+  const preferred=automatic?preferredRefreshGroup:null;
+  const plan=automatic?refreshPlan(id).plan(state.groups,preferred):null;
+  if(automatic&&!plan.hasWork)return {count:0,pages:0,state:snapshot()};
   busy=true;const controller=new AbortController();activeSync={controller,automatic};const check=()=>{if(controller.signal.aborted){const e=new Error('同步已取消，已保存的页面仍保留。');e.code='ABORTED';throw e;}};
-  const timer=setTimeout(()=>controller.abort(),automatic?45000:120000);
+  const timer=setTimeout(()=>controller.abort(),automatic?AUTOMATIC_DEADLINE_MS:120000);
   try{
     const s=await accountSession(id,{check}),c=client(s,{timeoutMs:12000,maxAttempts:automatic?1:2}),identity=await c.identity({signal:controller.signal});check();
     if('weibo-'+identity.id!==id){const e=new Error('登录账号与本地账号不一致，请重新登录。');e.code='ACCOUNT_MISMATCH';throw e;}
@@ -90,8 +101,9 @@ async function runSync(p={},automatic=false){
       await refreshGroupAvatars({client:c,store,accountId:id,groups:state.groups,groupId:p.groupId,signal:controller.signal,onChange:()=>revision++});check();
     }
     const result=await syncAccount({store,accountId:id,client:c,groupId:p.groupId,history:!!p.history,
-      continuous:!p.history,maxPages:p.history?10:automatic?60:120,timeBudgetMs:automatic?40000:90000,
-      pageDelayMs:1000,headEveryPages:12,signal:controller.signal,onChange:()=>revision++});check();
+      continuous:!p.history,maxPages:p.history?10:automatic?AUTOMATIC_MAX_PAGES:120,timeBudgetMs:automatic?AUTOMATIC_TIME_BUDGET_MS:90000,
+      ...(automatic?{preferredGroupId:preferred,headGroupIds:plan.headGroupIds,retryUnresolvedGroupIds:plan.retryUnresolvedGroupIds}:{}),
+      pageDelayMs:1000,headEveryPages:automatic?AUTOMATIC_HEAD_EVERY_PAGES:12,signal:controller.signal,onChange:progress=>{revision++;if(progress.kind==='head')refreshPlan(id).recordHead(progress.groupId);if(progress.retriedUnresolved===true)refreshPlan(id).recordUnresolvedAttempt(progress.groupId);}});check();
     await rememberCookies(id,s);return {...result,state:snapshot()};
   }catch(error){if(!automatic)syncPolicy?.recordFailure(error);throw error;}
   finally{clearTimeout(timer);busy=false;activeSync=null;}
@@ -372,8 +384,8 @@ async function handle(action,p){
     }
     case 'login.status':return loginFlow.status();
     case 'login.cancel':return loginFlow.cancel();
-    case 'sync.status':return syncStatus();
-    case 'sync.configure':{if(typeof p.enabled!=='boolean')throw new Error('请指定自动更新开关。');store.update(id,s=>{s.settings.autoSyncEnabled=p.enabled;});if(!p.enabled&&activeSync?.automatic)activeSync.controller.abort();autoSync.configure({enabled:p.enabled,intervalMs:60000});return syncStatus();}
+    case 'sync.status':captureRefreshContext(p);return syncStatus();
+    case 'sync.configure':{if(typeof p.enabled!=='boolean')throw new Error('请指定自动更新开关。');store.update(id,s=>{s.settings.autoSyncEnabled=p.enabled;});if(!p.enabled&&activeSync?.automatic)activeSync.controller.abort();autoSync.configure({enabled:p.enabled,intervalMs:AUTOMATIC_INTERVAL_MS});return syncStatus();}
     case 'window.closeReady':if(closeTimer){clearTimeout(closeTimer);closeTimer=null;closeReady=true;win.close();}return true;
     case 'login.complete':{
       if(!pendingLogin&&account().account.kind!=='weibo')throw new Error('请先打开官方登录窗口并自行完成登录。');

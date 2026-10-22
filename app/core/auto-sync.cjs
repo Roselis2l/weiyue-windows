@@ -1,6 +1,10 @@
 'use strict';
 
-const MIN_INTERVAL_MS = 60000;
+// Successful refreshes may run frequently. Failure/rate-limit waits are a
+// separate policy and must never shrink with the normal refresh interval.
+const MIN_INTERVAL_MS = 5000;
+const FAILURE_BASE_MS = 60000;
+const RATE_LIMIT_MIN_MS = 60000;
 const MAX_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const BUSY_DELAY_MS = 5000;
 const MAX_BACKOFF_MS = 15 * 60 * 1000;
@@ -30,7 +34,7 @@ function safeErrorCode(code) {
 
 function validInterval(value) {
   if (!Number.isSafeInteger(value) || value < MIN_INTERVAL_MS || value > MAX_INTERVAL_MS) {
-    throw new TypeError('自动更新间隔须为 60 秒至 24 小时之间的整数毫秒数。');
+    throw new TypeError('自动更新间隔须为 5 秒至 24 小时之间的整数毫秒数。');
   }
   return value;
 }
@@ -210,11 +214,20 @@ class AutoSync {
         }
         if (failure.kind === 'rate') {
           this.error = failure.message; this.errorCode = failure.code;
-          this.cooldownUntil = Math.max(this.cooldownUntil, this.now() + Math.max(MIN_INTERVAL_MS, retryDelay(error, this.now())));
+          this.cooldownUntil = Math.max(this.cooldownUntil, this.now() + Math.max(RATE_LIMIT_MIN_MS, retryDelay(error, this.now())));
           this.plan(this.intervalMs, '正在遵守微博要求的限流等待时间。'); return;
         }
       }
-      this.emit(); return;
+      // A configure/start during the request may have armed a timer using the
+      // configuration time. Replace it after settlement so a late success
+      // cannot run again immediately, and transient failures retain backoff.
+      // A stopped/disabled controller must remain stopped; only its security
+      // failures and server cooldowns above survive the inactive generation.
+      if (this.active()) {
+        if (succeeded) this.plan(this.intervalMs);
+        else this.failed(error);
+      } else this.emit();
+      return;
     }
     if (succeeded) {
       this.lastSuccessAt = this.now(); this.error = ''; this.errorCode = ''; this.failures = 0; this.cooldownUntil = 0;
@@ -233,13 +246,13 @@ class AutoSync {
       this.blocked = failure.message; this.clear(); this.emit(); return;
     }
     this.failures++;
-    let delay = Math.min(MAX_BACKOFF_MS, MIN_INTERVAL_MS * 2 ** Math.min(this.failures - 1, 10));
+    let delay = Math.min(MAX_BACKOFF_MS, FAILURE_BASE_MS * 2 ** Math.min(this.failures - 1, 10));
     if (failure.kind === 'rate') {
-      delay = Math.max(delay, retryDelay(error, this.now()));
+      delay = Math.max(delay, RATE_LIMIT_MIN_MS, retryDelay(error, this.now()));
       this.cooldownUntil = Math.max(this.cooldownUntil, this.now() + delay);
     }
     this.plan(delay, failure.kind === 'rate' ? '正在遵守微博要求的限流等待时间。' : '等待下次自动重试。');
   }
 }
 
-module.exports = { AutoSync, MIN_INTERVAL_MS, MAX_INTERVAL_MS, BUSY_DELAY_MS, MAX_BACKOFF_MS };
+module.exports = { AutoSync, MIN_INTERVAL_MS, MAX_INTERVAL_MS, BUSY_DELAY_MS, MAX_BACKOFF_MS, FAILURE_BASE_MS, RATE_LIMIT_MIN_MS };

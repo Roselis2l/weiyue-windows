@@ -45,7 +45,7 @@
     else if (status.error) { text = `更新暂缓：${status.error}${next}`; tone = 'warning'; }
     else if (status.pausedReason) text = `自动更新等待中：${status.pausedReason}`;
     else if (status.running) text = '正在后台分批更新群聊，阅读位置保持不变。';
-    else text = `每 ${Math.round((status.intervalMs || 60000) / 1000)} 秒检查更新，离线积压分批续补${finiteTime(status.lastSuccessAt) ? ` · 上次 ${formatTime(status.lastSuccessAt)}` : ''}`;
+    else text = `本轮完成后 ${Math.round((status.intervalMs || 5000) / 1000)} 秒再检查，当前群优先；其他群约 ${Math.round((status.backgroundIntervalMs || 60000) / 1000)} 秒轮转${finiteTime(status.lastSuccessAt) ? ` · 上次 ${formatTime(status.lastSuccessAt)}` : ''}`;
     return {text,tone,toggleLabel};
   }
 

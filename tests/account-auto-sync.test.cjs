@@ -62,3 +62,18 @@ test('manual restrictions belong to the captured account controller across an in
  b.configure({enabled:true});assert.equal(b.assertAllowed(),true);
  assert.equal(a.cooldownUntil,until);
 });
+
+test('five-second defaults stay account-scoped while a short 429 retains a full-minute cooldown',()=>{
+ const f=setup(),a=f.registry.activate('A',f.make);
+ assert.equal(a.status().intervalMs,5000);assert.equal(a.status().nextRunAt,105000);
+ a.failed({status:429,retryAfter:'1'});const due=a.status().nextRunAt;
+ assert.equal(due,160000);
+ f.advance(1000);const b=f.registry.activate('B',f.make);
+ assert.equal(b.status().intervalMs,5000);assert.equal(b.status().nextRunAt,106000);
+ assert.equal(b.assertAllowed(),true);assert.equal(a.cooldownUntil,due);
+ f.advance(1000);f.registry.activate('A',f.make);
+ assert.equal(a.status().nextRunAt,due);assert.equal(f.timers.size,1);
+ assert.throws(()=>a.assertAllowed(),error=>error.code==='RATE_LIMIT'&&error.retryAfterMs===58000);
+ a.configure({enabled:false});a.configure({enabled:true,intervalMs:5000});
+ assert.equal(a.status().nextRunAt,due);assert.equal(b.started,false);
+});

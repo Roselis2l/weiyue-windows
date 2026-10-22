@@ -3,6 +3,12 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {groupStatus,automaticStatus,manualResult}=require('../app/renderer/sync-status.js');
 const pending={cursor:'9007199254741001',baselineId:'9007199254740001',arrivalAfterId:'9007199254740001'};
 
+test('fast foreground status distinguishes completion delay from background cadence',()=>{
+  const result=automaticStatus({enabled:true,intervalMs:5000,backgroundIntervalMs:60000,lastSuccessAt:100},{formatTime:()=> '12:00'});
+  assert.match(result.text,/本轮完成后 5 秒再检查/);assert.match(result.text,/当前群优先/);assert.match(result.text,/其他群约 60 秒轮转/);
+  assert.doesNotMatch(result.text,/每 5 秒|所有群/);
+});
+
 test('legacy pending is shown as unfinished without inventing totals or completed progress',()=>{
   const result=groupStatus({latestPending:pending});
   assert.equal(result.needsBackfill,true);assert.equal(result.actionLabel,'补齐离线消息');
