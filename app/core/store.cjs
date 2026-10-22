@@ -524,17 +524,21 @@ class Store {
     let offset = query.offset === undefined ? 0 : query.offset;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2000) fail('每页条数必须是 1 到 2000 的整数');
     if (!Number.isSafeInteger(offset) || offset < 0) fail('分页位置必须是非负整数');
-    const hasStart = own(query, 'startId'), hasAfter = own(query, 'afterId');
-    if (hasStart && hasAfter) fail('分页起点不能同时指定两种位置');
-    if (hasStart || hasAfter) {
+    const hasStart = own(query, 'startId'), hasAfter = own(query, 'afterId'), hasBefore = own(query, 'beforeId');
+    if ([hasStart, hasAfter, hasBefore].filter(Boolean).length > 1) fail('分页起点不能同时指定多种位置');
+    let end = offset + limit;
+    if (hasStart || hasAfter || hasBefore) {
       if (typeof query.groupId !== 'string' || !query.groupId.trim()) fail('按消息定位分页必须指定群聊');
-      const id = query[hasStart ? 'startId' : 'afterId'];
+      const id = query[hasStart ? 'startId' : hasAfter ? 'afterId' : 'beforeId'];
       if (typeof id !== 'string' || identifier(id, '分页消息 ID') !== id) fail('分页消息 ID 必须是规范字符串');
       const index = found.findIndex(message => message.id === id);
       if (index < 0) {const error = new Error('分页位置已不在当前筛选结果中，请重新打开当前阅读页。'); error.code = 'PAGE_ANCHOR_MISSING'; throw error;}
-      offset = index + (hasAfter ? 1 : 0);
+      // Keep ascending order and exclude the anchor when fetching preceding
+      // rows. Resolve against the complete filtered list, never an old offset.
+      offset = hasBefore ? Math.max(0, index - limit) : index + (hasAfter ? 1 : 0);
+      end = hasBefore ? index : offset + limit;
     }
-    return { messages: found.slice(offset, offset + limit), total: found.length, ...(hasStart || hasAfter ? {offset} : {}) };
+    return { messages: found.slice(offset, end), total: found.length, ...(hasStart || hasAfter || hasBefore ? {offset} : {}) };
   }
   previewMessageCleanup(accountId, selection) {
     return messageCleanup.previewMessageCleanup(this.get(accountId), selection);

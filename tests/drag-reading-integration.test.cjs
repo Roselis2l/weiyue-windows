@@ -48,6 +48,7 @@ class Element extends Surface {
     this.selectors = new Set(selectors);
   }
   matches(query) { return query.split(',').some(selector => this.selectors.has(selector.trim())); }
+  closest(query) {return this.matches(query)?this:null;}
 }
 
 function harness() {
@@ -59,7 +60,7 @@ function harness() {
   Object.assign(win, {WeiyueDragScroll: drag, innerWidth: 1200, innerHeight: 900,
     performance: {now: () => now}, setTimeout, clearTimeout,
     getSelection: () => ({removeAllRanges: () => events.push({at: now, type: 'selection-clear'})})});
-  const document = {visibilityState: 'visible', hasFocus: () => true, defaultView: win};
+  const document = Object.assign(new Surface(),{visibilityState: 'visible', hasFocus: () => true, defaultView: win});
   const scroll = new Element();
   Object.assign(scroll, {scrollTop: 100, offsetWidth: 200, clientWidth: 190, clientHeight: 400, scrollHeight: 1000,
     ownerDocument: document, isConnected: true, getBoundingClientRect: () => ({top: 0, bottom: 400, right: 200})});
@@ -73,7 +74,7 @@ function harness() {
     scrollTop: 100, restoring: false, restoreFrame: null, pointerScrolling: false, touchY: null, readTimer: null, viewport: null,
     switching: false, closing: false, readWrite: Promise.resolve(), lastReadPayload: '', pointerReading: null,
     readingActivity: null, readingCommits: new Map(), pendingReadingRefresh: null, pendingReadingTimer: null,
-    refreshRunning: false, searchEditor: null, readNavigation: null,
+    refreshRunning: false, searchEditor: null, readNavigation: null,pagingGestureSequence:0,
     filters: {keyword: '', senderIds: [], start: '', end: '', importantOnly: false}};
   const measuredMessages = () => rows.map(row => ({...row, top: row.top - scroll.scrollTop, bottom: row.bottom - scroll.scrollTop}));
   const api = async (name, payload) => {

@@ -15,11 +15,22 @@ test('stable local boundaries retain exact large string IDs and old offset-only 
  const next=h.query({afterId:ids[4],offset:999,limit:3});assert.equal(next.offset,5);assert.deepEqual(next.messages.map(m=>m.id),ids.slice(5,8));
  const first=h.query({startId:ids[4],limit:1});assert.equal(first.offset,4);assert.equal(first.messages[0].id,ids[4]);
  assert.deepEqual(h.query({afterId:ids.at(-1),limit:160}),{messages:[],total:12,offset:12});
+ const previous=h.query({beforeId:ids[7],offset:999,limit:3});assert.equal(previous.offset,4);assert.deepEqual(previous.messages.map(m=>m.id),ids.slice(4,7));
+ assert.deepEqual(h.query({beforeId:ids[0],limit:160}),{messages:[],total:12,offset:0});
+ const short=h.query({beforeId:ids[2],limit:160});assert.equal(short.offset,0);assert.deepEqual(short.messages.map(m=>m.id),ids.slice(0,2));
 });
 test('history inserted before and within the loaded window never skips the stable next message',t=>{
  const h=fixture(t),last=h.messages[5];
  h.store.mergeMessages('synthetic',[],[{...last,id:'early',time:1},{...last,id:'inside',time:1025},{...last,id:'after',time:1055}],{history:true});
  const result=h.query({afterId:last.id,limit:2});assert.equal(result.offset,8);assert.deepEqual(result.messages.map(m=>m.id),['after',h.messages[6].id]);
+});
+test('preceding query resolves the current stable boundary after historical insertion and never includes its anchor',t=>{
+ const h=fixture(t),anchor=h.messages[5];
+ h.store.mergeMessages('synthetic',[],[{...anchor,id:'early',time:1},{...anchor,id:'inside',time:1035},{...anchor,id:'adjacent',time:1045}],{history:true});
+ const result=h.query({beforeId:anchor.id,offset:5,limit:3});
+ assert.equal(result.offset,5);assert.equal(result.total,15);assert.deepEqual(result.messages.map(m=>m.id),['inside',h.messages[4].id,'adjacent']);
+ assert.equal(result.offset+result.messages.length,8,'current anchor index includes inserted history instead of the stale numeric offset');
+ assert.ok(result.messages.every(m=>m.id!==anchor.id));
 });
 test('boundaries operate inside keyword/member/date/important filters and their requested group only',t=>{
  const h=fixture(t),id=h.messages[4].id;
@@ -28,17 +39,35 @@ test('boundaries operate inside keyword/member/date/important filters and their 
  const result=h.query({afterId:id,keyword:'match',senderIds:['a'],start:1020,end:1090,importantOnly:true,limit:2});
  assert.equal(result.offset,2);assert.deepEqual(result.messages.map(m=>m.id),[h.messages[6].id,h.messages[8].id]);
  assert.throws(()=>h.query({afterId:h.messages[3].id,keyword:'match'}),error=>error.code==='PAGE_ANCHOR_MISSING');
+ const previous=h.query({beforeId:h.messages[8].id,keyword:'match',senderIds:['a'],start:1020,end:1090,importantOnly:true,limit:2});
+ assert.equal(previous.offset,1);assert.equal(previous.total,4);assert.deepEqual(previous.messages.map(m=>m.id),[h.messages[4].id,h.messages[6].id]);
+ assert.throws(()=>h.query({beforeId:h.messages[3].id,keyword:'match'}),error=>error.code==='PAGE_ANCHOR_MISSING');
+ assert.throws(()=>h.query({beforeId:h.messages[8].id,groupId:'other'}),error=>error.code==='PAGE_ANCHOR_MISSING','another group cannot satisfy the boundary');
 });
 test('mutually exclusive, malformed and missing boundaries fail without mutating local records',t=>{
  const h=fixture(t),before=JSON.stringify(h.store.get('synthetic')),id=h.messages[0].id;
- for(const p of [{startId:id,afterId:id},{afterId:1},{afterId:' '+id},{afterId:''},{startId:null},{afterId:{}},{afterId:id,limit:2001},{afterId:id,offset:-1},{afterId:id,groupId:undefined}])assert.throws(()=>h.query(p));
+ for(const p of [{startId:id,afterId:id},{afterId:1},{afterId:' '+id},{afterId:''},{startId:null},{afterId:{}},{afterId:id,limit:2001},{afterId:id,offset:-1},{afterId:id,groupId:undefined},
+  {beforeId:id,startId:id},{beforeId:id,afterId:id},{beforeId:id,startId:id,afterId:id},{beforeId:1},{beforeId:null},{beforeId:''},{beforeId:' '+id},{beforeId:{}},
+  {beforeId:id,limit:0},{beforeId:id,limit:2001},{beforeId:id,offset:-1},{beforeId:id,groupId:undefined}])assert.throws(()=>h.query(p));
+ assert.equal(JSON.stringify(h.store.get('synthetic')),before,'malformed boundaries do not mutate data');
  h.store.update('synthetic',s=>{s.messages=s.messages.filter(m=>m.id!==id);});
  const deleted=JSON.stringify(h.store.get('synthetic'));assert.throws(()=>h.query({afterId:id}),error=>error.code==='PAGE_ANCHOR_MISSING');
+ assert.throws(()=>h.query({beforeId:id}),error=>error.code==='PAGE_ANCHOR_MISSING');
  assert.equal(JSON.stringify(h.store.get('synthetic')),deleted);assert.notEqual(deleted,before);
 });
 test('same-time large IDs page by stored exact numeric ordering without precision loss',t=>{
  const h=fixture(t);h.store.update('synthetic',s=>{for(const m of s.messages)m.time=1000;});
  assert.deepEqual(h.query({afterId:h.messages[7].id,limit:2}).messages.map(m=>m.id),[h.messages[8].id,h.messages[9].id]);
+ assert.deepEqual(h.query({beforeId:h.messages[7].id,limit:2}).messages.map(m=>m.id),[h.messages[5].id,h.messages[6].id]);
+});
+test('preceding queries leave saved reading high-water, viewport, unread IDs and account file bytes unchanged',t=>{
+ const h=fixture(t),ids=h.messages.map(m=>m.id);
+ h.store.setReadPosition('synthetic','g',ids[8],{offset:37,followTail:false,seenId:ids[8]});
+ const before=h.store.get('synthetic'),bytes=fs.readFileSync(h.store._file('synthetic'));
+ for(const anchor of [ids[0],ids[3],ids[8],ids[11]])h.query({beforeId:anchor,limit:3});
+ assert.deepEqual(h.store.get('synthetic'),before);
+ assert.ok(fs.readFileSync(h.store._file('synthetic')).equals(bytes));
+ assert.equal(before.readStates.g.readThroughId,ids[8]);assert.equal(before.readStates.g.anchorId,ids[8]);assert.equal(before.readStates.g.anchorOffset,37);
 });
 test('window refresh keeps all appended rows, old trailing anchor and a consistent revision across bounded chunks',async()=>{
  const rows=Array.from({length:4600},(_,i)=>({id:String(i),time:i})),calls=[];

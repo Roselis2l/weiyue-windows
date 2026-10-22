@@ -27,7 +27,7 @@ const model = {
   pending: new Set(), toastTimer: null, saveNote: '', saveTags: '', accountEpoch: 0, switching: false,
   modalCloseHandler: null, viewport: null, restoring: false, restoreFrame: null,
   renderedReading: null, readBoundary: null, layoutVersion: 0, intentVersion: 0, scrollTop: 0, pointerScrolling: false, touchY: null,
-  pointerReading: null, messageDrag: null, readingActivity: null, readingCommits: new Map(), pendingReadingRefresh: null, pendingReadingTimer: null,
+  pointerReading: null, messageDrag: null, readingInput: null, pagingGestureSequence: 0, readingActivity: null, readingCommits: new Map(), pendingReadingRefresh: null, pendingReadingTimer: null,
   messageObserver: null, drafts: new Map(), readWrite: Promise.resolve(), lastReadPayload: '',
   syncStatus: null, syncRevision: null, polling: false, pollTimer: null, refreshRunning: false, manualSync: false,
   messageSignatures: new Map(), closing: false, enrichmentAttempted: new Set(), enrichmentErrors: new Map(), enriching: false, enrichmentRetryTimer: null
@@ -36,7 +36,7 @@ const readIntent = reading.createReadIntentGate();
 const autoPage = window.WeiyueAutoPage.createAutoPager({
   snapshot: autoPageSnapshot, load: loadNextLocalPage, apply: appendLocalPage,
   onState: () => {updateAutoPageChrome();scheduleReadingRefresh();},
-  onError: () => toast('后续消息加载失败，请再次向下滚动或点击“更多消息”重试。',true),
+  onError: () => toast(autoPage.status().direction<0?'更早消息加载失败，请再次向上滚动或点击“更早一页”重试。':'后续消息加载失败，请再次向下滚动或点击“更多消息”重试。',true),
   now: () => performance.now()
 });
 const loginFlow = {
@@ -266,40 +266,54 @@ function autoPageSnapshot() {
   const scroll=$('message-scroll');
   return {key:autoPageKey(),enabled:!!scroll && isCurrentReadingRendered() && !model.switching && !model.closing && document.visibilityState==='visible' && document.hasFocus(),
     blocked:model.restoring || model.refreshRunning || searchEditing() || !!model.readNavigation || !!model.searchEditor?.memberPicker?.isInteracting() || !!model.messageDrag?.isDragging() || !!$('modal')?.open,
-    atBottom:!!scroll && window.WeiyueAutoPage.isAtBottom(scroll),offset:model.offset,count:model.messages.length,total:model.total,pageSize:model.limit};
+    atTop:!!scroll && window.WeiyueAutoPage.isAtTop(scroll),atBottom:!!scroll && window.WeiyueAutoPage.isAtBottom(scroll),offset:model.offset,count:model.messages.length,total:model.total,pageSize:model.limit};
 }
 async function loadNextLocalPage(snapshot) {
   const last=model.messages.at(-1),first=model.messages[0];
-  const result=await api('messages.query',{...queryPayload(),...(last?{afterId:String(last.id)}:{offset:snapshot.offset}),limit:snapshot.pageSize});
+  const previous=snapshot.direction<0;
+  const boundary=previous?(first?{beforeId:String(first.id)}:{offset:0}):(last?{afterId:String(last.id)}:{offset:snapshot.offset});
+  const result=await api('messages.query',{...queryPayload(),...boundary,limit:snapshot.pageSize});
   // A stable boundary is resolved against the same complete filtered list in
   // the store. Never use an unfiltered locate offset for filtered pagination.
-  if(first && result.offset!==snapshot.offset+snapshot.count){queueReadingRefresh();throw new Error('分页位置已更新，请重试');}
+  if(first && (previous?result.offset+result.messages.length!==snapshot.offset:result.offset!==snapshot.offset+snapshot.count)){queueReadingRefresh();throw new Error('分页位置已更新，请重试');}
   return result;
 }
-function appendLocalPage(result) {
+function appendLocalPage(result,snapshot={direction:1}) {
   const scroll=$('message-scroll'),space=$('reading-end-space');if(!scroll || !space)return;
+  const previous=snapshot.direction<0;
   const seen=new Set(model.messages.map(message=>String(message.id)));
   const added=(result.messages || []).filter(message=>!seen.has(String(message.id)) && seen.add(String(message.id)));
-  if(!added.length && model.offset+model.messages.length<result.total)throw new Error('后续消息尚未加载，请重试');
+  if(added.length!==result.messages.length || !added.length && (previous?model.offset>0:model.offset+model.messages.length<result.total))throw new Error('消息分页尚未完整加载，请重试');
   const anchor=captureViewport() || model.viewport;
   model.messageObserver?.disconnect();
   // Inserting only new siblings preserves native selection and selected tools.
-  let day=model.messages.length?new Date(model.messages.at(-1).time).toDateString():'';
+  const insertion=previous?scroll.firstChild:space;
+  let day=!previous && model.messages.length?new Date(model.messages.at(-1).time).toDateString():'';
   for(const message of added){
     const next=new Date(message.time).toDateString();
-    if(next!==day){scroll.insertBefore(node('div',{class:'day-divider','data-day':next},dateLabel(message.time)),space);day=next;}
-    const element=messageCard(message);scroll.insertBefore(element,space);model.messageSignatures.set(String(message.id),messageSignature(message));
+    if(next!==day){scroll.insertBefore(node('div',{class:'day-divider','data-day':next},dateLabel(message.time)),insertion);day=next;}
+    const element=messageCard(message);scroll.insertBefore(element,insertion);model.messageSignatures.set(String(message.id),messageSignature(message));
   }
-  model.messages.push(...added);model.total=result.total;
+  if(previous){
+    if(added.length && insertion?.classList.contains('day-divider') && insertion.dataset.day===day)insertion.remove();
+    model.messages.unshift(...added);model.offset=result.offset;
+  }else model.messages.push(...added);
+  model.total=result.total;
   // Restoring by the first visible ID and its measured offset also revokes the
   // old gesture's read permission. Newly appended rows require fresh reading.
   restoreViewport(anchor);watchMessageSizes();updateReadChrome();scheduleRead();
 }
 function updateAutoPageChrome() {
-  const status=autoPage.status(),scroll=$('message-scroll'),next=$('next-page');
+  const status=autoPage.status(),scroll=$('message-scroll'),next=$('next-page'),previous=$('previous-page');
   const ended=model.offset+model.messages.length>=model.total;
   if(scroll){scroll.dataset.autoPageState=status.loading?'loading':status.state==='error'?'error':ended?'end':'idle';scroll.setAttribute('aria-busy',String(status.loading));}
-  if(next){next.disabled=status.loading || ended;next.textContent=status.loading?'正在加载后续消息…':status.state==='error'?'重试更多消息 ↓':'更多消息 ↓';next.title=status.loading?'正在加载后续消息':status.state==='error'?'加载失败，再次向下滚动或点击重试':'查看后续消息；滑动到底部也会自动加载';}
+  for(const [button,direction,end] of [[previous,-1,model.offset===0],[next,1,ended]]){
+    if(!button)continue;
+    const loading=status.loading && status.direction===direction,failed=status.state==='error' && status.direction===direction;
+    button.disabled=status.loading || end;
+    button.textContent=direction<0?(loading?'正在加载更早消息…':failed?'↑ 重试更早消息':'↑ 更早一页'):(loading?'正在加载后续消息…':failed?'重试更多消息 ↓':'更多消息 ↓');
+    button.title=loading?'正在加载本地消息':failed?'加载失败，继续向相应方向滚动或点击重试':direction<0?'查看更早消息；滚动或使用上下翻页键到顶部也会自动加载':'查看后续消息；滚动或使用上下翻页键到底部也会自动加载';
+  }
 }
 async function loadReading(restore=false, targetId=null, request=null) {
   if(request && !request.active())return;
@@ -399,6 +413,7 @@ async function drainReadingRefresh() {
 function resetReadCandidate() {model.intentVersion++;readIntent.reset();clearTimeout(model.readTimer);model.readingActivity=null;}
 function invalidateReadingIntent() {
   clearTimeout(model.pagingWheelTimer);model.pagingWheel=null;
+  model.readingInput?.cancel();
   autoPage.cancelIntent();
   model.messageDrag?.cancel();
   resetReadCandidate();model.pointerScrolling=false;model.pointerReading=null;model.touchY=null;
@@ -414,6 +429,7 @@ function updateReadingSpace() {
 function restoreViewport(anchor) {
   const scroll=$('message-scroll');if(!scroll || !isCurrentReadingRendered())return;
   clearTimeout(model.pagingWheelTimer);model.pagingWheel=null;
+  model.readingInput?.cancel();
   autoPage.cancelIntent();
   model.messageDrag?.cancel();
   // A genuine image/viewport resize invalidates the old visible candidate, but
@@ -819,9 +835,18 @@ async function enrichVisibleMessages() {
 function selectionBar() { return node('div',{id:'selection-bar',class:'selection-bar',hidden:!model.selected.size},node('span',{},`已选择 ${model.selected.size} 条消息`),button('整理收藏',()=>{renderInspector();$('app').classList.add('show-inspector');$('bookmark-note')?.focus();},'primary small'),button('取消',()=>{model.selected.clear();updateSelection();},'text small')); }
 function updateSelection() { document.querySelectorAll('[data-message-id]').forEach(el=>{const yes=model.selected.has(el.dataset.messageId);el.classList.toggle('chosen',yes);el.querySelector('input[type=checkbox]').checked=yes;const action=el.querySelector('[data-action="bookmark-message"]');if(action)updateBookmarkAction(action,el.querySelector('.sender-name')?.textContent || '',yes);});const bar=$('selection-bar');if(bar)bar.replaceWith(selectionBar());renderInspector(); }
 function bindReadingInput(scroll) {
+  model.readingInput?.dispose();
   model.messageDrag?.dispose();model.messageDrag=null;
-  let dragSequence=0,dragDirection=0,dragTrusted=false;
-  const pageIntent=(event,kind,gestureId)=>autoPage.intent({trusted:event.isTrusted===true,kind,direction:event.deltaY ?? dragDirection,
+  let dragSequence=0,dragDirection=0,dragTrusted=false,hoverTarget=null;
+  const listeners=[],heldKeys=new Map();
+  const listen=(target,name,listener,options)=>{target.addEventListener(name,listener,options);listeners.push(()=>target.removeEventListener(name,listener,options));};
+  const current=()=>scroll===$('message-scroll') && isCurrentReadingRendered() && !model.switching && !model.closing && !$('modal').open && document.visibilityState==='visible' && document.hasFocus();
+  const interactive=target=>target instanceof Element && (target.isContentEditable || !!target.closest('input,textarea,select,option,button,a[href],summary,video,audio,dialog,[role="dialog"],[role="combobox"],[role="listbox"],[role="menu"],[role="slider"],[contenteditable]:not([contenteditable="false"])'));
+  const nextGesture=()=>`${readingOwner()}:${++model.pagingGestureSequence}`;
+  const geometry=direction=>({scroll,direction,owner:readingOwner(),layout:model.layoutVersion,height:scroll.scrollHeight,clientHeight:scroll.clientHeight});
+  const cancel=()=>{model.pagingKeyboard=null;model.pagingPointer=null;autoPage.cancelIntent();};
+  model.readingInput={cancel,dispose:()=>{listeners.splice(0).forEach(remove=>remove());heldKeys.clear();hoverTarget=null;cancel();}};
+  const pageIntent=(event,kind,gestureId,direction=event.deltaY ?? dragDirection)=>autoPage.intent({trusted:event.isTrusted===true,kind,direction,
     gestureId,modified:!!(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)});
   const arm=event=>{
     if(!event.isTrusted || !canAdvanceRead() || hasFilters())return false;
@@ -836,35 +861,65 @@ function bindReadingInput(scroll) {
     scheduleRead();
     return true;
   };
-  scroll.addEventListener('wheel',event=>{
-    if(event.deltaY>0)arm(event);else invalidateReadingIntent();
+  listen(scroll,'wheel',event=>{
+    if(!current() || !event.isTrusted || !event.deltaY || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.target instanceof Element && event.target.closest('input,textarea,select,video,audio,[contenteditable]:not([contenteditable="false"])'))return;
+    if(event.deltaY>0)arm(event);else resetReadCandidate();
+    model.pagingKeyboard=null;
     clearTimeout(model.pagingWheelTimer);model.pagingWheel=null;
-    if(event.isTrusted && event.deltaY>0 && !(event.ctrlKey || event.metaKey || event.altKey || event.shiftKey)){
-      const token={scroll,owner:readingOwner(),layout:model.layoutVersion,height:scroll.scrollHeight,clientHeight:scroll.clientHeight,until:performance.now()+250};
-      model.pagingWheel=token;
-      // Chromium's native wheel animation spans several frames. The timer only
-      // revokes input; loading is driven by its actual downward scroll below.
-      model.pagingWheelTimer=setTimeout(()=>{if(model.pagingWheel===token){model.pagingWheel=null;autoPage.cancelIntent();}},250);
-    }
+    const token={...geometry(Math.sign(event.deltaY)),until:performance.now()+250};model.pagingWheel=token;
+    // A native wheel animation spans several frames. Geometry changes revoke
+    // this short-lived intent rather than loading because an image resized.
+    model.pagingWheelTimer=setTimeout(()=>{if(model.pagingWheel===token){model.pagingWheel=null;autoPage.cancelIntent();}},250);
     pageIntent(event,'wheel');
   },{passive:true});
-  scroll.addEventListener('keydown',event=>{
-    if(event.target!==scroll || event.ctrlKey || event.metaKey || event.altKey)return;
-    if(['ArrowDown','PageDown','End',' '].includes(event.key) && !event.shiftKey)arm(event);
-    else if(['ArrowUp','PageUp','Home'].includes(event.key) || event.key===' ' && event.shiftKey)invalidateReadingIntent();
+  listen(scroll,'pointerenter',event=>{if(event.isTrusted)hoverTarget=event.target;});
+  listen(scroll,'pointerleave',()=>{hoverTarget=null;});
+  listen(document,'keydown',event=>{
+    const direction=['PageUp','ArrowUp'].includes(event.key)?-1:['PageDown','ArrowDown'].includes(event.key)?1:0;
+    if(!direction || !event.isTrusted || event.defaultPrevented || event.isComposing || event.keyCode===229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !current())return;
+    const active=document.activeElement,safeRoot=target=>target===document.body || target===document.documentElement;
+    // A focused control in any pane keeps its keys. Body focus can use the
+    // reading pane only while the pointer is actually over non-interactive chat.
+    if(interactive(event.target) || interactive(active) || !(active===scroll && event.target===scroll || safeRoot(active) && safeRoot(event.target) && hoverTarget && !interactive(hoverTarget)))return;
+    event.preventDefault();
+    let gesture=heldKeys.get(event.key);
+    if(!gesture){if(event.repeat)return;gesture={id:nextGesture(),owner:readingOwner()};heldKeys.set(event.key,gesture);}
+    if(gesture.owner!==readingOwner())return;
+    if(direction>0)arm(event);else resetReadCandidate();
+    clearTimeout(model.pagingWheelTimer);model.pagingWheel=null;
+    const token={...geometry(direction),until:performance.now()+250};model.pagingKeyboard=token;
+    pageIntent(event,'keyboard',gesture.id,direction);
+    const step=event.key.startsWith('Page')?Math.max(40,scroll.clientHeight-40):40;
+    scroll.scrollTop=Math.max(0,Math.min(scroll.scrollHeight-scroll.clientHeight,scroll.scrollTop+direction*step));
+    handleReadingScroll();
   });
-  scroll.addEventListener('pointerdown',event=>{
+  listen(document,'keyup',event=>{heldKeys.delete(event.key);if(!heldKeys.size)model.pagingKeyboard=null;});
+  listen(window,'blur',()=>{heldKeys.clear();hoverTarget=null;cancel();});
+  listen(scroll,'keydown',event=>{
+    if(event.target!==scroll || event.ctrlKey || event.metaKey || event.altKey)return;
+    if(['End',' '].includes(event.key) && !event.shiftKey)arm(event);
+    else if(event.key==='Home' || event.key===' ' && event.shiftKey)invalidateReadingIntent();
+  });
+  listen(scroll,'pointerdown',event=>{
     // Only a native scrollbar drag grants scroll intent; clicking message tools does not.
     const bounds=scroll.getBoundingClientRect();
-    if(event.button===0 && event.target===scroll && event.clientX>=bounds.right-(scroll.offsetWidth-scroll.clientWidth)-2){
+    if(event.isTrusted && current() && event.button===0 && event.target===scroll && event.clientX>=bounds.right-(scroll.offsetWidth-scroll.clientWidth)-2){
       model.pointerScrolling=arm(event);model.pointerReading=model.pointerScrolling?{owner:readingOwner(),scroll}:null;
+      model.pagingPointer={...geometry(0),gestureId:nextGesture(),trusted:true};
     }
     if(event.pointerType==='touch')model.touchY=event.clientY;
   });
-  scroll.addEventListener('pointermove',event=>{
+  listen(scroll,'pointermove',event=>{
+    if(event.isTrusted)hoverTarget=event.target;
     if(event.pointerType==='touch' && model.touchY!==null){if(event.clientY<model.touchY)arm(event);model.touchY=event.clientY;}
     else if(model.pointerScrolling && event.buttons)arm(event);
   });
+  const releasePointer=event=>{
+    const token=model.pagingPointer;model.pagingPointer=null;
+    if(token && event.isTrusted && current() && token.direction && pagingGeometryMatches(token,scroll))pageIntent(event,'drag',token.gestureId,token.direction);
+  };
+  listen(window,'pointerup',releasePointer);listen(window,'mouseup',releasePointer);
+  listen(window,'pointercancel',()=>{model.pagingPointer=null;autoPage.cancelIntent();});
   model.messageDrag=window.WeiyueDragScroll?.attach(scroll,{
     isCurrent:()=>scroll===$('message-scroll') && isCurrentReadingRendered() && !model.switching && !model.closing && !$('modal').open,
     canStart:event=>{
@@ -874,7 +929,7 @@ function bindReadingInput(scroll) {
       return target instanceof Element && (target===scroll || target.matches('.message,.message-copy,.message-top,#reading-end-space')) &&
         event.clientX<bounds.right-(scroll.offsetWidth-scroll.clientWidth)-2;
     },
-    onStart:()=>{dragSequence++;dragDirection=0;dragTrusted=false;scroll.classList.add('is-dragging');window.getSelection()?.removeAllRanges();},
+    onStart:()=>{dragSequence=nextGesture();dragDirection=0;dragTrusted=false;scroll.classList.add('is-dragging');window.getSelection()?.removeAllRanges();},
     onIntent:(event,{direction})=>{dragDirection=direction;dragTrusted=event.isTrusted===true;},
     beforeMove:(event,{from,to})=>{if(to>from)arm(event);else if(to<from)resetReadCandidate();},
     onEnd:({cancelled})=>{
@@ -884,11 +939,14 @@ function bindReadingInput(scroll) {
       if(cancelled){resetReadCandidate();scheduleRead();}
       // Release completes this physical gesture, including a clamped short page.
       // A stable token grants at most one append after any duration of holding.
-      if(!cancelled)pageIntent({isTrusted:dragTrusted},'drag',`${readingOwner()}:${dragSequence}`);
+      if(!cancelled)pageIntent({isTrusted:dragTrusted},'drag',dragSequence);
       else autoPage.cancelIntent();
       scheduleReadingRefresh();
     }
   }) || null;
+}
+function pagingGeometryMatches(token,scroll) {
+  return token.scroll===scroll && token.owner===readingOwner() && token.layout===model.layoutVersion && token.height===scroll.scrollHeight && token.clientHeight===scroll.clientHeight && (token.until===undefined || performance.now()<=token.until);
 }
 function handleReadingScroll() {
   const scroll=$('message-scroll');if(!scroll || model.restoring || !isCurrentReadingRendered())return;
@@ -902,11 +960,14 @@ function handleReadingScroll() {
     readIntent.arm(readingContext(),model.scrollTop,performance.now(),true);model.readingActivity={owner:readingOwner()};
   }
   const candidate=canAdvanceRead() && !hasFilters()?readIntent.scroll(readingContext(),scroll.scrollTop,performance.now(),model.viewport?.readThroughId):null;
-  const wheel=model.pagingWheel,downward=scroll.scrollTop>model.scrollTop;
+  const direction=scroll.scrollTop>model.scrollTop?1:-1;
   model.scrollTop=scroll.scrollTop;updateReadChrome();scheduleRead(candidate);
-  if(wheel){
-    if(wheel.scroll!==scroll || wheel.owner!==readingOwner() || wheel.layout!==model.layoutVersion || wheel.height!==scroll.scrollHeight || wheel.clientHeight!==scroll.clientHeight || performance.now()>wheel.until){model.pagingWheel=null;autoPage.cancelIntent();}
-    else if(downward)autoPage.observe();
+  const pointer=model.pagingPointer;
+  if(pointer){if(pagingGeometryMatches(pointer,scroll))pointer.direction=direction;else model.pagingPointer=null;}
+  for(const field of ['pagingWheel','pagingKeyboard']){
+    const token=model[field];if(!token)continue;
+    if(!pagingGeometryMatches(token,scroll)){model[field]=null;autoPage.cancelIntent();}
+    else if(direction===token.direction)autoPage.observe();
   }
 }
 function canAdvanceRead() {return isCurrentReadingRendered() && !searchEditing() && !model.searchEditor?.memberPicker?.isInteracting() && !model.readNavigation && document.visibilityState==='visible' && document.hasFocus() && !$('modal').open && !model.switching;}

@@ -34,9 +34,9 @@ function harness(){
     switching:false,readWrite:Promise.resolve(),lastReadPayload:'',messages:initial.slice(),messageSignatures:new Map(),
     pointerReading:null,readingActivity:null,readingCommits:new Map(),pendingReadingRefresh:null,pendingReadingTimer:null,
     offset:0,limit:160,total:2,refreshRunning:false,members:[],filters:null,
-    searchEditor:null,filterReturn:null,readNavigation:null};
+    searchEditor:null,filterReturn:null,readNavigation:null,pagingGestureSequence:0};
   const scroll={scrollTop:100,offsetWidth:100,clientWidth:90,clientHeight:400,scrollHeight:1000,childNodes:[],dataset:{},setAttribute(){},
-    getBoundingClientRect:()=>({top:0,bottom:400,right:200}),addEventListener:(name,callback)=>listeners[name]=callback,
+    getBoundingClientRect:()=>({top:0,bottom:400,right:200}),addEventListener:(name,callback)=>listeners[name]=callback,removeEventListener(){},
     querySelectorAll(selector){return this.childNodes.filter(n=>selector==='[data-message-id]'?n.dataset.messageId:selector==='[data-day]'?n.dataset.day:false);},
     insertBefore(child,cursor){const old=this.childNodes.indexOf(child);if(old>=0)this.childNodes.splice(old,1);const index=cursor?this.childNodes.indexOf(cursor):-1;if(index<0)this.childNodes.push(child);else this.childNodes.splice(index,0,child);}};
   Object.defineProperty(scroll,'firstChild',{get:()=>scroll.childNodes[0]||null});
@@ -51,7 +51,7 @@ function harness(){
   scroll.childNodes=[...initial.map(card),space];
   initial.forEach(m=>model.messageSignatures.set(m.id,JSON.stringify(m)));
   const captureItems=()=>scroll.querySelectorAll('[data-message-id]').map(el=>({...rows.get(el.dataset.messageId),...el.getBoundingClientRect()}));
-  const document={visibilityState:'visible',hasFocus:()=>true};
+  const document={visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}};
   const modal={open:false};
   const api=async(name,payload)=>{
     if(name==='read.set'){writes.push(JSON.parse(JSON.stringify(payload)));events.push({at:now,type:'read.set',payload:{...payload}});if(commitBarrier)await commitBarrier;return{readState:{readThroughId:payload.readThroughId||model.state.readStates[payload.groupId].readThroughId}};}
@@ -67,7 +67,7 @@ function harness(){
     if(name==='members.list')return[];
     throw Error('Unexpected fake IPC '+name);
   };
-  const context=vm.createContext({model,reading,filters,readIntent:reading.createReadIntentGate(),document,api,
+  const context=vm.createContext({model,reading,filters,readIntent:reading.createReadIntentGate(),document,api,Element:class {},
     $:id=>id==='message-scroll'?scroll:id==='reading-end-space'?space:id==='modal'?modal:null,
     performance:{now:()=>now},setTimeout:(callback,delay)=>{const id=next++;timers.set(id,{callback,due:now+delay});return id;},clearTimeout:id=>timers.delete(id),
     requestAnimationFrame:callback=>{const id=next++;frames.set(id,callback);return id;},cancelAnimationFrame:id=>frames.delete(id),
@@ -77,7 +77,7 @@ function harness(){
     renderSidebar:()=>events.push({at:now,type:'sidebar'}),renderHeader:()=>events.push({at:now,type:'header'}),
     messageSignature:JSON.stringify,messageCard:card,node:(_tag,props)=>element(props?.['data-day']?{day:props['data-day']}:{}),
     dateLabel:()=>'',emptyState:()=>element(),locateReadBoundary:async()=>null,
-    window:{WeiyueAutoPage:paging,addEventListener:(name,callback)=>windowListeners[name]=callback},scroll});
+    window:{WeiyueAutoPage:paging,addEventListener:(name,callback)=>{const previous=windowListeners[name];windowListeners[name]=event=>{previous?.(event);callback(event);};},removeEventListener(){}},scroll});
   vm.runInContext(extracted+section('const autoPage =','const loginFlow =')+';model.filters=emptyFilters();bindReadingInput(scroll);',context);
   const run=code=>vm.runInContext(code,context);
   async function settle(waitWrites=true){for(let i=0;i<16;i++)await Promise.resolve();if(waitWrites)await model.readWrite;}
@@ -88,7 +88,7 @@ function harness(){
   function frame(){const pending=[...frames.values()];frames.clear();for(const cb of pending)cb();snapshot('restore-frame');}
   async function refresh(waitWrites=true){await run('refreshReadingIncrementally()');frame();await settle(waitWrites);snapshot('same-group-refresh');}
   return{model,writes,events,rows,document,modal,run,tick,settle,down,move,frame,refresh,snapshot,
-    release:()=>windowListeners.pointerup(),blur:()=>windowListeners.blur(),arrive:()=>backend.push({id:'M3',time:2}),
+    release:()=>windowListeners.pointerup({isTrusted:true}),blur:()=>windowListeners.blur({isTrusted:true}),arrive:()=>backend.push({id:'M3',time:2}),
     blockQuery(){let release;queryBarrier=new Promise(r=>release=r);return()=>{queryBarrier=null;release();};},
     blockCommit(){let release;commitBarrier=new Promise(r=>release=r);return()=>{commitBarrier=null;release();};},
     readIds:()=>writes.filter(p=>p.readThroughId).map(p=>p.readThroughId)};

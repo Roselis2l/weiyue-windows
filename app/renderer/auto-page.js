@@ -6,31 +6,40 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
   const WHEEL_GAP_MS = 250, INTENT_MS = 1200;
-  function isAtBottom({scrollTop, scrollHeight, clientHeight} = {}, threshold = 24) {
+  function isAtTop({scrollTop, scrollHeight, clientHeight} = {}, threshold = 2) {
+    if (![scrollTop, scrollHeight, clientHeight, threshold].every(Number.isFinite) ||
+        scrollTop < 0 || scrollHeight < 0 || clientHeight <= 0 || threshold < 0) return false;
+    return scrollTop <= threshold;
+  }
+  function isAtBottom({scrollTop, scrollHeight, clientHeight} = {}, threshold = 2) {
     if (![scrollTop, scrollHeight, clientHeight, threshold].every(Number.isFinite) ||
         scrollTop < 0 || scrollHeight < 0 || clientHeight <= 0 || threshold < 0) return false;
     return scrollHeight - clientHeight - scrollTop <= threshold;
   }
   function createAutoPager({snapshot, load, apply, onState = () => {}, onError = () => {}, now = Date.now}) {
     if (![snapshot, load, apply, onState, onError, now].every(value => typeof value === 'function')) throw new TypeError('Invalid paging callbacks');
-    let generation = 0, pending = null, armed = null, state = 'idle', error = null;
-    let wheelAt = -Infinity, wheelId = 0;
+    let generation = 0, pending = null, armed = null, state = 'idle', error = null, direction = 0;
+    let wheelAt = -Infinity, wheelId = 0, wheelDirection = 0;
     const spent = new Set();
     const consume = token => {spent.add(token); if (spent.size > 128) spent.delete(spent.values().next().value);};
-    const status = () => ({loading: !!pending, state, error});
-    const publish = (next, problem = null) => {state = next; error = problem; onState(status());};
+    const status = () => ({loading: !!pending, state, error, direction});
+    const publish = (next, problem = null, nextDirection = direction) => {state = next; error = problem; direction = nextDirection; onState(status());};
     const valid = value => value?.enabled === true && typeof value.key === 'string' &&
       [value.offset, value.count, value.total].every(Number.isSafeInteger) && value.offset >= 0 && value.count >= 0 && value.total >= 0;
     const same = (left, right) => valid(right) && left.key === right.key && left.offset === right.offset && left.count === right.count;
+    const ended = (value, travel) => travel < 0 ? value.offset === 0 : value.offset + value.count >= value.total;
     const cancelIntent = () => {armed = null;};
-    const reset = () => {generation++; armed = null; spent.clear(); publish('idle');};
+    // Resetting a view invalidates responses, but cannot renew a held physical
+    // gesture or release an in-flight query's single-flight lock.
+    const reset = () => {generation++; armed = null; publish('idle', null, 0);};
     function observe() {
       if (pending || !armed) return pending || false;
       const value = snapshot(), moment = now();
       if (!same(armed.snapshot, value) || moment > armed.until) {armed = null; return false;}
-      if (value.offset + value.count >= value.total) {armed = null; publish('end'); return false;}
-      if (value.blocked || !value.atBottom) return false;
-      const captured = {...value}, ownGeneration = generation, used = armed.token;
+      const travel = armed.direction;
+      if (ended(value, travel)) {armed = null; publish('end', null, travel); return false;}
+      if (value.blocked || !(travel < 0 ? value.atTop : value.atBottom)) return false;
+      const captured = {...value, direction: travel}, ownGeneration = generation, used = armed.token;
       armed = null; consume(used);
       // Establish the lock before invoking application callbacks, including load.
       const operation = Promise.resolve().then(() => load(captured)).then(result => {
@@ -38,34 +47,37 @@
         if (ownGeneration !== generation || !same(captured, currentBeforeApply) || currentBeforeApply.blocked) return;
         apply(result, captured);
         const current = snapshot();
-        publish(current.offset + current.count >= current.total ? 'end' : 'idle');
+        publish(ended(current, travel) ? 'end' : 'idle', null, travel);
       }).catch(problem => {
         if (ownGeneration !== generation || !same(captured, snapshot())) return;
-        publish('error', problem); onError(problem);
+        publish('error', problem, travel); onError(problem);
       }).finally(() => {
         if (pending === operation) {pending = null; if (state === 'loading') state = 'idle'; onState(status());}
         // Deliberately never observe here: a response or layout change is not input.
       });
-      pending = operation; publish('loading'); return operation;
+      pending = operation; publish('loading', null, travel); return operation;
     }
-    function intent({trusted, kind, direction, gestureId, modified = false} = {}) {
-      if (trusted !== true || modified || !Number.isFinite(direction) || direction <= 0 || !['wheel', 'drag'].includes(kind)) {
+    function intent({trusted, kind, direction: travel = 1, gestureId, modified = false} = {}) {
+      if (trusted !== true || modified || !Number.isFinite(travel) || travel === 0 || !['wheel', 'drag', 'keyboard'].includes(kind)) {
         armed = null; return false;
       }
       const moment = now();
+      travel = Math.sign(travel);
       let token;
       if (kind === 'wheel') {
-        if (moment - wheelAt >= WHEEL_GAP_MS) wheelId++;
-        wheelAt = moment; token = `wheel:${wheelId}`;
+        if (moment - wheelAt >= WHEEL_GAP_MS || travel !== wheelDirection) wheelId++;
+        wheelAt = moment; wheelDirection = travel; token = `wheel:${wheelId}`;
       } else {
-        if (gestureId === undefined || gestureId === null) return false;
-        token = `drag:${String(gestureId)}`;
+        if (!(typeof gestureId === 'string' && gestureId.length > 0 || typeof gestureId === 'number' && Number.isFinite(gestureId))) {
+          armed = null; return false;
+        }
+        token = `${kind}:${String(gestureId)}`;
       }
       // Inputs during a pending request are consumed, never queued for its result.
       if (pending) {consume(token); armed = null; return pending;}
       const value = snapshot();
       if (!valid(value) || spent.has(token)) return false;
-      armed = {token, snapshot: {...value}, until: moment + INTENT_MS};
+      armed = {token, snapshot: {...value}, direction: travel, until: moment + INTENT_MS};
       return observe();
     }
     return Object.freeze({intent, observe, cancelIntent, reset, status});
@@ -93,5 +105,5 @@
     if (new Set(messages.map(message => String(message.id))).size !== messages.length) throw changed();
     return {...first, offset, messages};
   }
-  return Object.freeze({createAutoPager, isAtBottom, queryWindow, WHEEL_GAP_MS, INTENT_MS});
+  return Object.freeze({createAutoPager, isAtTop, isAtBottom, queryWindow, WHEEL_GAP_MS, INTENT_MS});
 });

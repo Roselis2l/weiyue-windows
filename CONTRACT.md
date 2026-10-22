@@ -1,6 +1,6 @@
 # 模块约定（共同实现）
 
-Version 1.1.22. CommonJS / Node built-ins in the Electron main process; fixed local libheif-js and PDF.js assets are distributed with the app. No startup package installation or runtime CDN.
+Version 1.1.23. CommonJS / Node built-ins in the Electron main process; fixed local libheif-js and PDF.js assets are distributed with the app. No startup package installation or runtime CDN.
 
 Canonical message: `{id:string,groupId:string,senderId:string,senderName:string,text:string,time:number}` (epoch ms).
 Group: `{id:string,name:string,selected?:boolean,coverage?:{oldest:number,newest:number,complete:boolean,note:string}}`.
@@ -73,13 +73,13 @@ Notion exports `NotionClient` constructor({token,fetch}), `listTargets()` -> [{i
 ## Renderer bridge
 `window.api.call(action,payload)` returns plain JSON or rejects sanitized message. Actions state, account.switch, demo, groups.select, sync, messages.query, read.set, important.set, bookmark.add/list/remove, import, export.bookmarks, summary.preview/local/ai/list/delete, settings.save, login.open/complete, logout, notion.targets/preview/export, external.open. Root owns main/preload and renderer, integration.
 
-## Local next-page loading (1.1.21)
+## Bidirectional local paging (1.1.23)
 
-The reading view may append the next time-ordered local page after an actual user scroll reaches the bottom. This action never invokes network synchronization or the separate load-latest action. Each accepted downward wheel burst or blank-area drag gesture requests at most one page, with one in-flight request per reading context. Rendering, media layout changes, appearance previews and initial navigation cannot create paging intent.
+The reading view prepends the previous local page at the top or appends the next at the bottom after actual directional user intent. The edge tolerance is two pixels. Accepted wheel bursts, blank-area drag gestures and PageUp/PageDown/ArrowUp/ArrowDown key holds request at most one page each, under one in-flight lock even across context changes. Keyboard handling is restricted to the reading region's safe focus or pointer context and excludes editable controls, controls with their own keyboard behavior, media, modal dialogs and other panes. Rendering, media layout changes, appearance previews and initial navigation cannot create paging intent. Paging never invokes network synchronization or the separate load-latest action.
 
-Appending preserves the existing message nodes, text selection and viewport anchor. It invalidates prior read intent so that newly inserted, unseen messages do not become read merely through pagination. Account, group or filter changes invalidate pending responses. The manual controls remain available; errors are visible and retryable, and reaching the local end stops loading. Blank-area dragging finishes before its single page is appended, so a held gesture keeps control of the viewport.
+Prepending and appending preserve existing message nodes, text selection and the visible message's pixel offset. Prior read intent is invalidated so newly inserted, unseen messages do not become read merely through pagination; loading earlier messages never moves the read high-water mark backwards. Account, group or filter changes invalidate pending responses. Manual controls remain available, errors are visible and retryable, and local beginning/end boundaries stop loading. Blank-area dragging finishes before its single page is inserted, so a held gesture keeps control of the viewport.
 
-The existing local `messages.query` operation accepts optional, mutually exclusive `startId` or `afterId` string anchors within the complete current filtered group. It resolves their actual offset, rejects missing anchors and preserves ordinary offset-query behavior. Background refresh keeps the appended window using bounded local query segments with consistent revisions; it does not silently shrink the loaded result to the original page. Manual next-page navigation advances past the currently loaded window.
+The existing local `messages.query` operation accepts optional, mutually exclusive `startId`, `beforeId` or `afterId` string anchors within the complete current filtered group. `beforeId` returns at most `limit` messages immediately before the anchor, in ascending order, excludes the anchor and reports the exact offset and full filtered total. Missing or invalid anchors are rejected. The renderer validates continuity before applying the page. Background refresh keeps the expanded window using bounded local query segments with consistent revisions; it does not silently shrink the loaded result to the original page. Ordinary offset queries and manual navigation retain their behavior.
 
 ## Local summary deletion (1.1.15)
 

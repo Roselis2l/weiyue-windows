@@ -1,8 +1,8 @@
 > **历史文档（1.1.8） / Historical documentation (1.1.8)**
 >
-> 本页原文保留作 1.1.8 历史记录。下文的日期筛选、同步入口及缺口处理属于旧版，不能作为 1.1.22 的操作步骤。请以[当前中文使用说明](使用说明.md)为准。
+> 本页原文保留作 1.1.8 历史记录。下文的日期筛选、同步入口及缺口处理属于旧版，不能作为 1.1.23 的操作步骤。请以[当前中文使用说明](使用说明.md)为准。
 >
-> This page preserves the original 1.1.8 documentation. The date filters, synchronization controls and gap-handling instructions below describe the old version, not 1.1.22. Use the [current user guide](使用说明.md) for the current release.
+> This page preserves the original 1.1.8 documentation. The date filters, synchronization controls and gap-handling instructions below describe the old version, not 1.1.23. Use the [current user guide](使用说明.md) for the current release.
 
 # 使用说明
 

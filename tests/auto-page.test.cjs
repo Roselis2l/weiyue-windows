@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {createAutoPager,isAtBottom} = require('../app/renderer/auto-page.js');
+const {createAutoPager,isAtTop,isAtBottom} = require('../app/renderer/auto-page.js');
 
 function deferred() {
   let resolve,reject;
@@ -10,25 +10,26 @@ function deferred() {
 }
 function harness(overrides={}) {
   let time=1000;
-  const state={key:'account-a/group-a/query-1',enabled:true,blocked:false,atBottom:true,offset:20,count:4,total:100,pageSize:4,...overrides};
+  const state={key:'account-a/group-a/query-1',enabled:true,blocked:false,atTop:false,atBottom:true,offset:20,count:4,total:100,pageSize:4,...overrides};
   const requests=[],applied=[],errors=[],states=[];
   const pager=createAutoPager({snapshot:()=>({...state}),now:()=>time,
     load(snapshot){const wait=deferred();requests.push({snapshot:{...snapshot},...wait});return wait.promise;},
-    apply(result,snapshot){applied.push({result,snapshot});state.count+=result.added;},
+    apply(result,snapshot){applied.push({result,snapshot});state.count+=result.added;if(snapshot.direction<0)state.offset-=result.added;},
     onState(status){states.push(status);},onError(error){errors.push(error);}});
   const settle=async()=>{for(let step=0;step<12;step++)await Promise.resolve();};
   return {state,pager,requests,applied,errors,states,settle,
     advance(ms){time+=ms;},
     wheel(extra={}){return pager.intent({trusted:true,kind:'wheel',direction:1,modified:false,...extra});},
     drag(gestureId,extra={}){return pager.intent({trusted:true,kind:'drag',direction:1,gestureId,modified:false,...extra});},
+    key(gestureId,extra={}){return pager.intent({trusted:true,kind:'keyboard',direction:1,gestureId,modified:false,...extra});},
     async finish(index=0,result={added:4}){await settle();requests[index].resolve(result);await settle();},
     async fail(index=0,error=new Error('Synthetic local query failure')){await settle();requests[index].reject(error);await settle();return error;}
   };
 }
 
 test('bottom geometry requires a visible valid viewport and permits only the small bottom threshold',()=>{
-  assert.equal(isAtBottom({scrollTop:576,scrollHeight:1000,clientHeight:400}),true);
-  assert.equal(isAtBottom({scrollTop:575,scrollHeight:1000,clientHeight:400}),false);
+  assert.equal(isAtBottom({scrollTop:598,scrollHeight:1000,clientHeight:400}),true);
+  assert.equal(isAtBottom({scrollTop:597,scrollHeight:1000,clientHeight:400}),false);
   assert.equal(isAtBottom({scrollTop:0,scrollHeight:200,clientHeight:400}),true,'a short local page can be continued by a real gesture');
   for(const metrics of [
     {scrollTop:0,scrollHeight:0,clientHeight:0},
@@ -39,7 +40,7 @@ test('bottom geometry requires a visible valid viewport and permits only the sma
   ])assert.equal(isAtBottom(metrics),false);
 });
 
-test('passive observations, synthetic events, upward input, modified wheel and unrelated input never load',async()=>{
+test('passive observations, synthetic events, upward input away from top, modified wheel and keyboard without a gesture never load',async()=>{
   const h=harness();
   for(let count=0;count<5;count++)h.pager.observe();
   h.wheel({trusted:false});h.wheel({direction:-1});h.wheel({direction:0});h.wheel({modified:true});
@@ -161,4 +162,102 @@ test('passive layout cancellation drops an armed gesture but never revives a con
 test('upward reversal cancels an armed downward intent before a later passive bottom observation',async()=>{
   const h=harness({atBottom:false});h.wheel();h.advance(50);h.wheel({direction:-1});h.state.atBottom=true;h.pager.observe();
   await h.settle();assert.equal(h.requests.length,0);
+});
+
+test('top geometry uses a two-pixel tolerance and rejects invalid or hidden viewports',()=>{
+  assert.equal(isAtTop({scrollTop:2,scrollHeight:1000,clientHeight:400}),true);
+  assert.equal(isAtTop({scrollTop:2.1,scrollHeight:1000,clientHeight:400}),false);
+  assert.equal(isAtTop({scrollTop:0,scrollHeight:200,clientHeight:400}),true);
+  for(const metrics of [
+    {scrollTop:0,scrollHeight:0,clientHeight:0},
+    {scrollTop:NaN,scrollHeight:1000,clientHeight:400},
+    {scrollTop:0,scrollHeight:Infinity,clientHeight:400},
+    {scrollTop:-1,scrollHeight:1000,clientHeight:400},
+    {scrollTop:0,scrollHeight:-1,clientHeight:400}
+  ])assert.equal(isAtTop(metrics),false);
+  assert.equal(isAtTop({scrollTop:0,scrollHeight:1000,clientHeight:400},-1),false);
+});
+
+test('upward wheel loads the preceding local page once and stops at the first local boundary',async()=>{
+  const h=harness({offset:4,atTop:true,atBottom:false});
+  h.wheel({direction:-20});await h.settle();
+  assert.equal(h.requests.length,1);assert.equal(h.requests[0].snapshot.direction,-1);
+  assert.equal(h.pager.status().direction,-1);assert.equal(h.pager.status().state,'loading');
+  await h.finish();assert.equal(h.state.offset,0);assert.equal(h.state.count,8);
+  assert.equal(h.applied[0].snapshot.direction,-1);
+  assert.equal(h.pager.status().state,'end');assert.equal(h.pager.status().direction,-1);
+  h.advance(300);h.wheel({direction:-1});h.key('up-at-first',{direction:-1});h.pager.observe();await h.settle();
+  assert.equal(h.requests.length,1);
+  h.state.atBottom=true;h.key('down-from-first');await h.settle();assert.equal(h.requests.length,2);
+  assert.equal(h.requests[1].snapshot.direction,1);await h.finish(1);
+});
+
+test('an upward gesture requires its top boundary and does not react to the opposite boundary',async()=>{
+  const h=harness({atTop:false,atBottom:true});h.wheel({direction:-1});h.pager.observe();await h.settle();
+  assert.equal(h.requests.length,0);
+  h.state.atTop=true;h.advance(100);h.pager.observe();await h.settle();assert.equal(h.requests.length,1);
+  await h.finish();h.pager.observe();assert.equal(h.requests.length,1,'prepend cannot authorize another earlier page');
+});
+
+test('a keyboard press may reach a boundary through repeats but never loads another page until a new gesture',async()=>{
+  for(const travel of [-1,1]){
+    const h=harness({atTop:false,atBottom:false});
+    h.key('held',{direction:travel});h.advance(500);h.key('held',{direction:travel});await h.settle();assert.equal(h.requests.length,0);
+    h.state[travel<0?'atTop':'atBottom']=true;h.pager.observe();await h.settle();assert.equal(h.requests.length,1);
+    assert.equal(h.requests[0].snapshot.direction,travel);
+    h.advance(5000);h.key('held',{direction:travel});await h.finish();
+    for(let i=0;i<6;i++){h.advance(2000);h.key('held',{direction:travel});h.pager.observe();}
+    await h.settle();assert.equal(h.requests.length,1,'held repeat is not a fresh page gesture');
+    h.key('new-press',{direction:travel});await h.settle();assert.equal(h.requests.length,2);await h.finish(1);
+  }
+});
+
+test('wheel reversal starts a new directional burst without renewing a consumed held key',async()=>{
+  const h=harness({atTop:true,atBottom:true});h.wheel();await h.finish();
+  h.advance(20);h.wheel({direction:-1});await h.settle();assert.equal(h.requests.length,2);
+  assert.equal(h.requests[1].snapshot.direction,-1);await h.finish(1);
+  h.advance(20);h.wheel({direction:-1});await h.settle();assert.equal(h.requests.length,2);
+  h.key('same-key',{direction:-1});await h.finish(2);
+  h.key('same-key',{direction:1});await h.settle();assert.equal(h.requests.length,3,'direction cannot renew the same physical key press');
+});
+
+test('opposite-direction and mixed input while pending are consumed and never become queued pages',async()=>{
+  const h=harness({atTop:true,atBottom:true});h.key('up-held',{direction:-1});await h.settle();
+  h.key('down-during');h.wheel();h.drag('drag-during',{direction:-1});
+  assert.equal(h.requests.length,1);await h.finish();h.pager.observe();
+  h.key('down-during');h.wheel();h.drag('drag-during',{direction:-1});await h.settle();assert.equal(h.requests.length,1);
+  h.key('after-query');await h.settle();assert.equal(h.requests.length,2);await h.finish(1);
+});
+
+test('reset and passive restoration do not renew a consumed keyboard press',async()=>{
+  const h=harness({atTop:true,atBottom:false});h.key('up-held',{direction:-1});await h.finish();
+  h.pager.reset();h.state.key='account-a/group-b/query-2';h.advance(3000);
+  h.key('up-held',{direction:-1});h.pager.observe();await h.settle();assert.equal(h.requests.length,1);
+  assert.equal(h.pager.status().direction,0);
+  h.key('new-up',{direction:-1});await h.settle();assert.equal(h.requests.length,2);await h.finish(1);
+});
+
+test('earlier-page failures retain their direction and require a fresh gesture to retry',async()=>{
+  const h=harness({atTop:true,atBottom:false});h.key('up-held',{direction:-1});await h.fail();
+  assert.equal(h.pager.status().direction,-1);assert.equal(h.pager.status().state,'error');assert.equal(h.errors.length,1);
+  h.key('up-held',{direction:-1});h.pager.observe();await h.settle();assert.equal(h.requests.length,1);
+  h.key('up-retry',{direction:-1});await h.finish(1);assert.equal(h.applied.length,1);
+});
+
+test('earlier-page results from a switched filter are discarded while the pending lock stays single-flight',async()=>{
+  const h=harness({atTop:true,atBottom:false});h.key('original',{direction:-1});await h.settle();
+  h.pager.reset();h.state.key='account-a/group-a/query-2';h.key('during-switch',{direction:-1});await h.settle();
+  assert.equal(h.requests.length,1);await h.finish();assert.equal(h.applied.length,0);assert.equal(h.errors.length,0);
+  h.key('during-switch',{direction:-1});await h.settle();assert.equal(h.requests.length,1);
+  h.key('after-switch',{direction:-1});await h.finish(1);assert.equal(h.applied.length,1);
+});
+
+test('missing direction preserves next-page compatibility and malformed held gestures cancel prior authorization',async()=>{
+  const h=harness();h.pager.intent({trusted:true,kind:'keyboard',gestureId:'default-down'});await h.settle();
+  assert.equal(h.requests[0].snapshot.direction,1);await h.finish();
+  const invalid=harness({atBottom:false});
+  for(const gestureId of [undefined,null,'',{},[],NaN,Infinity]){
+    invalid.advance(300);invalid.wheel();invalid.key(gestureId);invalid.state.atBottom=true;invalid.pager.observe();await invalid.settle();
+    assert.equal(invalid.requests.length,0);invalid.state.atBottom=false;
+  }
 });

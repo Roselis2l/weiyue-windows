@@ -244,11 +244,13 @@ test('renderer rejects an old account, group or query DOM while new reading data
 test('trusted passive wheel still grants reading when the compositor has already moved the DOM', () => {
   const source=fs.readFileSync(require.resolve('../app/renderer/app.js'),'utf8');
   const start=source.indexOf('function bindReadingInput('),end=source.indexOf('function handleReadingScroll()',start);
-  const listeners={},scroll={scrollTop:170,addEventListener:(name,callback)=>listeners[name]=callback};
+  const listeners={},scroll={scrollTop:170,addEventListener:(name,callback)=>listeners[name]=callback,removeEventListener(){}};
   const gate=createReadIntentGate(),model={scrollTop:100,restoring:true,restoreFrame:1};
   const context=vm.createContext({model,readIntent:gate,autoPage:inactiveAutoPager(),canAdvanceRead:()=>true,hasFilters:()=>false,
     readingContext:()=> 'current',readingOwner:()=> 'current',scheduleRead:()=>{},clearTimeout:()=>{},
-    performance:{now:()=>10},setTimeout:()=>1,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{},invalidateReadingIntent:()=>gate.reset(),window:{},scroll});
+    performance:{now:()=>10},setTimeout:()=>1,requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{},invalidateReadingIntent:()=>gate.reset(),
+    isCurrentReadingRendered:()=>true,Element:class {},$:id=>id==='message-scroll'?scroll:{open:false},
+    document:{visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}},window:{addEventListener(){},removeEventListener(){}},scroll});
   vm.runInContext(source.slice(start,end)+';bindReadingInput(scroll);',context);
   listeners.wheel({deltaY:70,isTrusted:true});
   assert.deepEqual(gate.scroll('current',170,10,'M4'),{context:'current',kind:'scroll',readThroughId:'M4'});
@@ -266,15 +268,16 @@ test('held native scrollbar renews only accepted movement and release or cancell
   const listeners={},windowListeners={},scheduled=[],gate=createReadIntentGate();
   let now=0,eligible=true,filtered=false,rendered=true;
   const scroll={scrollTop:100,offsetWidth:100,clientWidth:90,
-    getBoundingClientRect:()=>({right:200}),addEventListener:(name,callback)=>listeners[name]=callback};
-  const model={scrollTop:100,restoring:false,restoreFrame:1,intentVersion:0,pointerScrolling:false};
+    getBoundingClientRect:()=>({right:200}),addEventListener:(name,callback)=>listeners[name]=callback,removeEventListener(){}};
+  const model={scrollTop:100,restoring:false,restoreFrame:1,intentVersion:0,pointerScrolling:false,pagingGestureSequence:0};
   const context=vm.createContext({model,readIntent:gate,autoPage:inactiveAutoPager(),canAdvanceRead:()=>eligible,hasFilters:()=>filtered,
     isCurrentReadingRendered:()=>rendered,readingContext:()=>`current:${model.intentVersion}`,readingOwner:()=> 'current',
     scheduleReadingRefresh:()=>{},
     performance:{now:()=>now},cancelAnimationFrame:()=>{},clearTimeout:()=>{},
-    $:id=>id==='message-scroll'?scroll:null,captureViewport:()=>({anchorId:'M1',readThroughId:'M1'}),
+    $:id=>id==='message-scroll'?scroll:id==='modal'?{open:false}:null,captureViewport:()=>({anchorId:'M1',readThroughId:'M1'}),
     updateReadChrome:()=>{},scheduleRead:candidate=>scheduled.push(candidate),flushReading:async()=>{},
-    window:{addEventListener:(name,callback)=>windowListeners[name]=callback},scroll});
+    document:{visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}},Element:class {},
+    window:{addEventListener:(name,callback)=>{const previous=windowListeners[name];windowListeners[name]=event=>{previous?.(event);callback(event);};},removeEventListener(){}},scroll});
   vm.runInContext(source.slice(resetStart,resetEnd)+source.slice(start,end)+source.slice(releaseStart,releaseEnd)+';bindReadingInput(scroll);',context);
   const down=(trusted=true)=>listeners.pointerdown({button:0,target:scroll,clientX:195,isTrusted:trusted,pointerType:'mouse'});
   const move=(top,time)=>{scroll.scrollTop=top;now=time;vm.runInContext('handleReadingScroll()',context);return scheduled.at(-1);};
@@ -283,7 +286,7 @@ test('held native scrollbar renews only accepted movement and release or cancell
   down();assert.equal(model.pointerScrolling,true);
   assert.equal(move(101.5,3001)?.readThroughId,'M1','holding for 1500ms does not require a DOM pointermove');
   assert.equal(move(101.5,3010)?.readThroughId,'M1','a zero-motion tail must not renew away its accepted candidate');
-  windowListeners.pointerup();assert.equal(model.pointerScrolling,false);
+  windowListeners.pointerup({isTrusted:true});assert.equal(model.pointerScrolling,false);
   assert.equal(move(102,4500),null,'a released pointer cannot renew permission for a later passive scroll');
 
   for(const cancel of [()=>windowListeners.pointercancel(),()=>windowListeners.blur(),
