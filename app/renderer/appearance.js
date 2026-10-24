@@ -7,10 +7,10 @@
   'use strict';
   const DEFAULTS = Object.freeze({
     chatBackground: '#f1f3f2', memberName: '#52634b', importantName: '#860000',
-    memberBubble: '#ffffff', importantBubble: '#fcd3d4', importantText: '#860000'
+    memberBubble: '#ffffff', importantBubble: '#fcd3d4', importantText: '#860000', memberText: '#000000'
   });
   const FIELDS = Object.freeze(Object.keys(DEFAULTS));
-  const LABELS = Object.freeze({chatBackground:'聊天背景',memberName:'普通成员昵称',importantName:'重点成员昵称',memberBubble:'普通消息气泡',importantBubble:'重点消息气泡',importantText:'重点消息正文'});
+  const LABELS = Object.freeze({chatBackground:'聊天背景',memberName:'普通成员昵称',importantName:'重点成员昵称',memberBubble:'普通消息气泡',importantBubble:'重点消息气泡',importantText:'重点消息正文',memberText:'普通成员消息文字颜色'});
   const MIN_CONTRAST = 4.5;
   function invalid(message) { const error = new Error(message); error.code = 'APPEARANCE_INVALID'; throw error; }
   function descriptors(value) {
@@ -44,9 +44,9 @@
   }
   function validateAppearance(value) {
     const properties = descriptors(value);
-    if (!properties) invalid('外观颜色必须是包含六项设置的普通对象。');
+    if (!properties) invalid('外观颜色必须是包含七项设置的普通对象。');
     const keys = Reflect.ownKeys(properties);
-    if (keys.length !== FIELDS.length || keys.some(key => typeof key !== 'string' || !FIELDS.includes(key))) invalid('外观颜色只能包含六项指定设置，不能缺少或增加字段。');
+    if (keys.length !== FIELDS.length || keys.some(key => typeof key !== 'string' || !FIELDS.includes(key))) invalid('外观颜色只能包含七项指定设置，不能缺少或增加字段。');
     const result = {};
     for (const field of FIELDS) {
       const property = properties[field];
@@ -83,10 +83,12 @@
       const contrast = contrastRatio(colors.importantText,colors.importantBubble);
       if (contrast < MIN_CONTRAST) warnings.push({field:'importantText',contrast,minimum:MIN_CONTRAST,message:'重点消息正文与重点消息气泡对比度较低，可能不易阅读；指定颜色仍会保留。'});
     }
+    const memberContrast = contrastRatio(colors.memberText,colors.memberBubble);
+    if (memberContrast < MIN_CONTRAST) warnings.push({field:'memberText',contrast:memberContrast,minimum:MIN_CONTRAST,message:'普通成员消息文字与普通消息气泡对比度较低，可能不易阅读；指定颜色仍会保留。'});
     return { colors,
       chatText:readableColor(colors.chatBackground,['#53604f','#f4f8f5']),
       chatLink:readableColor(colors.chatBackground,['#356f64','#d8eee3']),
-      memberText:readableColor(colors.memberBubble,['#53604f','#f4f8f5']),
+      memberText:colors.memberText,
       memberLink:readableColor(colors.memberBubble,['#356f64','#d8eee3']),
       importantText:colors.importantText === null ? readableColor(colors.importantBubble,['#f4f8f5','#53604f']) : colors.importantText,
       importantLink:readableColor(colors.importantBubble,['#860000','#d8eee3','#356f64']),

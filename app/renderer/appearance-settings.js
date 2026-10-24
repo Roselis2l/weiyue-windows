@@ -2,7 +2,7 @@
 
 (() => {
   const appearance=window.WeiyueAppearance;
-  const labels={chatBackground:'聊天背景',memberName:'普通成员昵称',importantName:'重点成员昵称',memberBubble:'普通消息框',importantBubble:'重点消息框',importantText:'重点消息文字'};
+  const labels={chatBackground:'聊天背景',memberName:'普通成员昵称',importantName:'重点成员昵称',memberBubble:'普通消息框',memberText:'普通成员消息文字颜色',importantBubble:'重点消息框',importantText:'重点消息文字'};
   function readable(background,preferred='#52634b',light='#f4f8f5') {
     if(appearance.contrastRatio(preferred,background)>=4.5)return preferred;
     if(appearance.contrastRatio(light,background)>=4.5)return light;
@@ -73,7 +73,7 @@
       save.disabled=saving||!valid;save.textContent=saving?'正在保存…':'保存颜色';reset.disabled=saving;
       if(dialog?.open && dialog.firstChild===owner)for(const close of dialog.querySelectorAll('#modal-close,.modal-head button'))close.disabled=saving;
     }
-    dialog=modal('外观颜色',node('div',{},node('p',{class:'form-description'},'选择颜色或输入 HEX。下方仅使用合成示例；保存后应用到当前账号。昵称和指定的重点文字颜色会保留，对比不足会提示；也可让重点文字自动选色。'),fields,warning,preview,status),[reset,save],{closeLabel:'取消并返回设置',onClose:()=>{if(!saving)onBack();}});
+    dialog=modal('外观颜色',node('div',{},node('p',{class:'form-description'},'选择颜色或输入 HEX。下方仅使用合成示例；保存后应用到当前账号。昵称和指定的消息文字颜色会保留，对比不足会提示；也可让重点文字自动选色。'),fields,warning,preview,status),[reset,save],{closeLabel:'取消并返回设置',onClose:()=>{if(!saving)onBack();}});
     dialog.dataset.context='appearance';owner=dialog.firstChild;update();
   }
   window.WeiyueAppearanceSettings=Object.freeze({apply,open});

@@ -61,7 +61,7 @@ const handleSource = mainSource.slice(mainSource.indexOf('async function handle(
 function mainHarness(store, options) {
   const summaryDeletePreviews = new SummaryDeletePreviewStore(options);
   const context = vm.createContext({
-    store, activeId: accountId, accountEpoch: 7, busy: false, revision: 10,
+    store, activeId: accountId, accountEpoch: 7, busy: false, cleanupBusy: () => false, revision: 10,
     win: { fixture: true }, closing: () => false,
     summaryDeletePreviews, summaryFingerprint,
     dialog: { showMessageBox: () => { throw new Error('deletion must not open a native dialog'); } },

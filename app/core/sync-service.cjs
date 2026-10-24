@@ -5,6 +5,10 @@ const activeStores=new WeakSet();
 // Automatic batches yield after a short budget. Keep their next successful
 // scheduling slot across yields without adding scheduling state to user data.
 const scheduledStores=new WeakMap();
+const snapshot=(store,id)=>store.getSnapshot?store.getSnapshot(id):store.get(id);
+// Permanently removed rows remain only as stable identity/time markers. Include
+// them in synchronization boundaries and duplicate counts, never in rendering.
+const syncRows=(state,groupId)=>[...state.messages,...(state.messageTombstones||[])].filter(m=>m.groupId===groupId);
 function mergedCoverage(previous,next,note){
   const pairs=[previous,next].filter(c=>c&&Number.isFinite(c.oldest)&&Number.isFinite(c.newest));
   if(!pairs.length)return undefined;
@@ -24,7 +28,7 @@ function frontier(messages){
 async function syncLegacy({store,accountId,client,groupId,history=false,maxPages=10,pageDelayMs=1000,signal,onChange}){
   checkAbort(signal);
   if(onChange!==undefined&&typeof onChange!=='function')throw new TypeError('同步通知必须是函数。');
-  const state=store.get(accountId);
+  const state=snapshot(store,accountId);
   if(state.account.kind!=='weibo')throw new Error('演示与导入账号不连接微博。');
   const selected=state.groups.filter(g=>g.selected&&(!groupId||g.id===groupId));
   if(!selected.length)throw new Error('请先选择允许同步的群聊。');
@@ -35,7 +39,7 @@ async function syncLegacy({store,accountId,client,groupId,history=false,maxPages
     // Freeze both boundaries for the whole group, including future invocations
     // that resume a page-limited latest scan. Sorting by time defines unread;
     // the greatest numeric ID defines the API's descending pagination boundary.
-    const initial=frontier(state.messages.filter(message=>message.groupId===g.id));
+    const initial=frontier(syncRows(state,g.id));
     const pending=!history?g.latestPending:null;
     const baselineId=pending?pending.baselineId:initial.baselineId;
     const arrivalAfterId=pending?pending.arrivalAfterId:initial.arrivalAfterId;
@@ -44,7 +48,7 @@ async function syncLegacy({store,accountId,client,groupId,history=false,maxPages
     let groupPages=0;
     const result=await client.syncGroup(g.id,{maxPages,pageDelayMs,before,stopAtId:incremental?baselineId:undefined,signal,onPage:async page=>{
       checkAbort(signal);
-      const current=store.get(accountId).groups.find(candidate=>candidate.id===g.id);
+      const current=snapshot(store,accountId).groups.find(candidate=>candidate.id===g.id);
       if(!current)throw new Error('同步群聊已不存在，请重新选择群聊。');
       const target={...current};
       const ended=page.nextCursor===null;
@@ -109,15 +113,15 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
   if(preferredGroupId!==undefined&&preferredGroupId!==null&&typeof preferredGroupId!=='string')throw new TypeError('优先群聊须使用稳定字符串 ID。');
   if(headGroupIds!==undefined&&(!Array.isArray(headGroupIds)||headGroupIds.some(id=>typeof id!=='string')))throw new TypeError('最新消息检查群聊须为字符串 ID 列表。');
   if(retryUnresolvedGroupIds!==undefined&&(!Array.isArray(retryUnresolvedGroupIds)||retryUnresolvedGroupIds.some(id=>typeof id!=='string')))throw new TypeError('未闭合区间检查群聊须为字符串 ID 列表。');
-  const state=store.get(accountId);
+  const state=snapshot(store,accountId);
   if(state.account.kind!=='weibo')throw new Error('演示与导入账号不连接微博。');
   const selected=state.groups.filter(g=>g.selected&&(!groupId||g.id===groupId)).sort((a,b)=>(a.syncProgress?.updatedAt||0)-(b.syncProgress?.updatedAt||0));
   if(!selected.length)throw new Error('请先选择允许同步的群聊。');
-  const start=now(),initial=new Map(selected.map(g=>[g.id,frontier(state.messages.filter(m=>m.groupId===g.id))]));
+  const start=now(),initial=new Map(selected.map(g=>[g.id,frontier(syncRows(state,g.id))]));
   const initialContinuations=new Set(),parked=new Set();
   let count=0,pages=0,initialIndex=0,headIndex=0,gapIndex=0,sinceHead=0,activeGroup=null;
   const withinBudget=()=>pages<maxPages&&now()-start<timeBudgetMs;
-  const getGroup=id=>store.get(accountId).groups.find(g=>g.id===id&&g.selected);
+  const getGroup=id=>snapshot(store,accountId).groups.find(g=>g.id===id&&g.selected);
   const key=(id,range)=>`${id}:${range.baselineId}:${range.arrivalAfterId}`;
   // Automatic callers supply the due head groups; manual/default callers keep
   // the original scheduling behavior. Head eligibility never removes gap work.
@@ -140,7 +144,7 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
   const backgroundHeads=heads.filter(id=>id!==preferred);
   function makeHead(id){
     if(!getGroup(id))return null;
-    return {id,kind:'head',before:undefined,...frontier(store.get(accountId).messages.filter(m=>m.groupId===id))};
+    return {id,kind:'head',before:undefined,...frontier(syncRows(snapshot(store,accountId),id))};
   }
   function makeGap(id){
     const g=getGroup(id);if(!g)return null;
@@ -207,10 +211,10 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
         const id=selected[initialIndex++].id,g=getGroup(id);if(!g)continue;
         const pending=g.syncNext==='gap'?pendingRanges(g).find(r=>!parked.has(key(id,r))):null;
         if(pending)job={id,kind:'gap',before:pending.cursor,baselineId:pending.baselineId,arrivalAfterId:pending.arrivalAfterId};
-        else{const local=frontier(store.get(accountId).messages.filter(m=>m.groupId===id));job={id,kind:'head',before:undefined,...local};sinceHead=0;}
+        else{const local=frontier(syncRows(snapshot(store,accountId),id));job={id,kind:'head',before:undefined,...local};sinceHead=0;}
       }else if(!history&&sinceHead>=headEveryPages){
         const id=selected[headIndex++%selected.length].id,g=getGroup(id);if(!g)continue;
-        const local=frontier(store.get(accountId).messages.filter(m=>m.groupId===id));
+        const local=frontier(syncRows(snapshot(store,accountId),id));
         job={id,kind:'head',before:undefined,...local};sinceHead=0;
       }else job=gapJob();
       if(!job){if(scheduled){schedule={...schedule,idle:true};schedules.set(accountId,schedule);}break;}
@@ -219,9 +223,9 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
       activeGroup=job.id;
       await client.syncGroup(job.id,{maxPages:1,before:job.before??undefined,stopAtId:job.baselineId??undefined,signal,onPage:async page=>{
         checkAbort(signal);
-        const currentState=store.get(accountId),current=currentState.groups.find(g=>g.id===job.id&&g.selected);
+        const currentState=snapshot(store,accountId),current=currentState.groups.find(g=>g.id===job.id&&g.selected);
         if(!current)throw new Error('同步群聊已不存在或已取消选择。');
-        const messages=currentState.messages.filter(m=>m.groupId===job.id),known=new Set(messages.map(m=>m.id));
+        const messages=syncRows(currentState,job.id),known=new Set(messages.map(m=>m.id));
         const inserted=new Set(page.messages.filter(m=>!known.has(m.id)).map(m=>m.id)).size;
         const target={...current};let ranges=pendingRanges(current),unresolved=false;
         if(job.kind==='gap')ranges=ranges.filter(r=>key(job.id,r)!==key(job.id,job));
@@ -281,7 +285,7 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
     }catch{/* Preserve the original request/persistence failure. */}
     throw error;
   }
-  return {count,pages,pendingGroups:store.get(accountId).groups.filter(g=>g.selected&&pendingRanges(g).length).length,budgetExhausted:!withinBudget()};
+  return {count,pages,pendingGroups:snapshot(store,accountId).groups.filter(g=>g.selected&&pendingRanges(g).length).length,budgetExhausted:!withinBudget()};
 }
 async function syncAccount(options){
   checkAbort(options.signal);

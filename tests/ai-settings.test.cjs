@@ -181,7 +181,7 @@ function mainHarness(initial = bound()) {
   const aiPreviews = new AiPreviewStore(), owner = 'account-A:epoch-1';
   let privateData = structuredClone(initial.credentials);
   const context = vm.createContext({
-    activeId: 'account-A', busy: false, activeAi: null, account: () => account,
+    activeId: 'account-A', busy: false, cleanupBusy: () => false, activeAi: null, account: () => account,
     aiPreviews, aiOwner: () => owner, AbortController, crypto: require('node:crypto'),
     checkAiOperation: operation => { assert.equal(operation.owner, owner); assert.equal(operation.controller.signal.aborted, false); },
     secrets: id => { assert.equal(id, 'account-A'); calls.secrets++; return structuredClone(privateData); },

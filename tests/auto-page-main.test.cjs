@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const read=file=>fs.readFileSync(path.join(__dirname,'..',file),'utf8');
 test('actual local IPC query preserves stable boundary fields and exposes one data revision without syncing',async()=>{
  const source=read('app/main.cjs'),a=source.indexOf('async function handle(action,p){'),b=source.indexOf('async function start(){',a),calls=[];
- const scope={activeId:'synthetic',busy:false,revision:17,store:{queryMessages:(id,p)=>{calls.push({id,p});return{messages:[{id:'9007199254740993999'}],offset:42,total:100};}},decorateMessage:(m,id)=>({...m,decorated:id})};
+ const scope={activeId:'synthetic',busy:false,cleanupBusy:()=>false,revision:17,store:{queryMessages:(id,p)=>{calls.push({id,p});return{messages:[{id:'9007199254740993999'}],offset:42,total:100};}},decorateMessage:(m,id)=>({...m,decorated:id})};
  vm.createContext(scope);vm.runInContext(source.slice(a,b)+';globalThis.dispatch=handle;',scope);
  for(const boundary of ['afterId','beforeId']){
   calls.length=0;const payload={groupId:'g',[boundary]:'9007199254740993998',keyword:'text',senderIds:['a'],limit:160};
@@ -21,7 +21,7 @@ test('actual local IPC validates beforeId in the active account and preserves re
  store.setReadPosition('synthetic-a','g',rows[3].id,{offset:19,seenId:rows[5].id,followTail:false});
  const before=store.get('synthetic-a'),bytes=fs.readFileSync(store._file('synthetic-a'));
  const source=read('app/main.cjs'),a=source.indexOf('async function handle(action,p){'),b=source.indexOf('async function start(){',a);
- const scope={activeId:'synthetic-a',busy:false,revision:23,store,decorateMessage:(m,id)=>({...m,decorated:id})};
+ const scope={activeId:'synthetic-a',busy:false,cleanupBusy:()=>false,revision:23,store,decorateMessage:(m,id)=>({...m,decorated:id})};
  vm.createContext(scope);vm.runInContext(source.slice(a,b)+';globalThis.dispatch=handle;',scope);
  const p={groupId:'g',beforeId:rows[5].id,limit:2},result=await scope.dispatch('messages.query',p);
  assert.equal(result.offset,3);assert.equal(result.total,8);assert.equal(result.revision,23);assert.deepEqual(Array.from(result.messages,m=>m.id),[rows[3].id,rows[4].id]);

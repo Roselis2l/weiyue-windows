@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {DEFAULTS,FIELDS,MIN_CONTRAST,normalizeHex,normalizeAppearance,validateAppearance,contrastRatio,getAppearanceTheme}=require('../app/renderer/appearance.js');
-const defaultColors={chatBackground:'#f1f3f2',memberName:'#52634b',importantName:'#860000',memberBubble:'#ffffff',importantBubble:'#fcd3d4',importantText:'#860000'};
+const defaultColors={chatBackground:'#f1f3f2',memberName:'#52634b',importantName:'#860000',memberBubble:'#ffffff',importantBubble:'#fcd3d4',importantText:'#860000',memberText:'#000000'};
 
 test('appearance defaults are immutable and reads return independent complete color values',()=>{
  assert.deepEqual(DEFAULTS,defaultColors);assert.deepEqual(FIELDS,Object.keys(defaultColors));assert.equal(MIN_CONTRAST,4.5);
@@ -28,7 +28,7 @@ test('reading partial or legacy appearance falls back per field, never mutates, 
  const nullObject=Object.assign(Object.create(null),{memberBubble:'#ABC'});assert.equal(normalizeAppearance(nullObject).memberBubble,'#aabbcc');
 });
 
-test('explicit save requires six own enumerable data fields, strict HEX and only importantText may be null',()=>{
+test('explicit save requires seven own enumerable data fields, strict HEX and only importantText may be null',()=>{
  assert.deepEqual(validateAppearance({...defaultColors,memberName:'#ABC'}),{...defaultColors,memberName:'#aabbcc'});
  assert.deepEqual(validateAppearance(Object.assign(Object.create(null),defaultColors)),defaultColors);
  const input={...defaultColors},output=validateAppearance(input);output.memberName='#000000';assert.deepEqual(input,defaultColors);
@@ -51,23 +51,25 @@ test('contrast calculation agrees with black-white and grayscale boundaries and 
  for(const value of ['red','#ffff','#12345678',null,{}])assert.throws(()=>contrastRatio(value,'#fff'),{code:'APPEARANCE_INVALID'});
 });
 
-test('default and inverted bubbles prefer existing readable foregrounds without modifying user colors',()=>{
+test('ordinary text stays explicitly black while automatic important text and links adapt to bubble colors',()=>{
  const theme=getAppearanceTheme();assert.deepEqual(theme.colors,defaultColors);
- assert.equal(theme.memberText,'#53604f');assert.equal(theme.memberLink,'#356f64');assert.equal(theme.importantText,'#860000');assert.equal(theme.importantLink,'#860000');
+ assert.equal(theme.memberText,'#000000');assert.equal(theme.memberLink,'#356f64');assert.equal(theme.importantText,'#860000');assert.equal(theme.importantLink,'#860000');
  assert.deepEqual(theme.warnings,[]);
  const inverted={...defaultColors,chatBackground:'#000000',memberBubble:'#000000',importantBubble:'#ffffff',importantText:null};
  const before=structuredClone(inverted),result=getAppearanceTheme(inverted);
- assert.equal(result.memberText,'#f4f8f5');assert.equal(result.importantText,'#53604f');assert.deepEqual(result.colors,inverted);assert.deepEqual(inverted,before);
+ assert.equal(result.memberText,'#000000');assert.equal(result.importantText,'#53604f');assert.deepEqual(result.colors,inverted);assert.deepEqual(inverted,before);
+ assert.equal(result.warnings.find(warning=>warning.field==='memberText')?.contrast,1);
  const middle=getAppearanceTheme({...defaultColors,memberBubble:'#777777',importantBubble:'#777777',importantText:null});
  for(const field of ['memberText','memberLink','importantText','importantLink'])assert.equal(middle[field],'#000000');
 });
 
-test('automatic body text and derived links remain at least 4.5 against vivid, dark, light and middle backgrounds',()=>{
+test('automatic chat and important text plus derived links retain contrast independently of explicit ordinary text',()=>{
  const values=[0,31,63,95,127,159,191,223,255],colors=['#777777','#767676','#00ff00','#0000ff','#ff0000','#ff00ff','#ffff00','#00ffff'];
  for(const red of values)for(const green of values)for(const blue of values)colors.push('#'+[red,green,blue].map(value=>value.toString(16).padStart(2,'0')).join(''));
  for(const background of colors){
   const theme=getAppearanceTheme({...defaultColors,chatBackground:background,memberBubble:background,importantBubble:background,importantText:null});
-  for(const field of ['chatText','chatLink','memberText','memberLink','importantText','importantLink']){
+  assert.equal(theme.memberText,'#000000');
+  for(const field of ['chatText','chatLink','memberLink','importantText','importantLink']){
    assert.match(theme[field],/^#[0-9a-f]{6}$/);assert.ok(contrastRatio(theme[field],background)>=4.5,field+' '+background);
   }
  }
@@ -86,15 +88,15 @@ test('new untouched appearance uses sampled red and pink defaults while old five
  const oldFive={chatBackground:'#111111',memberName:'#aabbcc',importantName:'#193e32',memberBubble:'#cccccc',importantBubble:'#244f42'};
  const before=structuredClone(oldFive);
  assert.deepEqual(normalizeAppearance(undefined),defaultColors);
- assert.deepEqual(normalizeAppearance(oldFive),{...oldFive,importantText:null});assert.deepEqual(oldFive,before);
+ assert.deepEqual(normalizeAppearance(oldFive),{...oldFive,importantText:null,memberText:'#000000'});assert.deepEqual(oldFive,before);
  assert.equal(getAppearanceTheme(oldFive).importantText,'#f4f8f5');
  assert.equal(normalizeAppearance({}).importantText,null);
  assert.equal(normalizeAppearance({...oldFive,importantText:'transparent'}).importantText,null);
  assert.equal(normalizeAppearance({...oldFive,importantText:null}).importantText,null);
  assert.equal(normalizeAppearance({...oldFive,importantText:'#F09'}).importantText,'#ff0099');
  let accessed=0;const accessor={...oldFive};Object.defineProperty(accessor,'importantText',{enumerable:true,get(){accessed++;throw Error('must not execute');}});
- assert.deepEqual(normalizeAppearance(accessor),{...oldFive,importantText:null});assert.equal(accessed,0);
- for(const invalid of ['#rgba','red',false,{},[],15])assert.deepEqual(normalizeAppearance({...oldFive,importantText:invalid}),{...oldFive,importantText:null});
+ assert.deepEqual(normalizeAppearance(accessor),{...oldFive,importantText:null,memberText:'#000000'});assert.equal(accessed,0);
+ for(const invalid of ['#rgba','red',false,{},[],15])assert.deepEqual(normalizeAppearance({...oldFive,importantText:invalid}),{...oldFive,importantText:null,memberText:'#000000'});
  assert.throws(()=>validateAppearance(oldFive),{code:'APPEARANCE_INVALID'});
 });
 
@@ -116,4 +118,39 @@ test('browser UMD exports the same offline API without DOM, Node or network depe
  assert.deepEqual(actual,getAppearanceTheme({memberBubble:'#000'}));
  assert.equal(vm.runInContext('WeiyueAppearance.normalizeHex("#AbC")',context),'#aabbcc');
  assert.equal(vm.runInContext('Object.isFrozen(WeiyueAppearance)',context),true);
+});
+
+test('six-field legacy colors gain black ordinary text in memory and preserve explicit or automatic important text',()=>{
+ for(const importantText of ['#123456',null]){
+  const oldSix={chatBackground:'#101010',memberName:'#abcdef',importantName:'#fedcba',memberBubble:'#222222',importantBubble:'#998877',importantText};
+  const before=structuredClone(oldSix),normalized=normalizeAppearance(oldSix);
+  assert.deepEqual(normalized,{...oldSix,memberText:'#000000'});assert.deepEqual(oldSix,before);
+  assert.equal(getAppearanceTheme(oldSix).memberText,'#000000');
+  assert.throws(()=>validateAppearance(oldSix),{code:'APPEARANCE_INVALID'});
+ }
+});
+
+test('ordinary text is independent of important, nickname, system and link colors even at low contrast',()=>{
+ for(const [text,background] of [['#ffffff','#ffffff'],['#000000','#000000'],['#777777','#777777'],['#ff0000','#ff00ff']]){
+  const input={...defaultColors,memberText:text,memberBubble:background},theme=getAppearanceTheme(input);
+  const baseline=getAppearanceTheme({...input,memberText:'#123456'});
+  assert.equal(theme.memberText,text);assert.equal(theme.colors.memberText,text);
+  assert.ok(theme.warnings.some(warning=>warning.field==='memberText'&&warning.contrast<MIN_CONTRAST));
+  assert.ok(contrastRatio(theme.memberLink,background)>=MIN_CONTRAST);
+  for(const field of ['chatText','chatLink','memberLink','importantText','importantLink'])assert.equal(theme[field],baseline[field]);
+  for(const field of ['memberName','importantName','importantText','importantBubble','chatBackground'])assert.equal(theme.colors[field],baseline.colors[field]);
+  assert.deepEqual(validateAppearance(input),input);
+ }
+});
+
+test('invalid stored ordinary text falls back to black without evaluating accessors or altering valid colors',()=>{
+ for(const invalid of [null,undefined,false,0,{},[],'red','var(--ink)','#ffffff80','#fff; color:red']){
+  const input={...defaultColors,memberName:'#123456',importantText:null,memberText:invalid};
+  assert.deepEqual(normalizeAppearance(input),{...defaultColors,memberName:'#123456',importantText:null,memberText:'#000000'});
+  assert.throws(()=>validateAppearance(input),{code:'APPEARANCE_INVALID'});
+ }
+ let calls=0;const accessor={...defaultColors};Object.defineProperty(accessor,'memberText',{enumerable:true,get(){calls++;throw Error('must not execute');}});
+ assert.deepEqual(normalizeAppearance(accessor),defaultColors);assert.equal(calls,0);
+ assert.throws(()=>validateAppearance(accessor),{code:'APPEARANCE_INVALID'});assert.equal(calls,0);
+ assert.equal(normalizeAppearance({...defaultColors,memberText:'#A3f'}).memberText,'#aa33ff');
 });

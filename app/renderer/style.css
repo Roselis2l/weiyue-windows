@@ -229,7 +229,7 @@
 /* The copy lane stays full width for blank-area dragging; only the body shrinks.
    Fixed media preferences avoid percentage/intrinsic-size cycles in fit-content. */
 .message:not(.message-system)>.message-copy>.message-content,
-.bookmark-message:not(.message-system)>.message-content{--bubble-bg:var(--member-bubble,#fff);position:relative;display:block;width:fit-content;min-width:min(54px,100%);min-height:42px;max-width:min(680px,100%);padding:9px 12px;border:1px solid #e5e9e6;border-radius:10px;background:var(--bubble-bg);box-shadow:0 2px 5px #243c3410;color:var(--member-text,#34483d);overflow-wrap:anywhere}
+.bookmark-message:not(.message-system)>.message-content{--bubble-bg:var(--member-bubble,#fff);position:relative;display:block;width:fit-content;min-width:min(54px,100%);min-height:42px;max-width:min(680px,100%);padding:9px 12px;border:1px solid #e5e9e6;border-radius:10px;background:var(--bubble-bg);box-shadow:0 2px 5px #243c3410;color:var(--member-text,#000000);overflow-wrap:anywhere}
 .message:not(.message-system)>.message-copy>.message-content::before,
 .bookmark-message:not(.message-system)>.message-content::before{content:'';position:absolute;left:-7px;top:12px;width:12px;height:12px;background:var(--bubble-bg);clip-path:polygon(0 0,100% 0,100% 100%);pointer-events:none}
 .message:not(.message-system) .message-top{margin-bottom:7px}
@@ -250,7 +250,7 @@
 .message.is-important:not(.message-system)>.message-copy>.message-content,
 .bookmark-message.is-important:not(.message-system)>.message-content{--bubble-bg:var(--important-bubble,#fcd3d4);color:var(--important-text,#860000);border-color:var(--important-bubble,#fcd3d4)}
 .message:not(.message-system)>.message-copy>.message-content>.message-text,
-.bookmark-message:not(.message-system)>.message-content>.message-text{color:var(--member-text,#34483d)}
+.bookmark-message:not(.message-system)>.message-content>.message-text{color:var(--member-text,#000000)}
 .message:not(.message-system)>.message-copy>.message-content>.button.text,
 .bookmark-message:not(.message-system)>.message-content>.button.text,
 .message:not(.message-system)>.message-copy>.message-content>.message-text .message-link,
@@ -330,7 +330,7 @@
 .appearance-example .sender-name{color:var(--member-name,#52634b)}
 .appearance-example.is-important .sender-name{font-weight:750;color:var(--important-name,#860000)}
 .appearance-example .message-time{color:var(--chat-text,#53604f)}
-.appearance-example-bubble{width:fit-content;max-width:100%;min-width:54px;min-height:42px;padding:9px 12px;border-radius:10px;background:var(--member-bubble,#fff);color:var(--member-text,#53604f);line-height:1.8;overflow-wrap:anywhere}
+.appearance-example-bubble{width:fit-content;max-width:100%;min-width:54px;min-height:42px;padding:9px 12px;border-radius:10px;background:var(--member-bubble,#fff);color:var(--member-text,#000000);line-height:1.8;overflow-wrap:anywhere}
 .appearance-example-link{color:var(--member-link,#356f64);text-decoration:underline}
 .appearance-example.is-important .appearance-example-bubble{background:var(--important-bubble,#fcd3d4);color:var(--important-text,#860000)}
 .appearance-example.is-important .appearance-example-link{color:var(--important-link,#860000)}

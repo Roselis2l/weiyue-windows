@@ -11,6 +11,7 @@ const messageCleanup = require('./message-cleanup.cjs');
 
 const SCHEMA_VERSION = 1;
 const RECYCLE_SCHEMA_VERSION = 2;
+const PURGE_SCHEMA_VERSION = 3;
 const MAX_MESSAGES = 500000;
 const MAX_STATE_BYTES = 512 * 1024 * 1024;
 const MAX_TIME = 8640000000000000;
@@ -18,6 +19,10 @@ const FILE_PATTERN = /^account-[a-f0-9]{64}\.json$/;
 const SECRET_KEY = /^(?:api[_-]?key|key|token|access[_-]?token|refresh[_-]?token|notion[_-]?token|ai[_-]?key|cookie|cookies|password|secret|authorization)$/i;
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const clone = value => JSON.parse(JSON.stringify(value));
+const writeLocks = new Map();
+const statStamp = s => [s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');
+const fileStamp = file => statStamp(fs.statSync(file,{bigint:true}));
+function freezeTree(value) { if(value&&typeof value==='object'&&!Object.isFrozen(value)){for(const child of Object.values(value))freezeTree(child);Object.freeze(value);}return value; }
 
 function fail(message) { throw new Error(message); }
 function record(value, label) {
@@ -298,7 +303,7 @@ function validateState(state, expectedId) {
     return group;
   }) };
   assertJson(state);
-  if (state.schemaVersion !== SCHEMA_VERSION && state.schemaVersion !== RECYCLE_SCHEMA_VERSION) fail('本地数据版本不受支持，请保留原文件并升级应用');
+  if (![SCHEMA_VERSION,RECYCLE_SCHEMA_VERSION,PURGE_SCHEMA_VERSION].includes(state.schemaVersion)) fail('本地数据版本不受支持，请保留原文件并升级应用');
   const account = normalizeAccount(state.account);
   if (account.id !== expectedId) fail('账号数据不匹配');
   const groups = array(state.groups, '群列表', 10000).map(normalizeGroup);
@@ -319,9 +324,12 @@ function validateState(state, expectedId) {
     messageKeys.add(key);
   }
   const messageTrash = messageCleanup.validateMessageTrash(state.messageTrash, messages, groups);
+  const messageTombstones = messageCleanup.validateMessageTombstones(state.messageTombstones, messages, groups);
+  if (messageTombstones.length && state.schemaVersion !== PURGE_SCHEMA_VERSION) fail('永久删除标记需要受支持的数据版本，请保留原文件并升级应用');
+  const tombstoneKeys=new Set(messageTombstones.map(messageKey));
   const hiddenKeys = new Set(messages.filter(message => message.localDeletion).map(messageKey));
   for (const group of groups) {
-    for (const pending of group.latestPendingRanges || []) if (!messageKeys.has(messageKey({ groupId: group.id, id: pending.arrivalAfterId }))) fail('最近消息续读起点引用的同群消息不存在；请保留原文件后检查数据');
+    for (const pending of group.latestPendingRanges || []) {const key=messageKey({groupId:group.id,id:pending.arrivalAfterId});if(!messageKeys.has(key)&&!tombstoneKeys.has(key))fail('最近消息续读起点引用的同群消息不存在；请保留原文件后检查数据');}
   }
   const bookmarks = array(state.bookmarks, '收藏', 100000).map(bookmark => {
     record(bookmark, '收藏'); identifier(bookmark.id, '收藏 ID');
@@ -361,8 +369,9 @@ function validateState(state, expectedId) {
   // than silently discard tombstones during their normalization. Restoring a
   // batch does not downgrade the account. Normalize early unreleased schema-1
   // recycle fixtures in memory too; reading alone never rewrites their bytes.
-  const schemaVersion = messageTrash.length ? RECYCLE_SCHEMA_VERSION : state.schemaVersion;
-  return { ...state, schemaVersion, account, groups, messages, bookmarks, readPositions, readStates, importantMembers, messageTrash };
+  const schemaVersion = state.schemaVersion===PURGE_SCHEMA_VERSION ? PURGE_SCHEMA_VERSION : messageTrash.length ? RECYCLE_SCHEMA_VERSION : state.schemaVersion;
+  return { ...state, schemaVersion, account, groups, messages, bookmarks, readPositions, readStates, importantMembers, messageTrash,
+    ...(state.messageTombstones !== undefined || schemaVersion===PURGE_SCHEMA_VERSION ? {messageTombstones} : {}) };
 }
 
 function filterMessages(messages, query = {}, importantMembers = []) {
@@ -392,28 +401,46 @@ class Store {
   constructor(root) {
     if (typeof root !== 'string' || !root) fail('本地数据目录无效');
     this.root = path.resolve(root);
+    this._snapshots = new Map();
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
   }
   _file(id) {
     return path.join(this.root, `account-${createHash('sha256').update(identifier(id, '账号 ID')).digest('hex')}.json`);
   }
-  _read(file, expectedId) {
-    let state;
+  _read(file, expectedId, readonly=false) {
+    let state,stamp;
     try {
       if (fs.statSync(file).size > MAX_STATE_BYTES) fail('数据文件过大');
+      stamp=fileStamp(file);
+      const cached=this._snapshots.get(file);
+      if(cached?.stamp===stamp){if(expectedId&&cached.state.account.id!==expectedId)fail('账号数据不匹配');this._snapshots.delete(file);this._snapshots.set(file,cached);return readonly?cached.state:clone(cached.state);}
       state = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if(fileStamp(file)!==stamp)fail('账号文件正在变化，请稍后再试');
     } catch (error) {
       if (error.code === 'ENOENT') return null;
       fail('无法读取本地账号数据；请保留原文件后检查或恢复备份');
     }
-    return validateState(state, expectedId || state.account?.id);
+    const normalized=freezeTree(validateState(state, expectedId || state.account?.id));
+    this._publishSnapshot(file,normalized,stamp);
+    return readonly?normalized:clone(normalized);
   }
+  _lockKey(id) {const file=path.join(fs.realpathSync.native(this.root),path.basename(this._file(id)));return process.platform==='win32'?file.toLowerCase():file;}
+  _assertWritable(id) { if(writeLocks.has(this._lockKey(id))) {const error=new Error('本地数据操作正在进行，请完成后重试。');error.code='CLEANUP_BUSY';throw error;} }
+  isWriteLocked(id) { return writeLocks.has(this._lockKey(id)); }
+  _acquireWriteLock(id) { this._assertWritable(id);const file=this._lockKey(id),token=Symbol('cleanup');writeLocks.set(file,token);return()=>{if(writeLocks.get(file)===token)writeLocks.delete(file);}; }
+  _invalidateSnapshot(id) { this._snapshots.delete(this._file(id)); }
+  _publishSnapshot(file,state,stamp) {this._snapshots.delete(file);this._snapshots.set(file,{stamp,state});while(this._snapshots.size>4)this._snapshots.delete(this._snapshots.keys().next().value);}
+  runCleanupTask(id, action, payload, options={}) { return require('./message-cleanup-task.cjs').runCleanupTask(this,id,action,payload,options); }
   _write(id, state) {
+    this._assertWritable(id);
     const normalized = validateState(state, id);
     const serialized = JSON.stringify(normalized);
     // Never publish a state that the next read would reject. Recycling keeps
     // recovery records, so enforce the same byte budget before creating a file.
     if (Buffer.byteLength(serialized, 'utf8') > MAX_STATE_BYTES) fail('本地账号数据超过 512 MiB 保存上限；未写入更改，请保留现有数据。');
+    // Cache an independent copy of the exact validated representation being
+    // published, not caller-owned objects assigned by a mutator.
+    const nextSnapshot=freezeTree(JSON.parse(serialized));
     const file = this._file(id), temporary = `${file}.${randomUUID()}.tmp`;
     let fd;
     try {
@@ -421,7 +448,15 @@ class Store {
       fs.writeFileSync(fd, serialized, 'utf8');
       fs.fsyncSync(fd);
       fs.closeSync(fd); fd = undefined;
+      const preparedStat=fs.statSync(temporary,{bigint:true});
       fs.renameSync(temporary, file);
+      // Cache failure is never a failed account commit. A replaced/changed file
+      // cannot borrow the prepared state's stamp after an external write.
+      try{
+        const installedStat=fs.statSync(file,{bigint:true});
+        if(installedStat.ino===preparedStat.ino&&installedStat.size===preparedStat.size&&installedStat.mtimeNs===preparedStat.mtimeNs)this._publishSnapshot(file,nextSnapshot,statStamp(installedStat));
+        else this._snapshots.delete(file);
+      }catch{this._snapshots.delete(file);}
     } catch (error) {
       if (fd !== undefined) fs.closeSync(fd);
       try { fs.unlinkSync(temporary); } catch { /* original state remains intact */ }
@@ -431,12 +466,12 @@ class Store {
   }
   accounts() {
     return fs.readdirSync(this.root).filter(name => FILE_PATTERN.test(name)).map(name => {
-      const file = path.join(this.root, name), state = this._read(file);
+      const file = path.join(this.root, name), state = this._read(file,undefined,true);
       if (this._file(state.account.id) !== file) fail('账号文件名称与内容不匹配');
-      return state.account;
+      return clone(state.account);
     }).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
   }
-  account(id) { return this._read(this._file(id), identifier(id))?.account || null; }
+  account(id) { const value=this._read(this._file(id), identifier(id),true)?.account;return value?clone(value):null; }
   ensureAccount(account) {
     account = normalizeAccount(account);
     const existing = this._read(this._file(account.id), account.id);
@@ -451,7 +486,14 @@ class Store {
     if (!state) fail('账号不存在，请先创建或登录账号');
     return state;
   }
+  // Internal read-only snapshot. Frozen recursively; callers cannot mutate the
+  // shared validated cache. Public get() continues to return a mutable copy.
+  getSnapshot(id) {
+    const state=this._read(this._file(id),identifier(id),true);
+    if(!state)fail('账号不存在，请先创建或登录账号');return state;
+  }
   update(id, mutator) {
+    this._assertWritable(id);
     if (typeof mutator !== 'function') fail('更新操作无效');
     const state = this.get(id);
     const previousPending = new Map(state.groups.map(group => [group.id, {legacy:JSON.stringify(group.latestPending),ranges:JSON.stringify(group.latestPendingRanges)}]));
@@ -485,8 +527,10 @@ class Store {
       const groupMap = new Map(state.groups.map(group => [group.id, group]));
       for (const group of groups) groupMap.set(group.id, { selected: false, ...groupMap.get(group.id), ...group });
       const messageMap = new Map(state.messages.map(message => [messageKey(message), message]));
+      const tombstones=new Set((state.messageTombstones||[]).map(messageKey));
+      const tombstoneMap=new Map((state.messageTombstones||[]).map(message=>[messageKey(message),message]));
       const latestByGroup = new Map();
-      for (const message of state.messages) {
+      for (const message of [...state.messages,...(state.messageTombstones||[])]) {
         const current = latestByGroup.get(message.groupId);
         if (!current || compareMessages(message, current) > 0) latestByGroup.set(message.groupId, message);
       }
@@ -496,7 +540,8 @@ class Store {
         if (!own(state.readStates, groupId)) setProperty(state.readStates, groupId, normalizeReadState(undefined, groupId, messageMap));
         let floor = latestByGroup.get(groupId) || null;
         if (own(arrivalAfter, groupId)) {
-          floor = arrivalAfter[groupId] === null ? null : messageMap.get(messageKey({ groupId, id: identifier(arrivalAfter[groupId]) }));
+          const key=arrivalAfter[groupId]===null?null:messageKey({groupId,id:identifier(arrivalAfter[groupId])});
+          floor = key===null?null:messageMap.get(key)||tombstoneMap.get(key);
           if (floor === undefined) fail('本轮同步起点消息不存在，请重新开始同步');
         }
         arrivalFloors.set(groupId, floor);
@@ -504,6 +549,7 @@ class Store {
       for (const message of messages) {
         if (!groupMap.has(message.groupId)) fail('导入消息所属群不存在，请在 groups 中提供群信息');
         const key = messageKey(message);
+        if(tombstones.has(key))continue;
         if (!messageMap.has(key)) {
           inserted++;
           const readState = state.readStates[message.groupId], floor = arrivalFloors.get(message.groupId);
@@ -519,7 +565,7 @@ class Store {
     return inserted;
   }
   queryMessages(accountId, query = {}) {
-    const state = this.get(accountId), found = filterMessages(state.messages, query, state.importantMembers);
+    const state = this.getSnapshot(accountId), found = filterMessages(state.messages, query, state.importantMembers);
     const limit = query.limit === undefined ? 200 : query.limit;
     let offset = query.offset === undefined ? 0 : query.offset;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2000) fail('每页条数必须是 1 到 2000 的整数');
@@ -538,10 +584,10 @@ class Store {
       offset = hasBefore ? Math.max(0, index - limit) : index + (hasAfter ? 1 : 0);
       end = hasBefore ? index : offset + limit;
     }
-    return { messages: found.slice(offset, end), total: found.length, ...(hasStart || hasAfter || hasBefore ? {offset} : {}) };
+    return { messages: clone(found.slice(offset, end)), total: found.length, ...(hasStart || hasAfter || hasBefore ? {offset} : {}) };
   }
   previewMessageCleanup(accountId, selection) {
-    return messageCleanup.previewMessageCleanup(this.get(accountId), selection);
+    return messageCleanup.previewMessageCleanup(this.getSnapshot(accountId), selection);
   }
   applyMessageCleanup(accountId, selection, expectedFingerprint) {
     const state = this.get(accountId);
@@ -550,13 +596,18 @@ class Store {
     return result;
   }
   listMessageTrash(accountId, query = {}) {
-    return messageCleanup.listMessageTrash(this.get(accountId), query);
+    return messageCleanup.listMessageTrash(this.getSnapshot(accountId), query);
   }
   restoreMessageTrash(accountId, batchId) {
     const state = this.get(accountId);
     const result = messageCleanup.restoreMessageTrash(state, batchId);
     if (result.restored) this._write(identifier(accountId), state);
     return result;
+  }
+  previewMessagePurge(accountId, selection) { return messageCleanup.previewMessagePurge(this.getSnapshot(accountId),selection); }
+  applyMessagePurge(accountId, selection, expectedFingerprint) {
+    const state=this.get(accountId),result=messageCleanup.applyMessagePurge(state,selection,expectedFingerprint);
+    if(result.purged)this._write(identifier(accountId),state);return result;
   }
   bookmark(accountId, input) {
     record(input, '收藏');
@@ -611,36 +662,38 @@ class Store {
     return { deleted: true, summaryCount: state.summaries.length };
   }
   setReadPosition(accountId, groupId, messageId, options) {
+    this._assertWritable(accountId);
     const legacyCall = arguments.length < 4;
     options = options === undefined ? {} : record(options, '阅读选项');
     groupId = identifier(groupId, '群 ID'); messageId = identifier(messageId, '消息 ID');
     if (options.offset !== undefined) pixelOffset(options.offset);
     if (options.followTail !== undefined && typeof options.followTail !== 'boolean') fail('尾部跟随状态必须是布尔值');
     const seenId = legacyCall ? messageId : options.seenId === undefined || options.seenId === null ? null : identifier(options.seenId, '可见末行 ID');
+    const snapshot=this.getSnapshot(accountId);
+    const messages = new Map(snapshot.messages.filter(message => message.groupId === groupId && !message.localDeletion).map(message => [message.id, message]));
+    if (!messages.has(messageId)) fail('阅读位置对应的消息不存在');
+    if (seenId !== null && !messages.has(seenId)) fail('可见末行引用的消息不存在');
+    const current=snapshot.readStates[groupId],next={...current,unreadIds:[...current.unreadIds]};
+    next.anchorId=messageId;
+    next.anchorOffset=options.offset===undefined?current.anchorId===messageId?current.anchorOffset:0:options.offset;
+    if(options.followTail!==undefined)next.atBottom=options.followTail;
+    if(seenId!==null&&(next.readThroughId===null||compareMessages(messages.get(seenId),messages.get(next.readThroughId))>0))next.readThroughId=seenId;
+    if(next.readThroughId!==null)next.unreadIds=next.unreadIds.filter(id=>compareMessages(messages.get(id),messages.get(next.readThroughId))>0);
+    if(snapshot.readPositions[groupId]===messageId&&JSON.stringify(next)===JSON.stringify(current))return messageId;
     this.update(accountId, state => {
-      const messages = new Map(state.messages.filter(message => message.groupId === groupId && !message.localDeletion).map(message => [message.id, message]));
-      if (!messages.has(messageId)) fail('阅读位置对应的消息不存在');
-      if (seenId !== null && !messages.has(seenId)) fail('可见末行引用的消息不存在');
-      const current = state.readStates[groupId];
-      const previousAnchor = current.anchorId;
-      current.anchorId = messageId;
-      current.anchorOffset = options.offset === undefined ? previousAnchor === messageId ? current.anchorOffset : 0 : options.offset;
-      if (options.followTail !== undefined) current.atBottom = options.followTail;
-      if (seenId !== null && (current.readThroughId === null || compareMessages(messages.get(seenId), messages.get(current.readThroughId)) > 0)) current.readThroughId = seenId;
-      if (current.readThroughId !== null) current.unreadIds = current.unreadIds.filter(id => compareMessages(messages.get(id), messages.get(current.readThroughId)) > 0);
-      current.updatedAt = Date.now();
+      state.readStates[groupId]={...next,updatedAt:Date.now()};
       setProperty(state.readPositions, groupId, messageId);
     });
     return messageId;
   }
   getReadStats(accountId, groupId) {
-    const state = this.get(accountId), byGroup = new Map(state.groups.map(group => [group.id, []]));
+    const state = this.getSnapshot(accountId), byGroup = new Map(state.groups.map(group => [group.id, []]));
     for (const message of state.messages) if (!message.localDeletion) byGroup.get(message.groupId).push(message);
     const stats = {};
     for (const [id, messages] of byGroup) {
       messages.sort(compareMessages);
       const current = state.readStates[id], unread = new Set(current.unreadIds);
-      setProperty(stats, id, { ...current, unreadCount: unread.size, firstUnreadId: messages.find(message => unread.has(message.id))?.id || null, latestMessageId: messages.at(-1)?.id || null, messageCount: messages.length });
+      setProperty(stats, id, { ...current, unreadIds:[...current.unreadIds],unreadCount: unread.size, firstUnreadId: messages.find(message => unread.has(message.id))?.id || null, latestMessageId: messages.at(-1)?.id || null, messageCount: messages.length });
     }
     if (groupId === undefined) return stats;
     groupId = identifier(groupId, '群 ID');
@@ -742,4 +795,4 @@ function createDemoData(now = Date.now()) {
   return { groups, messages: messages.sort(compareMessages) };
 }
 
-module.exports = { Store, normalizeMessage, filterMessages, compareIds, compareMessages, createDemoData, visibleMessages: messageCleanup.visibleMessages };
+module.exports = { Store, normalizeMessage, filterMessages, compareIds, compareMessages, createDemoData, validateState, visibleMessages: messageCleanup.visibleMessages };

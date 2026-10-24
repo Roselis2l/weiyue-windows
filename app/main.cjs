@@ -44,7 +44,7 @@ app.setName('微阅 Windows');
 protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 const lock=app.requestSingleInstanceLock(); if(!lock) app.quit();
 let win,loginWindow,pendingLogin,store,vault,activeId,busy=false;
-let autoSync,revision=0,activeSync,accountEpoch=0,closeReady=false,closeTimer;
+let autoSync,revision=0,activeSync,accountEpoch=0,closeReady=false,closeTimer,closeFinishing=false;
 let imageViewer,activeAi,heifDecoder,videoDecoder,attachmentViewer,attachmentDownload,messageCleanup;
 const aiPreviews=new AiPreviewStore();
 const summaryDeletePreviews=new SummaryDeletePreviewStore();
@@ -55,11 +55,13 @@ const enrichmentJobs=new Map(),enrichmentAttempts=new Map(),imageCache=new Map()
 let cachedImageBytes=0,activeImages=0;const imageWaiters=[];
 const sessions=new Map();
 const sessionRegistry=new AccountSessionRegistry({sessions,createSession:()=>{const s=session.fromPartition('weiyue-account-'+crypto.randomUUID());hardenSession(s);return s;},readCookies:id=>secrets(id).cookies||[],officialUrl});
-const avatars=new AvatarService({getContext:()=>({owner:activeId,epoch:accountEpoch,revision,closing:closing()}),getState:id=>store.get(id),restoreSession:accountSession,defaultSession:()=>session.defaultSession,request:imageRequest});
+const avatars=new AvatarService({getContext:()=>({owner:activeId,epoch:accountEpoch,revision,closing:closing()}),getState:id=>store.getSnapshot(id),restoreSession:accountSession,defaultSession:()=>session.defaultSession,request:imageRequest});
 function preferences(){try{return JSON.parse(fs.readFileSync(path.join(dataRoot,'preferences.json'),'utf8'));}catch{return {};}}
 function clearMedia(){accountEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
 function setActive(id){const changed=activeId!==id;activeId=id;fs.writeFileSync(path.join(dataRoot,'preferences.json'),JSON.stringify({activeId:id}));if(changed){preferredRefreshGroup=null;clearMedia();revision++;configureAutomatic();}}
-function account(){return store.get(activeId);}
+// Validated immutable snapshots are read-only. Mutations always go through Store.
+function account(){return store.getSnapshot(activeId);}
+function cleanupBusy(){return !!messageCleanup?.isBusy();}
 function secrets(id=activeId){return vault.read(id);}
 function publicReadStats(id=activeId,groupId){const all=store.getReadStats(id,groupId);const clean=s=>{const {unreadIds,...rest}=s;return rest;};return groupId===undefined?Object.fromEntries(Object.entries(all).map(([key,value])=>[key,clean(value)])):clean(all);}
 function snapshot(){
@@ -77,15 +79,28 @@ function configureAutomatic(){
   if(!store||!activeId)return;
   const owner=activeId;
   autoSync=automaticAccounts.activate(owner,()=>{
-    const controller=new AutoSync({run:()=>runSync({},true),isBusy:()=>busy||enrichmentJobs.size>0,
-      isEligible:()=>{if(activeId!==owner||closing())return false;const s=store.get(owner);return s.account.kind==='weibo'&&s.groups.some(g=>g.selected)&&!!secrets(owner).cookies?.length;}});
+    const controller=new AutoSync({run:()=>runSync({},true),isBusy:()=>busy||cleanupBusy()||enrichmentJobs.size>0,
+      isEligible:()=>{if(activeId!==owner||closing())return false;const s=store.getSnapshot(owner);return s.account.kind==='weibo'&&s.groups.some(g=>g.selected)&&!!secrets(owner).cookies?.length;}});
     controller.configure({enabled:account().account.kind==='weibo'&&account().settings.autoSyncEnabled!==false,intervalMs:AUTOMATIC_INTERVAL_MS});
     return controller;
   });
 }
-function closing(){return closeReady||!!closeTimer;}
+function closing(){return closeReady||!!closeTimer||closeFinishing;}
+async function finishClose(){
+  if(closeReady||closeFinishing)return;
+  closeFinishing=true;clearTimeout(closeTimer);closeTimer=null;
+  try{
+    // A confirmed local transaction must settle before the process exits. The
+    // renderer's close acknowledgement cannot bypass an in-flight atomic commit.
+    await messageCleanup?.whenIdle();
+    closeReady=true;closeFinishing=false;if(win&&!win.isDestroyed())win.close();
+  }catch{
+    closeFinishing=false;
+    dialog.showErrorBox('本地操作尚未完成','暂时无法确认本地保存已结束。请保留窗口，待数据操作完成后再关闭。');
+  }
+}
 async function runSync(p={},automatic=false){
-  if(busy||enrichmentJobs.size){const e=new Error('已有操作正在进行，请稍后再同步。');e.code='SYNC_BUSY';throw e;}
+  if(busy||cleanupBusy()||enrichmentJobs.size){const e=new Error('已有操作正在进行，请稍后再同步。');e.code='SYNC_BUSY';throw e;}
   const syncPolicy=autoSync;syncPolicy?.assertAllowed();
   const id=activeId,state=account();if(state.account.kind!=='weibo')throw new Error('演示与导入账号不连接微博。请先登录官方账号。');
   if(!state.groups.some(g=>g.selected&&(!p.groupId||g.id===p.groupId)))throw new Error('请先选择允许同步的群聊。');
@@ -130,7 +145,7 @@ async function serveImage(request,u,returnImage=false){
   const imageWeight=value=>value.bytes.length+(value.original?.bytes.length||0);
   const id=activeId,epoch=accountEpoch;let parts;try{parts=u.pathname.slice(1).split('/').map(decodeURIComponent);}catch{return new Response('Invalid image',{status:400});}
   if(request.method!=='GET'||parts.length!==6||parts[0]!==mediaToken(id)||!/^(?:message|post|reference-(?:[0-9]|1[0-9]))$/.test(parts[3])||!/^\d{1,3}$/.test(parts[4])||!['preview','original'].includes(parts[5]))return new Response('Not found',{status:404});
-  const state=store.get(id),m=state.messages.find(m=>!m.localDeletion&&m.groupId===parts[1]&&m.id===parts[2]);const descriptor=(parts[3].startsWith('reference-')?m?.references?.[Number(parts[3].slice(10))]?.images:parts[3]==='post'?m?.sharedPost?.images:m?.images)?.[Number(parts[4])];
+  const state=store.getSnapshot(id),m=state.messages.find(m=>!m.localDeletion&&m.groupId===parts[1]&&m.id===parts[2]);const descriptor=(parts[3].startsWith('reference-')?m?.references?.[Number(parts[3].slice(10))]?.images:parts[3]==='post'?m?.sharedPost?.images:m?.images)?.[Number(parts[4])];
   const url=safeImageUrl(parts[5]==='original'?(descriptor?.originalUrl||descriptor?.url):(descriptor?.thumbnailUrl||descriptor?.url));if(!url)return new Response('Image unavailable',{status:404});
   const key=mediaToken(id)+'|'+url;let cached=imageCache.get(key);
   if(!cached){
@@ -184,7 +199,7 @@ async function readStoredAttachment(source,{signal}={}){
   const transport=(url,options)=>imageRequest(s,url,options);
   const ready=await resolveAttachment(attachment,{fetch:transport,signal});check();
   if(attachment.state!=='ready'){
-    const fresh=store.get(id).messages.find(m=>m.id===message.id&&m.groupId===message.groupId);
+    const fresh=store.getSnapshot(id).messages.find(m=>m.id===message.id&&m.groupId===message.groupId);
     if(!fresh||fresh.attachments?.[index]?.fid!==attachment.fid)throw new Error('附件记录已变化。');
     store.mergeMessages(id,[],[{...fresh,attachments:mergeAttachments(fresh.attachments,[ready]),attachmentVersion:1}],{history:true});revision++;
   }
@@ -192,7 +207,7 @@ async function readStoredAttachment(source,{signal}={}){
 }
 async function enrichMessages(id,p){
   if(account().account.kind!=='weibo')return {count:0};if(!Array.isArray(p.messageIds)||p.messageIds.length>10)throw new Error('每次最多补全 10 条已存消息。');
-  const key=id+'|'+String(p.groupId);if(enrichmentJobs.has(key))return enrichmentJobs.get(key);if(busy)return {count:0,deferred:true};
+  const key=id+'|'+String(p.groupId);if(enrichmentJobs.has(key))return enrichmentJobs.get(key);if(busy||cleanupBusy())return {count:0,deferred:true};
   const epoch=accountEpoch,syncPolicy=autoSync;
   const check=()=>{if(id!==activeId||epoch!==accountEpoch||closing())throw Object.assign(new Error('账号已变化，补全已停止。'),{code:'ABORTED'});};
   // Only the owning job records an actual API failure. Its policy remains tied
@@ -205,7 +220,7 @@ async function enrichMessages(id,p){
   const job=(async()=>{
     const needsContext=m=>m.contextVersion!==1&&(isImageQuoteText(m.text)||m.senderName==='粉丝群');
     const complete=m=>m.referenceVersion===1&&m.mediaVersion===1&&(m.attachmentVersion===1||!/^(?:文件消息|分享视频)$/.test((m.text||'').trim()))&&!needsContext(m);
-    const state=store.get(id),targets=[...new Set(p.messageIds)].map(mid=>state.messages.find(m=>!m.localDeletion&&m.groupId===p.groupId&&m.id===mid)).filter(m=>m&&(!complete(m)||p.retry));if(!targets.length)return {count:0};
+    const state=store.getSnapshot(id),targets=[...new Set(p.messageIds)].map(mid=>state.messages.find(m=>!m.localDeletion&&m.groupId===p.groupId&&m.id===mid)).filter(m=>m&&(!complete(m)||p.retry));if(!targets.length)return {count:0};
     check();syncPolicy?.assertAllowed();
     const s=await accountSession(id,{check}),c=client(s,{timeoutMs:10000,maxAttempts:1});const identity=await read(()=>c.identity());check();
     if('weibo-'+identity.id!==id){const error=Object.assign(new Error('登录账号不一致，请重新登录。'),{code:'ACCOUNT_MISMATCH'});syncPolicy?.recordFailure(error);throw error;}let count=0;
@@ -263,7 +278,7 @@ function summaryDeleteSelection(p){
   return {accountId:p.accountId,summaryId:p.summaryId,groupId:p.groupId};
 }
 function readSummaryForDelete(selection){
-  const state=store.get(selection.accountId),matches=state.summaries.filter(item=>item&&item.id===selection.summaryId);
+  const state=store.getSnapshot(selection.accountId),matches=state.summaries.filter(item=>item&&item.id===selection.summaryId);
   if(matches.length>1)throw new Error('摘要 ID 重复，请保留数据后检查，未删除摘要。');
   const selected=matches[0];
   if(selected&&selected.groupId!==selection.groupId)throw new Error('摘要所属群已变化，请刷新后重试。');
@@ -295,6 +310,9 @@ async function saveText(defaultPath,text,extensions){const r=await dialog.showSa
 async function handle(action,p){
   const id=activeId;
   if(busy&&['account.switch','demo','login.open','login.complete','logout','settings.save','settings.ai.save','settings.appearance.save','import','groups.select'].includes(action))throw new Error('操作正在进行，请完成后再切换账号或设置。');
+  // Account switching and read-only queries may continue. Concurrent writers
+  // cannot replace the state captured by a confirmed cleanup transaction.
+  if(cleanupBusy()&&['demo','login.open','login.complete','logout','settings.save','settings.ai.save','settings.appearance.save','import','groups.select','read.set','important.set','bookmark.add','bookmark.remove','summary.local','summary.ai.prepare','summary.ai','summary.delete','sync.configure','notion.export'].includes(action))throw new Error('本地数据操作正在进行，完成后可继续保存或同步。');
   switch(action){
     case 'state':return snapshot();
     case 'ai.providers':return listAiProviders();
@@ -309,8 +327,11 @@ async function handle(action,p){
     case 'messages.cleanup.info':return messageCleanup.info(p);
     case 'messages.cleanup.preview':return messageCleanup.preview(p);
     case 'messages.cleanup.apply':return messageCleanup.apply(p);
+    case 'messages.cleanup.status':return messageCleanup.status(p);
     case 'messages.trash.list':return messageCleanup.list(p);
     case 'messages.trash.restore':return messageCleanup.restore(p);
+    case 'messages.trash.purge.preview':return messageCleanup.purgePreview(p);
+    case 'messages.trash.purge.apply':return messageCleanup.purgeApply(p);
     case 'members.list':{const map=new Map();for(const m of visibleMessages(account().messages))if(m.groupId===p.groupId)map.set(m.senderId,m.senderName);return [...map].map(([id,name])=>({id,name}));}
     case 'messages.locate':{const s=account();const messages=visibleMessages(s.messages).filter(m=>m.groupId===p.groupId).sort(compareMessages);const offset=messages.findIndex(m=>m.id===p.messageId);if(offset<0)throw new Error('原文未在本机找到，请补充同步或重新导入。');return {message:decorateMessage(messages[offset],id),offset};}
     case 'read.set':{if(p.anchorId!==undefined){store.setReadPosition(id,p.groupId,p.anchorId,{offset:p.anchorOffset,followTail:p.atBottom,seenId:p.readThroughId});}else store.setReadPosition(id,p.groupId,p.messageId);return publicReadStats(id,p.groupId);}
@@ -386,7 +407,7 @@ async function handle(action,p){
     case 'login.cancel':return loginFlow.cancel();
     case 'sync.status':captureRefreshContext(p);return syncStatus();
     case 'sync.configure':{if(typeof p.enabled!=='boolean')throw new Error('请指定自动更新开关。');store.update(id,s=>{s.settings.autoSyncEnabled=p.enabled;});if(!p.enabled&&activeSync?.automatic)activeSync.controller.abort();autoSync.configure({enabled:p.enabled,intervalMs:AUTOMATIC_INTERVAL_MS});return syncStatus();}
-    case 'window.closeReady':if(closeTimer){clearTimeout(closeTimer);closeTimer=null;closeReady=true;win.close();}return true;
+    case 'window.closeReady':if(closing())await finishClose();return true;
     case 'login.complete':{
       if(!pendingLogin&&account().account.kind!=='weibo')throw new Error('请先打开官方登录窗口并自行完成登录。');
       let loginSession=pendingLogin;busy=true;try{
@@ -428,7 +449,7 @@ async function handle(action,p){
 }
 async function start(){
   store=new Store(path.join(dataRoot,'accounts'));vault=new Vault(path.join(dataRoot,'credentials'),safeStorage);
-  messageCleanup=createMessageCleanupController({store,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||enrichmentJobs.size>0,closing:closing()}),onChange:()=>{revision++;aiPreviews.clear();}});
+  messageCleanup=createMessageCleanupController({store,asyncOperations:true,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||enrichmentJobs.size>0,closing:closing()}),onChange:()=>{revision++;aiPreviews.clear();}});
   const all=store.accounts();if(!all.length)store.seedDemo();const saved=preferences().activeId;setActive(store.accounts().some(a=>a.id===saved)?saved:store.accounts()[0].id);
    protocol.handle('app',request=>{
     const u=new URL(request.url);
@@ -437,7 +458,7 @@ async function start(){
     if(request.method!=='GET'||u.host!=='local')return new Response('Not found',{status:404});
     if(u.pathname.startsWith('/emoticons/'))return emoticonAssets.serve(request,u);
     if(pdfAssets.has(u.pathname))return net.fetch(pathToFileURL(path.join(__dirname,'pdfjs',u.pathname.slice('/pdfjs/'.length))).href);
-    if(!['/auto-page.js','/appearance.js','/appearance-settings.js','/drag-scroll.js','/message-references.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
+    if(!['/auto-page.js','/appearance.js','/appearance-settings.js','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
     return net.fetch(pathToFileURL(path.join(__dirname,'renderer',u.pathname.slice(1))).href);
   });
   hardenSession(session.defaultSession);Menu.setApplicationMenu(null);
@@ -448,7 +469,7 @@ async function start(){
   attachmentViewer=createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment,decodeVideo:(value,options)=>{videoDecoder ||= createVideoDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return videoDecoder.decode(value,options);}});
   attachmentDownload=createAttachmentDownload({dialog,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));win.webContents.on('will-navigate',e=>e.preventDefault());win.webContents.on('will-attach-webview',e=>e.preventDefault());
-  win.on('close',event=>{if(closeReady)return;event.preventDefault();if(closeTimer)return;autoSync?.stop();activeSync?.controller.abort();clearMedia();closeTimer=setTimeout(()=>{closeTimer=null;closeReady=true;win.close();},2000);win.webContents.send('weiyue:before-close');});
+  win.on('close',event=>{if(closeReady)return;event.preventDefault();if(closing())return;autoSync?.stop();activeSync?.controller.abort();clearMedia();closeTimer=setTimeout(()=>void finishClose(),2000);win.webContents.send('weiyue:before-close');});
   ipcMain.handle('weiyue:call',async(e,action,payload)=>{
     if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||e.senderFrame.url!=='app://local/index.html')return {ok:false,error:'来源不受信任'};
     if(typeof action!=='string'||!payload||typeof payload!=='object'||Array.isArray(payload)||JSON.stringify(payload).length>(['notion.preview','notion.export'].includes(action)?1250000:100000))return {ok:false,error:'请求格式无效'};

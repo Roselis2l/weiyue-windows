@@ -17,7 +17,8 @@ function section(start, end) {
   assert.ok(a >= 0 && b > a, `source section ${start}`);
   return source.slice(a, b);
 }
-const extracted = section('function isCurrentReadingRendered()', 'function watchMessageSizes()') +
+const extracted = section('function cleanupWorkActive()', 'function renderCleanupProgress()') +
+  section('function isCurrentReadingRendered()', 'function watchMessageSizes()') +
   section('function hasFilters(', 'async function applyFilters(') +
   section('function bindReadingInput(', 'function updateUnreadBadges()') +
   section("window.addEventListener('pointerup'", "window.addEventListener('focus'");

@@ -16,6 +16,7 @@
   <script src="emoticon-manifest.js" defer></script>
   <script src="emoticons.js" defer></script>
   <script src="message-references.js" defer></script>
+  <script src="cleanup-progress.js" defer></script>
   <script src="message-cleanup.js" defer></script>
   <script src="appearance.js" defer></script>
   <script src="appearance-settings.js" defer></script>
@@ -33,6 +34,7 @@
     </aside>
     <main id="workspace" class="workspace" aria-label="群聊阅读工作台">
       <header id="workspace-header" class="workspace-header"></header>
+      <section id="cleanup-progress" class="cleanup-progress" role="status" aria-live="polite" aria-atomic="true" hidden></section>
       <div id="workspace-content" class="workspace-content"></div>
     </main>
     <aside id="inspector" class="inspector" aria-label="收藏与摘要工具"></aside>

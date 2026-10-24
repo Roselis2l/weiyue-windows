@@ -29,7 +29,7 @@ const model = {
   renderedReading: null, readBoundary: null, layoutVersion: 0, intentVersion: 0, scrollTop: 0, pointerScrolling: false, touchY: null,
   pointerReading: null, messageDrag: null, readingInput: null, pagingGestureSequence: 0, readingActivity: null, readingCommits: new Map(), pendingReadingRefresh: null, pendingReadingTimer: null,
   messageObserver: null, drafts: new Map(), readWrite: Promise.resolve(), lastReadPayload: '',
-  syncStatus: null, syncRevision: null, polling: false, pollTimer: null, refreshRunning: false, manualSync: false,
+  syncStatus: null, syncRevision: null, polling: false, pollTimer: null, refreshRunning: false, manualSync: false, cleanupOperation: null,
   messageSignatures: new Map(), closing: false, enrichmentAttempted: new Set(), enrichmentErrors: new Map(), enriching: false, enrichmentRetryTimer: null
 };
 const readIntent = reading.createReadIntentGate();
@@ -226,7 +226,7 @@ function renderHeader() {
   // and task status without spending a second row on the same title.
   $('workspace-header').replaceChildren(node('div',{class:'header-utility-row'},node('div',{class:'header-status-area'},node('span',{id:'header-status',class:'header-status'}),node('div',{class:'sync-status-stack',hidden:accountKind()!=='weibo'},node('p',{id:'sync-status-line',class:'sync-status-line'}),node('p',{id:'sync-gap-line',class:'sync-gap-line'}))),node('div',{class:'header-actions',role:'group','aria-label':'工作区操作'},actions)));
   updateBusy();
-  renderSyncStatus();renderAiRequestStatus();
+  renderSyncStatus();renderAiRequestStatus();renderCleanupProgress();
 }
 async function switchAccount(id) {
   await activateAccount('account.switch',{id});
@@ -265,7 +265,7 @@ function autoPageKey() {
 function autoPageSnapshot() {
   const scroll=$('message-scroll');
   return {key:autoPageKey(),enabled:!!scroll && isCurrentReadingRendered() && !model.switching && !model.closing && document.visibilityState==='visible' && document.hasFocus(),
-    blocked:model.restoring || model.refreshRunning || searchEditing() || !!model.readNavigation || !!model.searchEditor?.memberPicker?.isInteracting() || !!model.messageDrag?.isDragging() || !!$('modal')?.open,
+    blocked:cleanupWorkActive() || model.restoring || model.refreshRunning || searchEditing() || !!model.readNavigation || !!model.searchEditor?.memberPicker?.isInteracting() || !!model.messageDrag?.isDragging() || !!$('modal')?.open,
     atTop:!!scroll && window.WeiyueAutoPage.isAtTop(scroll),atBottom:!!scroll && window.WeiyueAutoPage.isAtBottom(scroll),offset:model.offset,count:model.messages.length,total:model.total,pageSize:model.limit};
 }
 async function loadNextLocalPage(snapshot) {
@@ -384,7 +384,7 @@ function readingContext() {return JSON.stringify([model.accountEpoch,model.state
 function readingOwner() {return JSON.stringify([model.accountEpoch,model.state.account?.id,model.groupId,model.queryVersion,model.view]);}
 function readingBusy() {
   const owner=readingOwner();
-  return autoPage.status().loading || searchEditing() || model.searchEditor?.memberPicker?.isInteracting() || !!model.readNavigation || !!model.messageDrag?.isDragging() || model.readingActivity?.owner===owner || (model.readingCommits.get(owner)||0)>0 ||
+  return cleanupWorkActive() || autoPage.status().loading || searchEditing() || model.searchEditor?.memberPicker?.isInteracting() || !!model.readNavigation || !!model.messageDrag?.isDragging() || model.readingActivity?.owner===owner || (model.readingCommits.get(owner)||0)>0 ||
     (model.pointerScrolling && model.pointerReading?.owner===owner && model.pointerReading.scroll===$('message-scroll'));
 }
 function queueReadingRefresh(force=true) {
@@ -970,7 +970,7 @@ function handleReadingScroll() {
     else if(direction===token.direction)autoPage.observe();
   }
 }
-function canAdvanceRead() {return isCurrentReadingRendered() && !searchEditing() && !model.searchEditor?.memberPicker?.isInteracting() && !model.readNavigation && document.visibilityState==='visible' && document.hasFocus() && !$('modal').open && !model.switching;}
+function canAdvanceRead() {return !cleanupWorkActive() && isCurrentReadingRendered() && !searchEditing() && !model.searchEditor?.memberPicker?.isInteracting() && !model.readNavigation && document.visibilityState==='visible' && document.hasFocus() && !$('modal').open && !model.switching;}
 function scheduleRead(candidate=null) {
   clearTimeout(model.readTimer);
   model.readTimer=setTimeout(()=>{void flushReading(candidate).catch(()=>{});void enrichVisibleMessages();},500);
@@ -985,6 +985,7 @@ function validReadCandidate(candidate) {
 }
 async function flushReading(candidate=null) {
   clearTimeout(model.readTimer);
+  if(cleanupWorkActive()){invalidateReadingIntent();return;}
   if(candidate===false)invalidateReadingIntent();else if(!candidate)resetReadCandidate();
   const owner=readingOwner(),activity=model.readingActivity;
   const settle=()=>{if(model.readingActivity===activity)model.readingActivity=null;scheduleReadingRefresh();};
@@ -1123,12 +1124,12 @@ function renderSyncStatus() {
   const gap=$('sync-gap-line');if(gap){gap.textContent=group.text;gap.title=group.text;gap.classList.toggle('has-error',group.tone==='warning');}
   const toggle=$('auto-sync-toggle');if(toggle)toggle.textContent=automatic.toggleLabel;
   const rateWait=status?.errorCode==='RATE_LIMIT'&&Number.isFinite(status?.nextRunAt)&&status.nextRunAt>Date.now();
-  const latest=$('sync-latest');if(latest){latest.textContent=group.actionLabel;latest.disabled=model.manualSync||!!status?.running||rateWait;}
-  const history=$('sync-history');if(history)history.disabled=model.manualSync||!!status?.running||rateWait;
+  const latest=$('sync-latest');if(latest){latest.textContent=group.actionLabel;latest.disabled=cleanupWorkActive()||model.manualSync||!!status?.running||rateWait;}
+  const history=$('sync-history');if(history)history.disabled=cleanupWorkActive()||model.manualSync||!!status?.running||rateWait;
 }
 async function toggleAutoSync() {model.syncStatus=await api('sync.configure',{enabled:model.syncStatus?.enabled===false||!!model.syncStatus?.blocked});renderSyncStatus();}
 async function pollUpdates() {
-  if(model.polling || model.switching || model.closing)return;
+  if(model.polling || model.switching || model.closing || cleanupWorkActive())return;
   model.polling=true;
   try{
     const epoch=model.accountEpoch;
@@ -1523,12 +1524,118 @@ function showAppearanceSettings(settingsDraft) {
     onSaved:state=>{if(state.account?.id!==accountId)throw new Error('账号已切换，外观结果未应用。');model.state.settings.appearance=appearance.normalizeAppearance(state.settings?.appearance);applyAppearance(model.state.settings.appearance);}
   });
 }
+function cleanupWorkActive(){return model.cleanupOperation?.running===true;}
+function renderCleanupProgress(){
+  const host=$('cleanup-progress'),operation=model.cleanupOperation;
+  if(!host)return;
+  if(!operation||operation.accountId!==model.state.account?.id){host.hidden=true;return;}
+  const text=window.WeiyueCleanupProgress.describe(operation.status);
+  host.hidden=false;host.dataset.phase=operation.status.phase;host.dataset.running=String(operation.running);
+  host.dataset.kind=operation.kind;host.dataset.groupId=operation.groupId;
+  const actions=[];
+  if(operation.refreshError)actions.push(button('重试刷新',()=>refreshCleanupOutcome(operation),'small',{id:'cleanup-progress-retry'}));
+  if(!operation.running)actions.push(button('收起',()=>{if(model.cleanupOperation===operation){model.cleanupOperation=null;renderCleanupProgress();}},'text small',{id:'cleanup-progress-dismiss'}));
+  host.replaceChildren(node('div',{class:'cleanup-progress-copy'},node('span',{id:'cleanup-progress-label'},`${groupName(operation.groupId)} · ${text.label}`),node('span',{id:'cleanup-progress-detail'},text.detail)),node('div',{class:'cleanup-progress-actions'},actions));
+}
+async function refreshCleanupOutcome(operation){
+  if(operation.accountId!==model.state.account?.id||model.closing)return;
+  // Completion reconciles the *current* view using fresh reads. Even after a user
+  // switches away and back, no old state/result payload is installed in this view.
+  const epoch=model.accountEpoch,groupId=model.groupId,view=model.view;
+  const current=()=>operation.accountId===model.state.account?.id&&epoch===model.accountEpoch&&groupId===model.groupId&&view===model.view&&!model.closing;
+  operation.refreshError=false;operation.status={...operation.status,phase:'refreshing',running:false,detail:'正在刷新本地消息与分页数量。'};renderCleanupProgress();
+  try{
+    await refreshState({background:true});if(!current())return;
+    if(view==='read'&&groupId===operation.groupId){
+      // Let a real drag, selection/read commit or IME composition finish. A data
+      // result is never itself reading intent, and does not cancel user input.
+      while(current()&&(readingBusy()||model.restoring||model.refreshRunning))await new Promise(resolve=>setTimeout(resolve,80));
+      if(!current())return;
+      const anchor=captureViewport()||model.viewport,previous=model.messages.map(message=>String(message.id));
+      const pivot=Math.max(0,previous.indexOf(anchor?.anchorId));
+      const candidates=[];for(let step=1;step<=4;step++){if(previous[pivot+step])candidates.push(previous[pivot+step]);if(previous[pivot-step])candidates.push(previous[pivot-step]);}
+      const version=++model.queryVersion,filterKey=JSON.stringify(model.filters);autoPage.reset();invalidateReadingIntent();model.refreshRunning=true;
+      const active=()=>current()&&version===model.queryVersion&&filterKey===JSON.stringify(model.filters);
+      try{
+        const [result,members,boundary]=await Promise.all([
+          window.WeiyueCleanupProgress.queryCleanedWindow({query:payload=>api('messages.query',payload),payload:queryPayload(),anchor,candidates,active}),
+          api('members.list',{groupId}),locateReadBoundary(groupId,model.state.readStates?.[groupId]?.readThroughId)
+        ]);
+        if(!active())return;
+        model.readBoundary=boundary;model.offset=result.offset;model.total=result.total;model.messages=result.messages;model.members=members||[];
+        const surviving=new Set(model.messages.map(message=>String(message.id)));model.selected=new Set([...model.selected].filter(id=>surviving.has(String(id))));
+        model.preview=null;model.inspected=null;
+        const rendered=model.renderedReading,ownsDOM=rendered&&rendered.accountId===model.state.account?.id&&rendered.epoch===epoch&&rendered.groupId===groupId&&$('message-scroll');
+        if(ownsDOM){model.renderedReading={...rendered,version,filtered:hasFilters()};patchMessageList(model.messages,result.anchor);}
+        else{renderReading();restoreViewport(result.anchor);watchMessageSizes();}
+        if(isSearchEditorCurrent(model.searchEditor))updateSearchMembers(model.searchEditor);
+        updateSelection();updateReadChrome();renderInspector();
+        if(anchor?.anchorId&&!result.anchor)operation.status.detail='清理已完成；原临时定位不在筛选结果中，已显示邻近可用消息。';
+      }finally{model.refreshRunning=false;scheduleReadingRefresh();}
+    }
+    if(current()){renderSidebar();renderHeader();}
+    operation.status={...operation.status,phase:'completed',detail:operation.success};
+  }catch(error){
+    if(current()){
+      operation.refreshError=true;operation.status={...operation.status,phase:'completed',detail:'数据操作已完成，但界面刷新失败。可重试刷新；不会再次删除。'};
+    }
+  }finally{
+    if(operation.status.phase==='refreshing')operation.status={...operation.status,phase:'completed',detail:operation.success};
+    renderCleanupProgress();
+  }
+}
+async function performCleanupOperation(spec){
+  if(cleanupWorkActive()||model.cleanupStarting)throw new Error('本地数据操作正在进行，请等待完成。');
+  if(spec.accountId!==model.state.account?.id||model.closing)throw new Error('账号已变化，请重新打开本地数据管理。');
+  model.cleanupStarting=true;
+  try{await flushReading(false);if(spec.accountId!==model.state.account?.id||model.closing)throw new Error('账号已变化，尚未提交清理。');}
+  catch(error){model.cleanupStarting=false;throw error;}
+  const operation={...spec,epoch:model.accountEpoch,running:true,polling:false,refreshError:false,
+    status:{kind:spec.kind,phase:'submitting',processed:null,total:null,running:true,detail:'正在提交；确认成功后才更新消息列表。'}};
+  model.cleanupOperation=operation;model.cleanupStarting=false;invalidateReadingIntent();autoPage.reset();
+  const rendered=model.renderedReading,currentRendered=rendered&&rendered.accountId===model.state.account?.id&&rendered.epoch===model.accountEpoch&&rendered.groupId===model.groupId&&rendered.version===model.queryVersion;
+  model.queryVersion++;if(currentRendered)model.renderedReading={...rendered,version:model.queryVersion};
+  spec.onStarted();renderCleanupProgress();renderSyncStatus();
+  const poll=async()=>{
+    if(!operation.running||operation.polling||model.closing||operation.accountId!==model.state.account?.id)return;
+    operation.polling=true;
+    try{
+      const status=await window.api.call('messages.cleanup.status',{accountId:operation.accountId});
+      if(operation.running&&status?.accountId===operation.accountId&&status.groupId===operation.groupId&&status.kind===operation.kind&&status.jobId){
+        operation.status={...status};if(model.cleanupOperation===operation)renderCleanupProgress();
+      }
+    }catch{/* The final apply Promise is authoritative; polling cannot invent failure. */}
+    finally{operation.polling=false;}
+  };
+  const timer=setInterval(()=>void poll(),350);
+  try{
+    // Fixed account payload and raw bridge keep an old job's final result from
+    // being mistaken for a failure merely because the visible account changed.
+    const result=await window.api.call(spec.action,spec.payload);
+    const count=spec.kind==='restore'?result?.restoredCount:spec.kind==='purge'?result?.purgedCount:result?.deletedCount;
+    const applied=spec.kind==='restore'?result?.restored===true:spec.kind==='purge'?result?.purged===true:result?.deleted===true;
+    if(result?.accountId!==spec.accountId||result.groupId!==spec.groupId||!applied||count!==spec.total){
+      operation.status={kind:spec.kind,phase:'uncertain',running:false,detail:'返回结果无法核对，操作结果待核实。请重新打开本地数据管理检查，勿重复提交。'};
+      operation.uncertain=true;return;
+    }
+    operation.result=result;operation.running=false;operation.status={kind:spec.kind,phase:'completed',processed:count,total:count,running:false,detail:spec.success};
+    await refreshCleanupOutcome(operation);
+  }catch(error){
+    let status=null;
+    try{if(operation.accountId===model.state.account?.id)status=await window.api.call('messages.cleanup.status',{accountId:operation.accountId});}catch{}
+    const confirmedFailure=status?.accountId===operation.accountId&&status.groupId===operation.groupId&&status.kind===operation.kind&&status.phase==='failed'&&status.commitState==='not-committed';
+    operation.status={kind:spec.kind,phase:confirmedFailure?'failed':'uncertain',running:false,detail:confirmedFailure?`${status.error||error.message} 当前操作未提交，原数据保持。`:`${error.message} 结果尚待核实，请检查本地数据管理，勿重复提交。`};
+  }finally{
+    clearInterval(timer);operation.running=false;renderCleanupProgress();renderSyncStatus();
+    model.syncRevision=null;scheduleReadingRefresh();
+  }
+}
 async function showMessageCleanup(){
+  if(cleanupWorkActive()||model.cleanupStarting)throw new Error('本地数据操作正在进行，进度显示在中间栏。');
   const accountId=model.state.account?.id,epoch=model.accountEpoch;
   await flushReading(false);
   return window.WeiyueCleanup.open({api,node,button,field,check,modal,closeModal,toast,filters,accountId,groups:model.state.groups,groupId:model.groupId,
-    isCurrent:()=>accountId===model.state.account?.id&&epoch===model.accountEpoch&&!model.closing,
-    onChanged:async()=>{model.selected.clear();model.preview=null;model.aiRequest=null;await refreshState();renderSidebar();renderHeader();if(model.view==='read')await refreshReadingIncrementally(true);else if(model.view==='bookmarks')await loadBookmarks();else if(model.view==='summaries'){model.summaries=await api('summary.list');renderSummaries();}renderInspector();}});
+    isCurrent:()=>accountId===model.state.account?.id&&epoch===model.accountEpoch&&!model.closing,performOperation:performCleanupOperation});
 }
 async function showAiConfiguration(settingsDraft) {
   const dialog=$('modal'),owner=dialog.firstChild,epoch=model.accountEpoch,accountId=model.state.account?.id;

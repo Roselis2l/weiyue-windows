@@ -17,7 +17,7 @@ function fixture({ kind = 'import', accountSession, fetchImage, createHeifDecode
     id: String(i + 1), groupId: 'g', images: [{ url: 'https://wx1.sinaimg.cn/large/' + (i + 1) + '.jpg' }],
   })) };
   const scope = {
-    activeId: 'weibo-test', accountEpoch: 0, store: { get: () => state }, Response, URL, AbortController,
+    activeId: 'weibo-test', accountEpoch: 0, store: { get: () => state, getSnapshot: () => state }, Response, URL, AbortController,
     safeImageUrl, session: { defaultSession: {} }, imageCache: new Map(), imageJobs: new Map(),
     cachedImageBytes: 0, activeImages: 0, imageWaiters: [], fetchImage, accountSession, imageRequest() {}, closing: () => false,
     heifDecoder: null, createHeifDecoder, BrowserWindow: class {}, ipcMain: {}, __dirname: path.resolve(__dirname, '../app'),

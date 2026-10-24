@@ -1,4 +1,4 @@
-> **本页保留原有应用与 Electron 运行时通知。** 1.1.23 另含 [FFmpeg 本机兼容组件及对应源码](FFMPEG-THIRD-PARTY.md)（GPL-2.0-or-later）、[HEIC 解码库](HEIF-THIRD-PARTY.md)、[PDF.js](PDFJS-THIRD-PARTY.md)及[官方表情资源](WEIBO-EMOTICONS.md)。不能将整套分发包视为完全 MIT；各组件完整许可和材料均须保留。
+> **本页保留原有应用与 Electron 运行时通知。** 1.1.25 另含 [FFmpeg 本机兼容组件及对应源码](FFMPEG-THIRD-PARTY.md)（GPL-2.0-or-later）、[HEIC 解码库](HEIF-THIRD-PARTY.md)、[PDF.js](PDFJS-THIRD-PARTY.md)及[官方表情资源](WEIBO-EMOTICONS.md)。不能将整套分发包视为完全 MIT；各组件完整许可和材料均须保留。
 
 # 来源、版权与第三方组件
 

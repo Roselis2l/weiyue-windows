@@ -29,7 +29,7 @@ function fixture(t) {
   }
   let clock = start + 30 * 60000, context = { accountId: 'synthetic-a', epoch: 1, busy: false, closing: false };
   const changes = [];
-  const controller = createMessageCleanupController({ store, getContext: () => context, now: () => clock,
+  const controller = createMessageCleanupController({ store, asyncOperations:false, getContext: () => context, now: () => clock,
     onChange: () => changes.push({ count: store.queryMessages(context.accountId, { groupId: 'g' }).total }) });
   return { root, store, controller, changes, context, setClock: value => { clock = value; }, getClock: () => clock,
     bytes: (id = 'synthetic-a') => fs.readFileSync(store._file(id)),

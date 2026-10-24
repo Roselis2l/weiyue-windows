@@ -12,6 +12,7 @@ const paging=require('../app/renderer/auto-page.js');
 // scheduleRead nor flushReading is stubbed: their interaction caused the regression.
 function section(start,end){const a=source.indexOf(start),b=source.indexOf(end,a);assert.ok(a>=0&&b>a,`source section ${start}`);return source.slice(a,b);}
 const extracted=section('function emptyFilters()','const model =')+
+  section('function cleanupWorkActive()','function renderCleanupProgress()')+
   section('function queryPayload()','async function loadReading(')+
   section('function hasFilters(','async function applyFilters(')+
   section('function updateMessageAvatar(','function noteText(')+

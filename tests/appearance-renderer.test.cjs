@@ -218,7 +218,7 @@ test('automatic text saves null once and stays disabled after a failed save unti
   const f=fixture(),wait=deferred();f.setApi(()=>wait.promise);f.open();f.input('importantText','#123456');f.auto(true);
   const save=f.byId('save-appearance'),pending=save.click();
   assert.equal(f.calls.length,1);assert.equal(f.calls[0].payload.appearance.importantText,null);
-  assert.equal(Object.keys(f.calls[0].payload.appearance).length,6);assert.equal(f.byId('appearance-importantText-auto').disabled,true);
+  assert.equal(Object.keys(f.calls[0].payload.appearance).length,7);assert.equal(f.byId('appearance-importantText-auto').disabled,true);
   await save.action();assert.equal(f.calls.length,1);
   wait.reject(new Error('Synthetic automatic text save failure'));await assert.rejects(pending,/Synthetic automatic text save failure/);
   assert.equal(f.byId('appearance-importantText-auto').checked,true);assert.equal(f.byId('appearance-importantText-auto').disabled,false);
@@ -263,4 +263,63 @@ test('invalid explicit important text blocks saving but choosing automatic creat
   assert.equal(f.byId('appearance-importantText-hex').getAttribute('aria-invalid'),'false');
   assert.equal(f.byId('save-appearance').disabled,false);await f.byId('save-appearance').click();
   assert.equal(f.calls.length,1);assert.equal(f.calls[0].payload.appearance.importantText,null);
+});
+
+test('ordinary text has independent picker and HEX draft preview; cancellation and restore defaults never save implicitly',()=>{
+  const saved={...plain(fixture().library.DEFAULTS),memberText:'#234567',importantText:'#654321'};
+  const f=fixture(saved),live=node('section');f.module.apply(live,f.fromRealm(saved));const liveBefore=[...live.style.values];f.open();
+  assert.equal(f.byId('appearance-memberText-hex').getAttribute('aria-label'),'普通成员消息文字颜色 HEX');
+  assert.match(f.byId('appearance-memberText-color').getAttribute('aria-label'),/^普通成员消息文字颜色.*选择器$/);
+  assert.equal(descendants(f.dialog).some(el=>el.id==='appearance-memberText-auto'),false);
+  f.input('memberText','#AbC');
+  assert.equal(f.byId('appearance-memberText-color').value,'#aabbcc');
+  assert.equal(f.byId('appearance-preview').style.getPropertyValue('--member-text'),'#aabbcc');
+  assert.equal(f.byId('appearance-preview').style.getPropertyValue('--important-text'),'#654321');
+  f.input('memberText','#123456','color');assert.equal(f.byId('appearance-memberText-hex').value,'#123456');
+  assert.deepEqual([...live.style.values],liveBefore);assert.equal(f.calls.length,0);
+  f.cancel();f.open();assert.equal(f.byId('appearance-memberText-hex').value,'#234567');
+  f.byId('appearance-reset').click();assert.equal(f.byId('appearance-memberText-hex').value,'#000000');
+  assert.equal(f.byId('appearance-preview').style.getPropertyValue('--member-text'),'#000000');
+  assert.equal(f.calls.length,0);f.cancel();f.open();assert.equal(f.byId('appearance-memberText-hex').value,'#234567');
+  assert.deepEqual(saved,{...plain(f.library.DEFAULTS),memberText:'#234567',importantText:'#654321'});
+});
+
+test('invalid ordinary text disables save while recovering a valid HEX persists only the exact seven-field appearance',async()=>{
+  const f=fixture();f.open();f.input('memberText','#123');
+  for(const invalid of ['', 'black', '#12', '#12345678', '#fff;', 'var(--ink)', '#fff;color:red']){
+    f.input('memberText',invalid);
+    assert.equal(f.byId('appearance-memberText-hex').getAttribute('aria-invalid'),'true');
+    assert.equal(f.byId('appearance-memberText-error').hidden,false);assert.equal(f.byId('save-appearance').disabled,true);
+    f.byId('save-appearance').click();assert.equal(f.calls.length,0);
+    assert.equal(f.byId('appearance-preview').style.getPropertyValue('--member-text'),'#112233');
+  }
+  f.input('memberText','#A3F');await f.byId('save-appearance').click();
+  assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].payload,{accountId:'account-a',appearance:{...plain(f.library.DEFAULTS),memberText:'#aa33ff'}});
+  f.open({appearance:f.fromRealm(f.calls[0].payload.appearance)});assert.equal(f.byId('appearance-memberText-hex').value,'#aa33ff');
+  assert.equal(f.byId('appearance-memberText-color').value,'#aa33ff');
+});
+
+test('ordinary low-contrast text is retained with a warning without recoloring important text, names, links or system variables',async()=>{
+  const f=fixture();f.open();const preview=f.byId('appearance-preview'),before=new Map(preview.style.values);
+  f.input('memberText','#FFF');assert.equal(preview.style.getPropertyValue('--member-text'),'#ffffff');
+  assert.equal(f.byId('appearance-warnings').hidden,false);assert.ok(f.byId('appearance-warnings').textContent.includes('普通成员消息文字'));
+  for(const [key,value] of before)if(key!=='--member-text')assert.equal(preview.style.getPropertyValue(key),value,key);
+  assert.ok(f.library.contrastRatio(preview.style.getPropertyValue('--member-link'),'#ffffff')>=4.5);
+  assert.equal(f.byId('save-appearance').disabled,false);await f.byId('save-appearance').click();
+  assert.equal(f.calls[0].payload.appearance.memberText,'#ffffff');assert.equal(f.calls[0].payload.appearance.importantText,'#860000');
+  f.open({appearance:f.fromRealm(f.calls[0].payload.appearance)});f.byId('appearance-reset').click();await f.byId('save-appearance').click();
+  assert.equal(f.calls.length,2);assert.equal(f.calls[1].payload.appearance.memberText,'#000000');
+});
+
+test('legacy six-field appearance opens black ordinary text without overriding existing colors or automatic important mode',()=>{
+  for(const importantText of ['#aabbcc',null]){
+    const initial={...plain(fixture().library.DEFAULTS),memberBubble:'#000000',importantText};delete initial.memberText;
+    const f=fixture(initial);f.open();
+    assert.equal(f.byId('appearance-memberText-hex').value,'#000000');assert.equal(f.byId('appearance-memberText-color').value,'#000000');
+    assert.equal(f.byId('appearance-memberText-hex').disabled,false);
+    assert.equal(f.byId('appearance-memberBubble-hex').value,'#000000');
+    assert.equal(f.byId('appearance-importantText-auto').checked,importantText===null);
+    assert.equal(f.byId('appearance-preview').style.getPropertyValue('--member-text'),'#000000');
+    f.cancel();assert.equal(f.calls.length,0);assert.equal(Object.hasOwn(initial,'memberText'),false);
+  }
 });

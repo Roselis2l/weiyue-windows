@@ -8,7 +8,7 @@ const { Store } = require('../app/core/store.cjs');
 const { saveAppearanceSettings } = require('../app/core/appearance-settings.cjs');
 const { DEFAULTS, normalizeAppearance, getAppearanceTheme, contrastRatio } = require('../app/renderer/appearance.js');
 
-const colors = () => ({ chatBackground:'#ABC', memberName:'#123456', importantName:'#654321', memberBubble:'#FFF', importantBubble:'#123', importantText:null });
+const colors = () => ({ chatBackground:'#ABC', memberName:'#123456', importantName:'#654321', memberBubble:'#FFF', importantBubble:'#123', importantText:null, memberText:'#025' });
 const contextFor = (accountId = 'appearance-a') => ({ accountId, epoch:7, busy:false, closing:false });
 const payloadFor = (appearance = colors(), accountId = 'appearance-a') => ({ accountId, appearance });
 function snapshot(root) {
@@ -54,11 +54,11 @@ function withoutAppearance(state) {
   return copy;
 }
 
-test('appearance save persists six canonical fields across restart without changing any other account or reading field', t => {
+test('appearance save persists seven canonical fields across restart without changing any other account or reading field', t => {
   const {root,accountRoot,store} = setup(t), beforeA = store.get('appearance-a'), beforeB = store.get('appearance-b'), filesBefore = snapshot(root);
   assert.deepEqual(beforeA.readStates['synthetic-group'].unreadIds,['3']);
   const result = save(store);
-  const expected = {chatBackground:'#aabbcc',memberName:'#123456',importantName:'#654321',memberBubble:'#ffffff',importantBubble:'#112233',importantText:null};
+  const expected = {chatBackground:'#aabbcc',memberName:'#123456',importantName:'#654321',memberBubble:'#ffffff',importantBubble:'#112233',importantText:null,memberText:'#002255'};
   assert.deepEqual(result,expected);
   const reopened = new Store(accountRoot), afterA = reopened.get('appearance-a');
   assert.deepEqual(afterA.settings.appearance,expected);
@@ -97,14 +97,14 @@ test('complete old five-color settings retain every original color and automatic
   const before = snapshot(root), beforeState = store.get('appearance-a');
   for (let attempt = 0; attempt < 2; attempt++) {
     const state = new Store(accountRoot).get('appearance-a'), normalized = normalizeAppearance(state.settings.appearance);
-    assert.deepEqual(normalized,{...legacy,importantText:null});
+    assert.deepEqual(normalized,{...legacy,importantText:null,memberText:'#000000'});
     assert.deepEqual(state,beforeState);
     assert.ok(contrastRatio(getAppearanceTheme(normalized).importantText,legacy.importantBubble) >= 4.5);
     assert.deepEqual(snapshot(root),before);
   }
   save(store,payloadFor(normalizeAppearance(legacy)));
   const after = new Store(accountRoot).get('appearance-a');
-  assert.deepEqual(after.settings.appearance,{...legacy,importantText:null});
+  assert.deepEqual(after.settings.appearance,{...legacy,importantText:null,memberText:'#000000'});
   assert.deepEqual(withoutAppearance(after),withoutAppearance(beforeState));
 });
 
@@ -114,7 +114,7 @@ test('invalid stored important text falls back to automatic in memory without al
     const appearance = {...colors(),importantText};
     store.update('appearance-a',state => { state.settings.appearance = appearance; });
     const before = snapshot(root), state = new Store(accountRoot).get('appearance-a');
-    assert.deepEqual(normalizeAppearance(state.settings.appearance),{chatBackground:'#aabbcc',memberName:'#123456',importantName:'#654321',memberBubble:'#ffffff',importantBubble:'#112233',importantText:null});
+    assert.deepEqual(normalizeAppearance(state.settings.appearance),{chatBackground:'#aabbcc',memberName:'#123456',importantName:'#654321',memberBubble:'#ffffff',importantBubble:'#112233',importantText:null,memberText:'#002255'});
     assert.deepEqual(snapshot(root),before);
   }
 });
@@ -185,6 +185,8 @@ test('invalid or injected appearance payloads fail before any file changes', t =
     payloadFor({...colors(),memberBubble:'#ffffff80'}),payloadFor({...colors(),memberBubble:'white'}),payloadFor({...colors(),memberBubble:''}),
     payloadFor({...colors(),memberBubble:null}),payloadFor({...colors(),memberBubble:123}),payloadFor({...colors(),unknown:'#fff'}),
     ...['',false,0,'var(--other)','#ffffff80','red','#fff; color: red'].map(importantText => payloadFor({...colors(),importantText})),
+    ...[null,'',false,0,'var(--other)','#ffffff80','red','#fff; color: red'].map(memberText => payloadFor({...colors(),memberText})),
+    payloadFor(Object.fromEntries(Object.entries(colors()).filter(([key]) => key !== 'memberText'))),
     payloadFor(Object.fromEntries(Object.entries(colors()).filter(([key]) => key !== 'importantText'))),
     payloadFor(Object.fromEntries(Object.entries(colors()).filter(([key]) => key !== 'importantName'))),payloadFor([]),
     Object.assign(Object.create({inherited:true}),payloadFor()),payloadFor(Object.assign(Object.create({inherited:true}),colors())),
@@ -253,4 +255,29 @@ test('storage failure is propagated with no optimistic result or additional sett
   assert.equal(writes,1);
   assert.deepEqual(snapshot(root),before);
   assert.equal(Object.hasOwn(store.get('appearance-a').settings,'appearance'),false);
+});
+
+test('old six-field appearances display black ordinary text without changing either account or persisted bytes', t => {
+  const {root,accountRoot,store}=setup(t);
+  for(const importantText of ['#aabbcc',null]){
+    const legacy={chatBackground:'#111111',memberName:'#eeeeee',importantName:'#abcdef',memberBubble:'#000000',importantBubble:'#445566',importantText};
+    store.update('appearance-a',state=>{state.settings.appearance={...legacy};});
+    const before=snapshot(root),state=new Store(accountRoot).get('appearance-a');
+    assert.deepEqual(normalizeAppearance(state.settings.appearance),{...legacy,memberText:'#000000'});
+    assert.equal(getAppearanceTheme(state.settings.appearance).memberText,'#000000');
+    assert.deepEqual(snapshot(root),before);assert.deepEqual(state.settings.appearance,legacy);
+  }
+});
+
+test('ordinary text changes persist independently across restart and never change message state, other colors or credentials', t => {
+  const {root,accountRoot,store}=setup(t),before=store.get('appearance-a'),other=store.get('appearance-b');
+  const initialFiles=snapshot(root),custom={...DEFAULTS,chatBackground:'#222222',memberName:'#123456',importantText:'#aabbcc',importantBubble:'#445566'};
+  for(const [memberText,expected] of [['#A3f','#aa33ff'],['#000000','#000000'],['#FFF','#ffffff']]){
+    save(store,payloadFor({...custom,memberText}));
+    const reopened=new Store(accountRoot),state=reopened.get('appearance-a');
+    assert.deepEqual(state.settings.appearance,{...custom,memberText:expected});
+    assert.deepEqual(withoutAppearance(state),before);assert.deepEqual(reopened.get('appearance-b'),other);
+    const files=snapshot(root);assert.deepEqual(Object.keys(files),Object.keys(initialFiles));
+    assert.deepEqual(Object.keys(files).filter(name=>files[name]!==initialFiles[name]),[path.relative(root,store._file('appearance-a'))]);
+  }
 });

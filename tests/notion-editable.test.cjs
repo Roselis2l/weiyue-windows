@@ -210,7 +210,7 @@ const handleSource = mainSource.slice(mainSource.indexOf('async function handle(
 function mainHarness({ confirm = async () => {}, fetch = async () => createResponse() } = {}) {
   const local = state(), calls = { secrets: [], writes: 0, dialogs: [] };
   const context = vm.createContext({
-    activeId: 'local-account', busy: false, account: () => local,
+    activeId: 'local-account', busy: false, cleanupBusy: () => false, account: () => local,
     store: { get: id => { assert.equal(id, 'local-account'); return local; }, update: (id, fn) => { assert.equal(id, 'local-account'); calls.writes++; fn(local); } },
     secrets: id => { calls.secrets.push(id); return { notionToken: 'offline-fixture-token' }; },
     confirmSend: async (...args) => { calls.dialogs.push(args); await confirm(local, context); },

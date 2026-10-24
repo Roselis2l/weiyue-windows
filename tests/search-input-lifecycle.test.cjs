@@ -15,6 +15,7 @@ function section(start,end){
 // logic. This fake DOM detects a detach/focus loss; real Chromium IME is tested
 // separately by the Windows regression harness.
 const extracted=section('function emptyFilters()','const model =')+
+  section('function cleanupWorkActive()','function renderCleanupProgress()')+
   section('async function run(','function updateBusy()')+
   section('async function setView(','function draftKey()')+
   section('function isCurrentReadingRendered()','function captureViewport()')+
@@ -138,6 +139,15 @@ test('long IME composition preserves input identity/focus and submits only commi
   h.type('\u4e2d\u6587',true);h.end();h.type('\u4e2d\u6587');await h.tick(350);
   assert.deepEqual(h.queries.map(query=>query.keyword),['\u4e2d\u6587']);
   assert.equal(h.input(),input);assert.equal(input.value,'\u4e2d\u6587');assert.equal(h.document.activeElement,input);
+});
+test('cleanup lock pauses read writes across account views without advancing local high-water state',async()=>{
+  const h=harness(),before=JSON.stringify(h.model.state.readStates);
+  h.model.cleanupOperation={running:true,accountId:'other-account'};
+  assert.equal(h.run('readingBusy()'),true);
+  await h.run('flushReading(false)');
+  assert.equal(h.writes.length,0);assert.equal(JSON.stringify(h.model.state.readStates),before);
+  h.model.cleanupOperation.running=false;
+  assert.equal(h.run('!!readingBusy()'),false);
 });
 test('Enter during composition and compatibility keyCode 229 never prematurely submit',async()=>{
   const h=harness();h.start();h.type('zhong',true);

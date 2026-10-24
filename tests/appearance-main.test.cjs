@@ -11,7 +11,7 @@ const plain=value=>JSON.parse(JSON.stringify(value));
 function harness({unreadable=false}={}){
  const states=new Map(['account-A','account-B'].map(id=>[id,{account:{id,name:'Synthetic '+id,kind:'import'},groups:[],messages:[],bookmarks:[],summaries:[],readPositions:{group:'42'},readStates:{group:{anchorId:'42',readThroughId:'80',unreadIds:['81']}},importantMembers:['member'],settings:{model:'preserved-model',autoSyncEnabled:false},exports:{}}]));
  const calls={writes:0,vaultWrites:0,secretReads:0,network:0};
- const scope={activeId:'account-A',accountEpoch:1,busy:false,revision:7,dataRoot:'synthetic-only',
+ const scope={activeId:'account-A',accountEpoch:1,busy:false,cleanupBusy:()=>false,revision:7,dataRoot:'synthetic-only',
   normalizeAppearance,saveAppearanceSettings,visibleMessages:messages=>messages,avatars:{source(){throw Error('no groups in fixture');}},
   closing:()=>false,account:()=>states.get(scope.activeId),publicReadStats:()=>plain(states.get(scope.activeId).readStates),
   secrets:()=>{calls.secretReads++;if(unreadable)throw Error('synthetic credentials locked');return{aiKey:'MOCK-ONLY',notionToken:'MOCK-NOTION'};},
@@ -34,11 +34,11 @@ test('actual state snapshot supplies appearance defaults without mutating or mig
  assert.deepEqual(plain(next.settings.appearance),{...DEFAULTS,memberName:'#aabbcc',importantText:null});assert.equal(JSON.stringify([...h.states]),old);assert.equal(h.calls.writes,0);
 });
 
-test('actual appearance route persists only six appearance fields and returns snapshot without revision or credentials changes',async()=>{
+test('actual appearance route persists only seven appearance fields and returns snapshot without revision or credentials changes',async()=>{
  const h=harness(),before=structuredClone(h.states.get('account-A')),other=structuredClone(h.states.get('account-B'));
- const colors={...DEFAULTS,memberBubble:'#000',importantBubble:'#fff',memberName:'#ABC'};
+ const colors={...DEFAULTS,memberBubble:'#000',importantBubble:'#fff',memberName:'#ABC',memberText:'#F09'};
  const result=await h.call('settings.appearance.save',{accountId:'account-A',appearance:colors});
- const expected={...DEFAULTS,memberBubble:'#000000',importantBubble:'#ffffff',memberName:'#aabbcc'};
+ const expected={...DEFAULTS,memberBubble:'#000000',importantBubble:'#ffffff',memberName:'#aabbcc',memberText:'#ff0099'};
  assert.deepEqual(h.states.get('account-A'),{...before,settings:{...before.settings,appearance:expected}});
  assert.deepEqual(h.states.get('account-B'),other);assert.deepEqual(plain(result.settings.appearance),expected);assert.equal(result.account.id,'account-A');
  assert.equal(result.revision,7);assert.equal(h.scope.revision,7);assert.equal(h.calls.writes,1);assert.equal(h.calls.vaultWrites,0);assert.equal(h.calls.network,0);
@@ -62,11 +62,21 @@ test('actual route rejects stale accounts, unknown payload and busy or closing o
 });
 
 test('actual route keeps different appearance values isolated after account switches',async()=>{
- const h=harness();await h.call('settings.appearance.save',{accountId:'account-A',appearance:{...DEFAULTS,chatBackground:'#000'}});
+ const h=harness();await h.call('settings.appearance.save',{accountId:'account-A',appearance:{...DEFAULTS,chatBackground:'#000',memberText:'#abc'}});
  const switched=await h.call('account.switch',{id:'account-B'});assert.deepEqual(plain(switched.settings.appearance),DEFAULTS);
  await assert.rejects(h.call('settings.appearance.save',{accountId:'account-A',appearance:DEFAULTS}),{code:'APPEARANCE_ACCOUNT_CHANGED'});
- await h.call('settings.appearance.save',{accountId:'account-B',appearance:{...DEFAULTS,chatBackground:'#abc'}});
+ await h.call('settings.appearance.save',{accountId:'account-B',appearance:{...DEFAULTS,chatBackground:'#abc',memberText:'#123'}});
  const back=await h.call('account.switch',{id:'account-A'});assert.equal(back.settings.appearance.chatBackground,'#000000');assert.equal(h.states.get('account-B').settings.appearance.chatBackground,'#aabbcc');
+ assert.equal(back.settings.appearance.memberText,'#aabbcc');assert.equal(h.states.get('account-B').settings.appearance.memberText,'#112233');
+});
+
+test('actual snapshot supplies black ordinary text for old six-field settings without a migration write',async()=>{
+ const h=harness(),legacy={...DEFAULTS,chatBackground:'#000000',memberBubble:'#112233',importantText:'#aabbcc'};delete legacy.memberText;
+ h.states.get('account-A').settings.appearance=legacy;const before=JSON.stringify([...h.states]);
+ const result=await h.call('state',{});
+ assert.deepEqual(plain(result.settings.appearance),{...legacy,memberText:'#000000'});
+ assert.equal(JSON.stringify([...h.states]),before);assert.equal(h.calls.writes,0);assert.equal(h.calls.vaultWrites,0);
+ assert.equal(Object.hasOwn(h.states.get('account-A').settings.appearance,'memberText'),false);
 });
 
 test('preload permits only the explicit appearance action and forwards its account-bound payload',async()=>{

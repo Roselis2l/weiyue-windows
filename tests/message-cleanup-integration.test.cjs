@@ -47,7 +47,7 @@ function fixture(t) {
 test('recycle/restart/continuous sync preserve the raw frontier, unread/anchors and both export source paths', async t => {
   const f = fixture(t), before = f.store.get('synthetic-a'), otherBytes = fs.readFileSync(f.store._file('synthetic-b'));
   const hashes = f.sourceHashes(f.store), groupOther = before.groups.find(g => g.id === 'h');
-  const controller = createMessageCleanupController({ store: f.store, getContext: () => ({ accountId: 'synthetic-a', epoch: 1, busy: false, closing: false }) });
+  const controller = createMessageCleanupController({ store: f.store, asyncOperations:false, getContext: () => ({ accountId: 'synthetic-a', epoch: 1, busy: false, closing: false }) });
   const preview = controller.preview(payload);
   assert.equal(preview.deleteCount, 2);
   assert.deepEqual(preview.sample.filter(m => m.action === 'recycle').map(m => m.id), ['105', '106']);

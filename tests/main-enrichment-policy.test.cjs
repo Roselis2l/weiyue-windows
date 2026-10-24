@@ -27,7 +27,7 @@ function fixture(t,options={}){
     store.mergeMessages(id,[],[{id:'22',groupId:'2',senderId:'7',senderName:'Synthetic',text:'Synthetic new message',time:1022}]);
   }
   const oldPolicy=policy(),newPolicy=policy(),calls=[],restores=[];
-  const context={activeId:'weibo-1',accountEpoch:1,busy:false,revision:0,store,autoSync:oldPolicy.controller,
+  const context={activeId:'weibo-1',accountEpoch:1,busy:false,cleanupBusy:()=>false,revision:0,store,autoSync:oldPolicy.controller,
     isImageQuoteText:require('../app/core/message-references.cjs').isImageQuoteText,
     enrichmentJobs:new Map(),enrichmentAttempts:new Map(),closing:()=>false,
     account:()=>store.get(context.activeId),

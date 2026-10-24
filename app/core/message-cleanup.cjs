@@ -7,6 +7,7 @@ const { parseChinaMinuteRange } = require('../renderer/filter-controls.js');
 
 const MAX_TIME = 8640000000000000;
 const MAX_BATCHES = 100000;
+const MAX_RECORDS = 500000;
 const keyOf = message => JSON.stringify([message.groupId, message.id]);
 const isRecord = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && value === value.trim() && !/[\u0000-\u001f]/.test(value);
@@ -58,8 +59,39 @@ function normalizeSelection(input) {
   if (input.retainSenderIds !== undefined && (!Array.isArray(input.retainSenderIds) || input.retainSenderIds.length > 100000 || Array.from(input.retainSenderIds).some(id => !validId(id))))
     throw new Error('保留成员必须使用有效的成员 ID。');
   if (input.retainSummaryRanges !== undefined && typeof input.retainSummaryRanges !== 'boolean') throw new Error('保留摘要时段选项无效。');
+  const mode = input.mode === undefined ? 'recycle' : input.mode;
+  if (mode !== 'recycle' && mode !== 'permanent') throw new Error('清理方式无效，请选择本地回收或永久删除。');
   return { groupId: input.groupId, startMinute: input.startMinute, endMinute: input.endMinute,
-    retainSenderIds: [...new Set(input.retainSenderIds || [])].sort(), retainSummaryRanges: input.retainSummaryRanges !== false };
+    retainSenderIds: [...new Set(input.retainSenderIds || [])].sort(), retainSummaryRanges: input.retainSummaryRanges !== false, mode };
+}
+
+function validateMessageTombstones(raw, messages, groups) {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > MAX_RECORDS || raw.length + messages.length > MAX_RECORDS)
+    throw new Error('永久删除标记超过本地保存上限，请保留原文件后检查。');
+  const groupIds = new Set(groups.map(group => group.id)), keys = new Set(messages.map(keyOf));
+  return Array.from(raw, marker => {
+    if (!isRecord(marker) || Object.keys(marker).length !== 3 || !Object.hasOwn(marker, 'groupId') || !Object.hasOwn(marker, 'id') || !Object.hasOwn(marker, 'time')
+      || !validId(marker.groupId) || !groupIds.has(marker.groupId) || !validId(marker.id) || !validTime(marker.time))
+      throw new Error('永久删除标记无效；仅允许保存群 ID、消息 ID 和原始时间。');
+    const key = keyOf(marker);
+    if (keys.has(key)) throw new Error('永久删除标记重复或与现存消息冲突，请保留原文件后检查。');
+    keys.add(key);
+    return { groupId: marker.groupId, id: marker.id, time: marker.time };
+  });
+}
+
+function progress(callback, phase, processed, total) {
+  if (typeof callback === 'function') callback({ phase, processed, total });
+}
+
+function normalizePurgeSelection(input) {
+  if (!isRecord(input) || !validId(input.groupId)) throw new Error('请选择有效的回收区群聊。');
+  if (!Array.isArray(input.batchIds) || !input.batchIds.length || input.batchIds.length > MAX_BATCHES
+    || Array.from(input.batchIds).some(id => !validId(id))) throw new Error('请至少选择一个有效回收批次。');
+  const batchIds = [...new Set(input.batchIds)].sort();
+  if (batchIds.length !== input.batchIds.length) throw new Error('不能重复选择回收批次。');
+  return { groupId: input.groupId, batchIds };
 }
 
 function normalizeLocalDeletion(value) {
@@ -84,6 +116,10 @@ function validateMessageTrash(raw, messages, groups) {
     if (messageIds.length !== item.messageIds.length || messageIds.some(id => !messageMap.has(keyOf({ groupId: item.groupId, id })))) throw new Error('本地回收消息关联无效。');
     const selection = normalizeSelection(item.selection);
     if (selection.groupId !== item.groupId) throw new Error('本地回收群聊不匹配。');
+    if (selection.mode !== 'recycle') throw new Error('本地回收批次不能使用永久删除方式。');
+    // Reading an older batch must not introduce a persisted field on the next
+    // unrelated read-position/settings save. New batches explicitly store mode.
+    if (!Object.hasOwn(item.selection, 'mode')) delete selection.mode;
     const normalized = { id: item.id, groupId: item.groupId, createdAt: item.createdAt, restoredAt: item.restoredAt, selection, messageIds };
     batches.set(item.id, { ...normalized, messageIdSet: new Set(messageIds) });
     return normalized;
@@ -172,7 +208,8 @@ function protection(state, selection) {
   return { reasons, warnings, summaryRanges };
 }
 
-function previewMessageCleanup(state, input) {
+function previewMessageCleanup(state, input, { onProgress } = {}) {
+  progress(onProgress, 'planning', 0, state.messages.length);
   const selection = normalizeSelection(input);
   const group = state.groups.find(group => group.id === selection.groupId);
   if (!group) throw new Error('所选群聊不存在，请刷新后重新选择。');
@@ -186,34 +223,154 @@ function previewMessageCleanup(state, input) {
   const reasonCounts = {};
   for (const message of retained) for (const reason of reasons.get(keyOf(message))) reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
   const rows = active.slice(0, 100).map(message => ({ id: message.id, groupId: message.groupId, time: message.time, senderId: message.senderId,
-    senderName: message.senderName, text: message.text.slice(0, 240), action: reasons.get(keyOf(message))?.size ? 'retain' : 'recycle',
+    senderName: message.senderName, text: message.text.slice(0, 240), action: reasons.get(keyOf(message))?.size ? 'retain' : selection.mode,
     reasons: [...(reasons.get(keyOf(message)) || [])] }));
   const fingerprint = createHash('sha256').update(JSON.stringify({ accountId: state.account.id, groupName: group.name, selection, matched,
     decisions: active.map(message => [message.id, [...(reasons.get(keyOf(message)) || [])]]), warnings,
     summaryRanges: summaryRanges.filter(range => range.groupId === selection.groupId) })).digest('hex');
-  return { accountId: state.account.id, groupId: selection.groupId, groupName: group.name, selection, range: { start, end }, fingerprint,
+  progress(onProgress, 'planning', state.messages.length, state.messages.length);
+  return { accountId: state.account.id, groupId: selection.groupId, groupName: group.name, mode: selection.mode, selection, range: { start, end }, fingerprint,
     matchedCount: active.length, deleteCount: candidates.length, retainedCount: retained.length, alreadyDeletedCount: existing.length,
     reasonCounts, reasonLabels: REASONS, warnings, summaryRanges: summaryRanges.filter(range => range.groupId === selection.groupId),
     sample: rows, sampleTruncated: active.length > rows.length,
     retentionNote: '收藏、摘要引用、导出关联、未读消息、阅读位置和同步续扫起点始终保留。保留原因可能重叠。',
-    recycleNote: '仅移入本账号的本地回收区，可按批次恢复；不会删除微博服务端消息或立即释放磁盘空间。同步和导入不会自动恢复已回收消息。',
+    recycleNote: selection.mode === 'permanent'
+      ? '永久删除会从当前账号数据中移除所选消息正文、成员和媒体记录，不能从本地回收区恢复；仅保留群 ID、消息 ID 和原始时间，防止同步或导入立即补回。不删除微博服务端消息，也不会清理既有备份或媒体缓存。'
+      : '仅移入本账号的本地回收区，可按批次恢复；不会删除微博服务端消息或立即释放磁盘空间。同步和导入不会自动恢复已回收消息。',
   };
 }
 
-function applyMessageCleanup(state, input, expectedFingerprint, { now = Date.now, uuid = randomUUID } = {}) {
+function applyMessageCleanup(state, input, expectedFingerprint, { now = Date.now, uuid = randomUUID, onProgress } = {}) {
   if (typeof expectedFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(expectedFingerprint)) throw new Error('请先预览本地清理结果，再明确确认。');
-  const preview = previewMessageCleanup(state, input);
+  const preview = previewMessageCleanup(state, input, { onProgress });
   if (preview.fingerprint !== expectedFingerprint) throw new Error('消息或保留条件已变化，请重新预览后确认；尚未清理任何消息。');
-  if (!preview.deleteCount) return { deleted: false, deletedCount: 0, batchId: null, preview };
-  if ((state.messageTrash || []).length >= MAX_BATCHES) throw new Error('本地回收批次数已达上限，请保留数据并联系维护者。');
-  const { reasons } = protection(state, preview.selection), createdAt = now(), batchId = uuid();
-  if (!validTime(createdAt) || !validId(batchId) || (state.messageTrash || []).some(batch => batch.id === batchId)) throw new Error('无法建立有效的本地回收批次。');
+  if (!preview.deleteCount) return { deleted: false, deletedCount: 0, batchId: null, groupId: preview.groupId, mode: preview.mode, preview };
+  if (preview.mode === 'recycle' && (state.messageTrash || []).length >= MAX_BATCHES) throw new Error('本地回收批次数已达上限，请保留数据并联系维护者。');
+  const { reasons } = protection(state, preview.selection), createdAt = now();
+  if (!validTime(createdAt)) throw new Error('无法建立有效的本地清理时间。');
   const messages = state.messages.filter(message => !message.localDeletion && message.groupId === preview.groupId && message.time >= preview.range.start && message.time < preview.range.end && !reasons.get(keyOf(message))?.size);
-  for (const message of messages) message.localDeletion = { batchId, deletedAt: createdAt };
+  if (preview.mode === 'permanent') {
+    removePermanently(state, messages, onProgress);
+    return { deleted: true, deletedCount: messages.length, batchId: null, mode: 'permanent', groupId: preview.groupId, createdAt };
+  }
+  const batchId = uuid();
+  if (!validId(batchId) || (state.messageTrash || []).some(batch => batch.id === batchId)) throw new Error('无法建立有效的本地回收批次。');
+  progress(onProgress, 'processing', 0, messages.length);
+  let processed = 0;
+  for (const message of messages) {
+    message.localDeletion = { batchId, deletedAt: createdAt };
+    if (++processed % 2048 === 0 || processed === messages.length) progress(onProgress, 'processing', processed, messages.length);
+  }
   const batch = { id: batchId, groupId: preview.groupId, createdAt, restoredAt: null, selection: preview.selection, messageIds: messages.map(message => message.id) };
   state.messageTrash = [...(state.messageTrash || []), batch];
-  state.schemaVersion = 2;
-  return { deleted: true, deletedCount: messages.length, batchId, groupId: preview.groupId, createdAt };
+  state.schemaVersion = Math.max(2, state.schemaVersion || 1);
+  return { deleted: true, deletedCount: messages.length, batchId, mode: 'recycle', groupId: preview.groupId, createdAt };
+}
+
+// Keep only identities needed to suppress re-import and maintain synchronization
+// frontiers. No original text, sender, attachment or URL survives in this marker.
+function removePermanently(state, messages, onProgress) {
+  const removed = new Set(messages.map(keyOf)), markers = [...(state.messageTombstones || [])];
+  progress(onProgress, 'processing', 0, messages.length);
+  let processed = 0;
+  for (const message of messages) {
+    markers.push({ groupId: message.groupId, id: message.id, time: message.time });
+    if (++processed % 2048 === 0 || processed === messages.length) progress(onProgress, 'processing', processed, messages.length);
+  }
+  const remaining = state.messages.filter(message => !removed.has(keyOf(message)));
+  const normalizedMarkers = validateMessageTombstones(markers, remaining, state.groups);
+  // A restored message can also occur in older restored batches. Trim every
+  // historical association, so no batch references a permanently removed row.
+  const trash = (state.messageTrash || []).map(batch => ({ ...batch,
+    messageIds: batch.messageIds.filter(id => !removed.has(keyOf({ groupId: batch.groupId, id })))
+  })).filter(batch => batch.messageIds.length);
+  state.messages = remaining;
+  state.messageTombstones = normalizedMarkers;
+  state.messageTrash = trash;
+  state.schemaVersion = 3;
+}
+
+function previewMessagePurge(state, input, { onProgress } = {}) {
+  const selection = normalizePurgeSelection(input);
+  const group = state.groups.find(group => group.id === selection.groupId);
+  if (!group) throw new Error('所选群聊不存在，请刷新后重新选择。');
+  const batchMap = new Map((state.messageTrash || []).map(batch => [batch.id, batch]));
+  const batches = selection.batchIds.map(id => {
+    const batch = batchMap.get(id);
+    if (!batch || batch.groupId !== selection.groupId || batch.restoredAt !== null)
+      throw new Error('所选回收批次已恢复、不存在或不属于当前群聊，请刷新后重新选择。');
+    return batch;
+  });
+  const messagesByKey = new Map(state.messages.map(message => [keyOf(message), message]));
+  const matched = [], reasons = new Map(), warnings = new Set(), summaryRanges = [], protectionCache = new Map();
+  const total = batches.reduce((sum, batch) => sum + batch.messageIds.length, 0);
+  progress(onProgress, 'planning', 0, total);
+  let processed = 0;
+  for (const batch of batches) {
+    const batchSelection = normalizeSelection(batch.selection);
+    const cacheKey = String(batchSelection.retainSummaryRanges);
+    if (!protectionCache.has(cacheKey)) {
+      const plan = protection(state, { ...batchSelection, retainSenderIds: [] });
+      protectionCache.set(cacheKey, plan);
+      plan.warnings.forEach(warning => warnings.add(warning));
+      summaryRanges.push(...plan.summaryRanges.filter(range => range.groupId === selection.groupId));
+    }
+    const protectedPlan = protectionCache.get(cacheKey), retainedMembers = new Set(batchSelection.retainSenderIds);
+    for (const id of batch.messageIds) {
+      const key = keyOf({ groupId: selection.groupId, id }), message = messagesByKey.get(key);
+      if (!message || message.localDeletion?.batchId !== batch.id || reasons.has(key))
+        throw new Error('所选回收批次记录不完整或重复，请保留数据后检查。');
+      matched.push(message);
+      const messageReasons = new Set(protectedPlan.reasons.get(key) || []);
+      if (retainedMembers.has(message.senderId)) messageReasons.add('retainedMember');
+      reasons.set(key, messageReasons);
+      if (++processed % 2048 === 0 || processed === total) progress(onProgress, 'planning', processed, total);
+    }
+  }
+  matched.sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+  const retained = matched.filter(message => reasons.get(keyOf(message)).size), candidates = matched.length - retained.length;
+  const reasonCounts = {};
+  for (const message of retained) for (const reason of reasons.get(keyOf(message))) reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+  const warningList = [...warnings];
+  const fingerprint = createHash('sha256').update(JSON.stringify({ accountId: state.account.id, groupName: group.name,
+    selection, batches, matched, decisions: matched.map(message => [message.id, [...reasons.get(keyOf(message))]]), warnings: warningList, summaryRanges })).digest('hex');
+  const ranges = batches.map(batch => parseChinaMinuteRange(batch.selection.startMinute, batch.selection.endMinute));
+  let start = ranges[0].start, end = ranges[0].end;
+  for (const range of ranges) { start = Math.min(start, range.start); end = Math.max(end, range.end); }
+  return { accountId: state.account.id, groupId: selection.groupId, groupName: group.name, mode: 'purge', selection,
+    batchIds: selection.batchIds, batchCount: batches.length,
+    batches: batches.map(batch => ({ id: batch.id, createdAt: batch.createdAt, selection: { ...batch.selection }, count: batch.messageIds.length })),
+    range: { start, end }, fingerprint, matchedCount: matched.length, deleteCount: candidates, purgeCount: candidates,
+    retainedCount: retained.length, alreadyDeletedCount: matched.length, reasonCounts, reasonLabels: REASONS,
+    warnings: warningList, summaryRanges,
+    sample: matched.slice(0, 100).map(message => ({ id: message.id, groupId: message.groupId, time: message.time, senderId: message.senderId,
+      senderName: message.senderName, text: message.text.slice(0, 240), action: reasons.get(keyOf(message)).size ? 'retain' : 'permanent', reasons: [...reasons.get(keyOf(message))] })),
+    sampleTruncated: matched.length > 100,
+    retentionNote: '重新核对所选批次的原保留规则及当前收藏、摘要、导出、未读、阅读位置和同步起点。受保护消息继续留在回收区；未选批次不受影响。',
+    recycleNote: '永久删除不可从回收区恢复；将移除所选消息正文、成员和媒体记录，仅保留群 ID、消息 ID 和原始时间，防止同步或导入立即补回。既有备份、媒体缓存和微博服务端消息不受影响。',
+  };
+}
+
+function applyMessagePurge(state, input, expectedFingerprint, { now = Date.now, onProgress } = {}) {
+  if (typeof expectedFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(expectedFingerprint)) throw new Error('请先预览回收区永久删除范围，再明确确认。');
+  const preview = previewMessagePurge(state, input, { onProgress });
+  if (preview.fingerprint !== expectedFingerprint) throw new Error('回收批次或保留条件已变化，请重新预览后确认；尚未永久删除任何消息。');
+  if (!preview.deleteCount) return { purged: false, purgedCount: 0, groupId: preview.groupId, mode: 'purge', preview };
+  const createdAt = now();
+  if (!validTime(createdAt)) throw new Error('永久删除时间无效。');
+  const batchIds = new Set(preview.batchIds), protections = new Map(), protectionCache = new Map();
+  for (const batch of state.messageTrash || []) if (batchIds.has(batch.id)) {
+    const selection = normalizeSelection(batch.selection), cacheKey = String(selection.retainSummaryRanges);
+    if (!protectionCache.has(cacheKey)) protectionCache.set(cacheKey, protection(state, { ...selection, retainSenderIds: [] }).reasons);
+    protections.set(batch.id, { reasons: protectionCache.get(cacheKey), members: new Set(selection.retainSenderIds) });
+  }
+  const messages = state.messages.filter(message => message.groupId === preview.groupId && batchIds.has(message.localDeletion?.batchId)
+    && !protections.get(message.localDeletion.batchId).reasons.get(keyOf(message))?.size
+    && !protections.get(message.localDeletion.batchId).members.has(message.senderId));
+  if (messages.length !== preview.deleteCount) throw new Error('永久删除范围无法一致核对，尚未修改数据。');
+  removePermanently(state, messages, onProgress);
+  return { purged: true, purgedCount: messages.length, deleted: true, deletedCount: messages.length,
+    groupId: preview.groupId, batchIds: preview.batchIds, batchCount: preview.batchCount, mode: 'purge', createdAt };
 }
 
 function listMessageTrash(state, query = {}) {
@@ -225,18 +382,24 @@ function listMessageTrash(state, query = {}) {
   })).sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
 }
 
-function restoreMessageTrash(state, batchId, { now = Date.now } = {}) {
+function restoreMessageTrash(state, batchId, { now = Date.now, onProgress } = {}) {
   if (!validId(batchId)) throw new Error('回收批次 ID 无效。');
   const batch = (state.messageTrash || []).find(batch => batch.id === batchId);
   if (!batch) throw new Error('当前账号中找不到该回收批次。');
   if (batch.restoredAt !== null) return { restored: false, restoredCount: 0, batchId, groupId: batch.groupId };
   const restoredAt = now(); if (!validTime(restoredAt)) throw new Error('恢复时间无效。');
+  const messages = state.messages.filter(message => message.localDeletion?.batchId === batchId && message.groupId === batch.groupId);
+  if (messages.length !== batch.messageIds.length) throw new Error('回收批次记录不完整，尚未恢复；请保留数据后检查。');
+  progress(onProgress, 'processing', 0, messages.length);
   let count = 0;
-  for (const message of state.messages) if (message.localDeletion?.batchId === batchId && message.groupId === batch.groupId) { delete message.localDeletion; count++; }
-  if (count !== batch.messageIds.length) throw new Error('回收批次记录不完整，尚未恢复；请保留数据后检查。');
+  for (const message of messages) {
+    delete message.localDeletion;
+    if (++count % 2048 === 0 || count === messages.length) progress(onProgress, 'processing', count, messages.length);
+  }
   batch.restoredAt = restoredAt;
   return { restored: true, restoredCount: count, batchId, groupId: batch.groupId, restoredAt };
 }
 
-module.exports = { visibleMessages, normalizeSelection, normalizeLocalDeletion, validateMessageTrash,
+module.exports = { visibleMessages, normalizeSelection, normalizeLocalDeletion, validateMessageTrash, validateMessageTombstones,
+  normalizePurgeSelection, previewMessagePurge, applyMessagePurge,
   previewMessageCleanup, applyMessageCleanup, listMessageTrash, restoreMessageTrash, REASONS };

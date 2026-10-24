@@ -22,7 +22,7 @@ function fixture({fetch}={}){
     references:Array.from({length:20},(_,i)=>reference(i+100)),images:[{url:'https://wx1.sinaimg.cn/own.png'}],sharedPost:{state:'ready',text:'主帖',images:[{url:'https://wx1.sinaimg.cn/post.png'}]}};
   const state={account:{id:'synthetic-one',name:'合成账号',kind:'import'},messages:[message]};
   const requested=[];
-  const scope={crypto,activeId:'synthetic-one',accountEpoch:0,store:{get:id=>{assert.equal(id,scope.activeId);return state;}},Response,URL,AbortController,
+  const scope={crypto,activeId:'synthetic-one',accountEpoch:0,store:{get:id=>{assert.equal(id,scope.activeId);return state;},getSnapshot:id=>{assert.equal(id,scope.activeId);return state;}},Response,URL,AbortController,
     safeImageUrl,session:{defaultSession:{}},imageCache:new Map(),imageJobs:new Map(),cachedImageBytes:0,activeImages:0,imageWaiters:[],
     fetchImage:async options=>{requested.push(options.url);return fetch?fetch(options):{bytes:png,mime:'image/png'};},accountSession:()=>{throw new Error('No real session');},imageRequest(){throw new Error('No real network');},closing:()=>false,
     heifDecoder:null,createHeifDecoder:()=>{throw new Error('No HEIC fixture');},BrowserWindow:class{},ipcMain:{},__dirname:path.resolve(__dirname,'../app'),avatars:{source:()=>undefined}};
@@ -76,7 +76,7 @@ test('a malicious stored reference image fails the same safe host check before t
 });
 
 test('opening an image stops the previous video preview before creating the image window',async()=>{
-  const calls=[],scope={activeId:'synthetic-account',busy:false,
+  const calls=[],scope={activeId:'synthetic-account',busy:false,cleanupBusy:()=>false,
     attachmentViewer:{closeAll:()=>calls.push('stop-video')},
     imageViewer:{open:async value=>{calls.push('open-image');assert.equal(value.source,'synthetic-image');return {opened:true};}}};
   vm.createContext(scope);vm.runInContext(dispatch+';globalThis.dispatch=handle;',scope);
@@ -85,7 +85,7 @@ test('opening an image stops the previous video preview before creating the imag
 });
 
 test('opening a validated attachment closes the image preview and delegates video replacement to its viewer',async()=>{
-  const calls=[],scope={activeId:'synthetic-account',busy:false,
+  const calls=[],scope={activeId:'synthetic-account',busy:false,cleanupBusy:()=>false,
     attachmentRecord:source=>{calls.push('validate');if(source!=='valid')throw Error('invalid');return {attachment:{name:'Synthetic clip',kind:'video'}};},
     imageViewer:{closeAll:()=>calls.push('close-image')},
     attachmentViewer:{open:async value=>{calls.push('open-video');assert.equal(value.kind,'video');return {opened:true};}}};
@@ -100,7 +100,7 @@ test('real import, persistence, bookmark JSON export and re-import preserve cano
   const store=new Store(path.join(root,'accounts'));store.ensureAccount({id:'before',name:'合成起始账号',kind:'import'});
   const f=fixture(),file=path.join(root,'synthetic-reference-input.json'),data={groups:[{id:'group',name:'合成引用群'}],messages:[f.message]};
   fs.writeFileSync(file,JSON.stringify(data));const saved=[];
-  const scope={activeId:'before',busy:false,store,dialog:{showOpenDialog:async()=>({canceled:false,filePaths:[file]})},fs,path,crypto,win:null,
+  const scope={activeId:'before',busy:false,cleanupBusy:()=>false,store,dialog:{showOpenDialog:async()=>({canceled:false,filePaths:[file]})},fs,path,crypto,win:null,
     setActive:id=>{scope.activeId=id;},snapshot:()=>({account:store.account(scope.activeId)}),saveText:async(name,body,extensions)=>{saved.push({name,body,extensions});return{path:'synthetic-output'};}};
   vm.createContext(scope);vm.runInContext(dispatch+';globalThis.dispatch=handle;',scope);
   const imported=await scope.dispatch('import',{});assert.equal(imported.count,1);assert.notEqual(scope.activeId,'before');assert.equal(scope.busy,false);
