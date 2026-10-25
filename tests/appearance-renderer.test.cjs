@@ -7,7 +7,7 @@ const path=require('node:path');
 const vm=require('node:vm');
 
 const renderer=path.join(__dirname,'../app/renderer');
-const sources=['appearance.js','appearance-settings.js'].map(name=>fs.readFileSync(path.join(renderer,name),'utf8'));
+const sources=['appearance.js','interface-theme.js','appearance-settings.js'].map(name=>fs.readFileSync(path.join(renderer,name),'utf8'));
 const plain=value=>JSON.parse(JSON.stringify(value));
 
 // Deliberately small DOM adapter: tests exercise the shipped module, not a
@@ -294,7 +294,7 @@ test('invalid ordinary text disables save while recovering a valid HEX persists 
     assert.equal(f.byId('appearance-preview').style.getPropertyValue('--member-text'),'#112233');
   }
   f.input('memberText','#A3F');await f.byId('save-appearance').click();
-  assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].payload,{accountId:'account-a',appearance:{...plain(f.library.DEFAULTS),memberText:'#aa33ff'}});
+  assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].payload,{accountId:'account-a',appearance:{...plain(f.library.DEFAULTS),memberText:'#aa33ff'},interfaceTheme:'cool-grey'});
   f.open({appearance:f.fromRealm(f.calls[0].payload.appearance)});assert.equal(f.byId('appearance-memberText-hex').value,'#aa33ff');
   assert.equal(f.byId('appearance-memberText-color').value,'#aa33ff');
 });
@@ -322,4 +322,20 @@ test('legacy six-field appearance opens black ordinary text without overriding e
     assert.equal(f.byId('appearance-preview').style.getPropertyValue('--member-text'),'#000000');
     f.cancel();assert.equal(f.calls.length,0);assert.equal(Object.hasOwn(initial,'memberText'),false);
   }
+});
+
+test('interface theme draft is independent from seven message colors, can be reset and cancelled without a write',()=>{
+  const f=fixture();f.open({interfaceTheme:'pink'});const preview=f.byId('appearance-preview'),colors=[...preview.style.values],theme=f.byId('interface-theme-violet');
+  assert.equal(f.byId('interface-theme-preview').dataset.interfaceTheme,'pink');theme.checked=true;theme.onchange();
+  assert.equal(f.byId('interface-theme-preview').dataset.interfaceTheme,'violet');assert.deepEqual([...preview.style.values],colors);assert.equal(f.calls.length,0);
+  f.byId('interface-theme-reset').click();assert.equal(f.byId('interface-theme-preview').dataset.interfaceTheme,'cool-grey');assert.deepEqual([...preview.style.values],colors);
+  f.cancel();assert.equal(f.calls.length,0);assert.equal(f.backs.length,1);
+});
+test('theme selection saves exactly once atomically with colors and disables all theme controls while pending',async()=>{
+  const f=fixture();f.open({interfaceTheme:'viridian'});f.input('memberText','#123');
+  let resolve;f.setApi(()=>new Promise(r=>resolve=r));const pending=f.byId('save-appearance').click();
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].payload.interfaceTheme,'viridian');assert.equal(f.calls[0].payload.appearance.memberText,'#112233');
+  for(const id of ['cool-grey','viridian','pink','violet'])assert.equal(f.byId('interface-theme-'+id).disabled,true);
+  assert.equal(f.byId('interface-theme-reset').disabled,true);f.byId('save-appearance').click();assert.equal(f.calls.length,1);
+  resolve({account:{id:'account-a'},settings:{interfaceTheme:'viridian'}});await pending;assert.equal(f.saved.length,1);assert.equal(f.backs.length,1);
 });

@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
-const viewport=$('viewport'),canvas=$('page'),video=$('video');
+const viewport=$('viewport'),canvas=$('page'),video=$('video'),audio=$('audio');
 let documentTask=null,pdf=null,renderTask=null,renderChain=Promise.resolve(),blobUrl=null,epoch=0,renderEpoch=0;
 let pageNumber=1,pageCount=0,scale=1,fitted=true,saving=false,converting=false,hasOriginal=false,toastTimer;
 const pdfButtons=['previous','next','zoom-in','zoom-out','fit'].map($);
@@ -14,10 +14,11 @@ function controls(){
 }
 async function clean(){
   renderEpoch++;renderTask?.cancel();renderTask=null;
-  video.pause();video.removeAttribute('src');video.load();if(blobUrl){URL.revokeObjectURL(blobUrl);blobUrl=null;}
+  for(const player of [video,audio]){player.onloadedmetadata=null;player.onerror=null;player.pause();player.removeAttribute('src');player.load();player.hidden=true;}if(blobUrl){URL.revokeObjectURL(blobUrl);blobUrl=null;}
   const task=documentTask;documentTask=null;pdf=null;pageCount=0;
   if(task)try{await task.destroy();}catch{}
   $('pdf-stage').hidden=true;video.hidden=true;$('pdf-controls').hidden=true;controls();
+  $('document-stage').hidden=true;$('document-table').replaceChildren();$('text-preview').textContent='';$('sheet-select').replaceChildren();$('sheet-select').onchange=null;
 }
 function timeout(promise,ms,onTimeout){
   let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>{onTimeout?.();reject(new Error('timeout'));},ms);})]).finally(()=>clearTimeout(timer));
@@ -77,6 +78,30 @@ async function showPdf(bytes,currentEpoch){
     $('pdf-controls').hidden=false;controls();requestRender();
   }catch{if(currentEpoch===epoch)showStatus('此 PDF 暂时无法预览（文件损坏、加密或超过预览限制）。可另存原文件。',true);}
 }
+function showDocument(value){
+ const preview=value.preview;
+ if(!preview||!['md','csv','xlsx'].includes(preview.format)){showStatus(value.previewError||'此文档暂时无法预览，可另存原文件。');return;}
+ $('document-stage').hidden=false;$('notice').hidden=true;
+ $('document-notices').replaceChildren(...(preview.notices||[]).map(text=>{const p=document.createElement('p');p.textContent=text;return p;}));
+ $('info').textContent=preview.format.toUpperCase()+' · '+(preview.encoding?preview.encoding+' · ':'')+'本机只读预览'+(preview.truncated?' · 已截取':'');
+ const plain=preview.format==='md';$('text-preview').hidden=!plain;$('table-scroll').hidden=plain;$('sheet-label').hidden=plain;
+ if(plain){$('text-preview').textContent=preview.text||'（空文件）';return;}
+ const sheets=preview.sheets||[];
+ for(const[sheetIndex,sheet]of sheets.entries()){const option=document.createElement('option');option.value=String(sheetIndex);option.textContent=sheet.name;$('sheet-select').append(option);}
+ const columnName=number=>{let text='';while(number){number--;text=String.fromCharCode(65+number%26)+text;number=Math.floor(number/26);}return text;};
+ const showSheet=index=>{
+  const sheet=sheets[index];if(!sheet)return;const table=$('document-table');table.replaceChildren();
+  const caption=document.createElement('caption');caption.textContent=sheet.name+' · '+sheet.rows.length+' 行';table.append(caption);
+  const maxColumn=Math.min(50,Math.max(0,...sheet.rows.flatMap(row=>row.cells.map(cell=>cell.column))));
+  const head=document.createElement('thead'),header=document.createElement('tr');
+  for(let i=0;i<=maxColumn;i++){const th=document.createElement('th');th.scope='col';th.textContent=i?columnName(i):'行';header.append(th);}head.append(header);table.append(head);
+  const body=document.createElement('tbody');
+  for(const row of sheet.rows){const tr=document.createElement('tr'),th=document.createElement('th');th.scope='row';th.textContent=String(row.number);tr.append(th);const cells=new Map(row.cells.map(cell=>[cell.column,cell]));
+   for(let i=1;i<=maxColumn;i++){const td=document.createElement('td'),cell=cells.get(i);td.textContent=cell?.value||'';if(cell?.formula)td.title='公式缓存值（未执行公式）';tr.append(td);}body.append(tr);
+  }table.append(body);$('table-scroll').scrollTop=0;$('table-scroll').scrollLeft=0;
+ };
+ $('sheet-select').onchange=()=>showSheet(Number($('sheet-select').value));showSheet(0);
+}
 async function load(retry=false,convert=false){
   if(converting)return;if(convert)converting=true;
   if(!convert)hasOriginal=false;
@@ -85,13 +110,20 @@ async function load(retry=false,convert=false){
   try{
     const value=await window.attachmentViewer.call(convert?'convert':retry?'retry':'load');
     if(currentEpoch!==epoch)return;
-    if(!(value.bytes instanceof Uint8Array)||!['pdf','video'].includes(value.kind))throw new Error('invalid');
+    if(!['pdf','video','document','audio'].includes(value.kind)||(value.kind!=='document'&&!(value.bytes instanceof Uint8Array)))throw new Error('invalid');
     hasOriginal=true;
     $('title').textContent=value.title||'附件预览';$('filename').textContent=value.name;
     $('info').textContent=(value.byteLength/1024/1024).toFixed(2)+' MB · 文件仅在本机预览';$('save').disabled=saving;
-    if(value.kind==='pdf')await showPdf(value.bytes,currentEpoch);
-    else{
-      if(!['video/mp4','video/webm'].includes(value.mime))throw new Error('invalid');
+    if(value.kind==='document')showDocument(value);
+    else if(value.kind==='pdf')await showPdf(value.bytes,currentEpoch);
+    else if(value.kind==='audio'){
+      if(!['audio/mpeg','audio/wav','audio/ogg','audio/mp4','audio/amr'].includes(value.mime))throw new Error('invalid');
+      if(value.canConvert&&!convert){showStatus('正在本机准备语音兼容预览；关闭窗口可取消。');queueMicrotask(()=>{if(currentEpoch===epoch&&!converting)void load(false,true);});return;}
+      blobUrl=URL.createObjectURL(new Blob([value.bytes],{type:value.mime}));audio.hidden=false;audio.autoplay=false;audio.muted=false;
+      audio.onloadedmetadata=()=>{if(currentEpoch!==epoch)return;$('notice').hidden=true;$('info').textContent=(value.converted?'语音 · 本机兼容预览 · 另存为保留原件':'语音')+' · '+(value.byteLength/1024).toFixed(1)+' KB';Promise.resolve(audio.play()).catch(()=>{if(currentEpoch===epoch&&!audio.error)toast('自动播放未获允许，请点语音播放器中的播放按钮。');});};
+      audio.onerror=()=>{if(currentEpoch!==epoch)return;audio.pause();audio.hidden=true;showStatus('此语音暂时无法播放（编码不受支持或文件损坏），可另存原文件。',true);};audio.src=blobUrl;audio.load();
+    }else{
+      if(!['video/mp4','video/webm','video/quicktime'].includes(value.mime))throw new Error('invalid');
       blobUrl=URL.createObjectURL(new Blob([value.bytes],{type:value.mime}));
       video.autoplay=false;video.muted=false;video.hidden=false;
       let fallbackStarted=false;

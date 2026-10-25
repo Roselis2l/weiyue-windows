@@ -4508,6 +4508,50 @@
     "width": 20,
     "height": 20,
     "animated": false
+  },
+  "/ee9095.png": {
+    "src": "app://local/emoticons/ee9095.png",
+    "sourceUrl": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9095.png",
+    "sha256": "7eb8c1055f0124c787afc62964a811fbe638d6e0fc5c227178db07155c8bddae",
+    "group": "official-chat-legacy-path",
+    "format": "png",
+    "bytes": 1113,
+    "width": 20,
+    "height": 20,
+    "animated": false
+  },
+  "/ee8cbe.png": {
+    "src": "app://local/emoticons/ee8cbe.png",
+    "sourceUrl": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee8cbe.png",
+    "sha256": "f29906390d86a7e449b8425d4a9cb428770c78676fa4f15a19aa526198a2d68e",
+    "group": "official-chat-legacy-path",
+    "format": "png",
+    "bytes": 1060,
+    "width": 20,
+    "height": 20,
+    "animated": false
+  },
+  "/ee84bc.png": {
+    "src": "app://local/emoticons/ee84bc.png",
+    "sourceUrl": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee84bc.png",
+    "sha256": "50091d7fe5d3bfdab5e1ff32aceb5bba2c6a4fd57c71eb48bfb93ff5d316f443",
+    "group": "official-chat-legacy-path",
+    "format": "png",
+    "bytes": 512,
+    "width": 20,
+    "height": 20,
+    "animated": false
+  },
+  "/ee9094.png": {
+    "src": "app://local/emoticons/ee9094.png",
+    "sourceUrl": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9094.png",
+    "sha256": "2d41a3ace30bcd62e505a8e3875f35c87b731d7022e3c059117032ea2937e592",
+    "group": "official-chat-legacy-path",
+    "format": "png",
+    "bytes": 1103,
+    "width": 20,
+    "height": 20,
+    "animated": false
   }
 };
   for (const descriptor of Object.values(entries)) Object.freeze(descriptor);

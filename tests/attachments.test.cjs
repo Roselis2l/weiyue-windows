@@ -13,7 +13,7 @@ const response=(bytes,mime='application/pdf')=>new Response(bytes,{headers:{'con
 test('only official file/video media types become pending descriptors with lexical FIDs',()=>{
  assert.deepEqual(a.normalizeMessageAttachments({media_type:5,fids:[FID]}),[{kind:'file',fid:FID,state:'needs-metadata',name:'文件消息'}]);
  assert.equal(a.normalizeMessageAttachments({media_type:'10',fids:[FID]})[0].kind,'video');
- for(const type of [0,1,4,17,'unknown'])assert.deepEqual(a.normalizeMessageAttachments({media_type:type,fids:[FID]}),[]);
+ for(const type of [0,1,17,'unknown'])assert.deepEqual(a.normalizeMessageAttachments({media_type:type,fids:[FID]}),[]);
  assert.equal(a.normalizeMessageAttachments({media_type:5,fids:[FID,FID,Number(FID),'0','1e3','bad']}).length,1);
 });
 test('safe download URL never strips extra signature or accepts foreign authority',()=>{

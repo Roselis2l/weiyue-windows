@@ -1,6 +1,6 @@
 # 微博表情来源与显示
 
-1.1.21 共收录 409 个经过核实的映射、408 份去重官方原图，不使用近似 Unicode 表情。来源分为保留的公开字典、官方聊天默认表情选择器及九个明确的旧路径代码；这不是全部聊天分类、活动、付费、自定义或动态图的覆盖承诺。
+1.1.26 共收录 413 个经过核实的映射、412 份去重官方原图，不使用近似 Unicode 表情。来源分为保留的公开字典、官方聊天默认表情选择器及十三个明确的旧路径代码；这不是全部聊天分类、活动、付费、自定义或动态图的覆盖承诺。
 
 保留的 308 项来自微博官方公开字典 `https://h5.sinaimg.cn/m/emoticon/all.json`。字典在 2026-10-20 匿名读取成功，HTTP 200，无 Cookie、Key 或重定向；原始 40,490 字节 SHA-256 为 `dbb40c5d913027d90d8ef09ab20943553d84baccbf0967f5c26689a107b304db`。
 
@@ -10,7 +10,7 @@
 
 本次新增覆盖：`苦涩、流鼻血、老师好、卡皮巴拉、泪奔、无聊、666、淡淡的、送花花、拜托、努力、捂嘴哭、手指比心、呵呵、流汗、融化`。`呵呵` 与 `微笑`、`流汗` 与 `汗` 是分别核实的不同官方资源，没有按含义猜测合并。
 
-`[/ee8192.png]`、`[/ee8cb0.png]`、`[/ee9092.png]`、`[/ee808e.png]`、`[/ee819a.png]`、`[/ee858c.png]`、`[/ee88a6.png]`、`[/ee84a5.png]`、`[/ee88ab.png]` 的映射依据官方聊天前端 `https://h5.sinaimg.cn/m/pcweibochat/js/app.48f8ddda.js` 中的 `convertEmoji` 路由。该脚本 SHA-256 为 `572ee8cdb4a0d4b9401ab4f5aca0c5bd1f043fe310063632694a47d76bb30aae`。九个确切地址均在 `https://img.t.sinajs.cn/t4/appstyle/expression/emimage/` 下，逐项返回 HTTP 200、PNG、20×20，已保存原始字节和哈希。应用只识别这九个已确认路径，不把任意文件名拼成网络请求。
+`[/ee8192.png]`、`[/ee8cb0.png]`、`[/ee9092.png]`、`[/ee808e.png]`、`[/ee819a.png]`、`[/ee858c.png]`、`[/ee88a6.png]`、`[/ee84a5.png]`、`[/ee88ab.png]` 及下述四个新增代码的映射依据官方聊天前端 `https://h5.sinaimg.cn/m/pcweibochat/js/app.48f8ddda.js` 中的 `convertEmoji` 路由。该脚本 SHA-256 为 `572ee8cdb4a0d4b9401ab4f5aca0c5bd1f043fe310063632694a47d76bb30aae`。十三个确切地址均在 `https://img.t.sinajs.cn/t4/appstyle/expression/emimage/` 下，逐项返回 HTTP 200、PNG、20×20，已保存原始字节和哈希。应用只识别这些已确认路径，不把任意文件名拼成网络请求。
 
 1.1.17 的 92 个名称和 6 个路径合计增加 98 份原图、789,071 字节。1.1.18 再新增 `[/ee88a6.png]` 一项映射和一份原图，893 字节。1.1.19 新增 `[/ee84a5.png]` 一项映射和一份原图，696 字节。1.1.20 新增 `[/ee88ab.png]` 一项映射和一份原图，1,023 字节；后三项分别与其已有资源没有相同哈希。四轮新增资源全部为静态 PNG；未将其声称为动画。未再次请求之前报错的表情 API。
 
@@ -19,6 +19,17 @@
 `[/ee84a5.png]` 的 [官方原图](https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee84a5.png) 于 2026-10-21 单次公开读取返回 HTTP 200、`image/png`，无 Cookie、Key 或重定向。PNG SHA-256 为 `b280fb9d9deb94883731533aa4251e22b1bfcb5b1a857d63b8c938108d9c8114`。Windows Bitmap 实际解码为 20×20、1 帧并逐点读取 400 像素；视觉核对为浅蓝色票券图案。同一 Google 官方历史资料将 UTF-8 十六进制 `ee84a5` 对应的私用区 `E125` 映射到 Unicode `1F3AB`（票券）。显示使用官方 PNG，不替换为 Unicode 字符或猜测的 `[票券]` 别名；复制、搜索、收藏和导出仍使用原始 `[/ee84a5.png]` 文本。
 
 `[/ee88ab.png]` 的 [官方原图](https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee88ab.png) 于 2026-10-21 单次公开读取返回 HTTP 200、`image/png`，无 Cookie、Key 或重定向。PNG SHA-256 为 `7b8f4e08f3f704b1470e4c2191f8cf1ecf4f395796e1c719730f8b3e16332533`。Windows Bitmap 实际解码为 20×20、1 帧并逐点读取 400 像素；视觉核对为紫色方框“空”图案。同一 Google 官方历史资料将 UTF-8 十六进制 `ee88ab` 对应的私用区 `E22B` 映射到 Unicode `1F233`（方框“空”，空位）。显示使用新浪原图，不替换为 Unicode 字符，也不添加猜测的 `[空]` 别名；半角、全角及连续代码保持原文语义。
+
+2026-10-25 为 1.1.26 新增下列四项精确代码及四份官方 PNG，共 3,788 字节，均单次匿名读取 HTTP 200、`image/png`、20×20，无 Cookie、Key 或重定向；SHA-256 与已有资源均不同。用 Electron 实际解码并逐张视觉核对。Google 历史映射仅帮助说明含义，显示仍为新浪原图；不添加推测的中文别名，不改写消息文字。
+
+| 代码与官方原图 | 历史映射（SoftBank → Unicode） | PNG 字节 | SHA-256 |
+| --- | --- | ---: | --- |
+| [`[/ee9095.png]`](https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9095.png) | E415 → 1F604，笑眼张嘴笑脸 | 1,113 | `7eb8c1055f0124c787afc62964a811fbe638d6e0fc5c227178db07155c8bddae` |
+| [`[/ee8cbe.png]`](https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee8cbe.png) | E33E → 1F35A，米饭 | 1,060 | `f29906390d86a7e449b8425d4a9cb428770c78676fa4f15a19aa526198a2d68e` |
+| [`[/ee84bc.png]`](https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee84bc.png) | E13C → 1F4A4，睡眠符号 | 512 | `50091d7fe5d3bfdab5e1ff32aceb5bba2c6a4fd57c71eb48bfb93ff5d316f443` |
+| [`[/ee9094.png]`](https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9094.png) | E414 → 263A，微笑脸 | 1,103 | `2d41a3ace30bcd62e505a8e3875f35c87b731d7022e3c059117032ea2937e592` |
+
+上述四个代码支持半角、全角括号和连续混排；`[/ee9094.png]` 后的变化选择符 U+FE0F（以及 U+FE0E）不影响图像识别，复制时仍保留该字符和原始代码。未知代码、URL 内片段不替换。此次核对的 [Google 历史 XML](https://raw.githubusercontent.com/google/emoji4unicode/master/data/emoji4unicode.xml) 为 162,744 字节，SHA-256 `221369d8cabd3f6f217ba82cf25d41c0f97d283cefa6a9a66de1af69121418d3`；元数据只记录四条精确对应，不引入任意私用区转换。
 
 完整原始公开字典保存在 `app/renderer/emoticons/catalog-source.json`，其映射记录保存在同目录 `catalog-manifest.json`。新增来源保存在 `extensions-source.json`，逐项官方 URL、本地路径、格式、尺寸和 SHA-256 保存在 `extensions-manifest.json`。合并后的实际显示映射为 `app/renderer/emoticon-manifest.js`。验收逐项比较两组来源的名称集合、URL、映射与本地资源哈希，并核对源码和 portable 一致。以下是沿用的三项示例：
 
@@ -36,7 +47,7 @@
 
 官方聊天页面的公开客户端使用 `/webim/emotions.json`。该接口匿名请求返回 `21301` 认证错误后已停止；获得用户新的明确授权后，使用其已有登录的 Chrome 正常导航该地址一次，页面返回 `10012` 服务异常，随后停止。此结果不能证明该 API 已接受浏览器认证，未读取或导出凭据，也未继续猜测参数或重试。
 
-以上 API 的历史失败不影响本次从正常可见官方选择器核实默认名称；本次没有重试该 API。当前收录资源中官方动画 GIF 为零。除已经明确核实的名称和九个路径外，未识别代码保留原文；其余聊天分类、付费、自定义和动态目录仍未完整核验。
+以上 API 的历史失败不影响从正常可见官方选择器核实默认名称；本次没有重试该 API。当前收录资源中官方动画 GIF 为零。除已经明确核实的名称和十三个路径外，未识别代码保留原文；其余聊天分类、付费、自定义和动态目录仍未完整核验。
 
 开发验收使用独立合成消息，不读取真实群聊或推进真实阅读位置。完整目录显示、长代码回退、图片延迟加载及最终 EXE 的实际测试结果，以同次交付报告为准。
 

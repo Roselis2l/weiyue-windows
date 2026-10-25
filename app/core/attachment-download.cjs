@@ -3,15 +3,18 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { normalizeSource } = require('./attachment-viewer.cjs');
-const { detectedAttachmentMime, MAX_ARCHIVE_BYTES, MAX_PDF_BYTES, MAX_VIDEO_BYTES } = require('./attachments.cjs');
+const { detectedAttachmentMime, MAX_ARCHIVE_BYTES, MAX_PDF_BYTES, MAX_VIDEO_BYTES,DOCUMENT_FORMATS,AUDIO_FORMATS,MAX_AUDIO_BYTES } = require('./attachments.cjs');
 
 const FORMATS = Object.freeze({
+  ...Object.fromEntries(Object.entries(DOCUMENT_FORMATS).map(([extension,value])=>[value.mime,Object.freeze({kind:'document',name:extension.toUpperCase()+' 文件',extensions:Object.freeze([extension]),limit:value.limit})])),
+  ...Object.fromEntries(Object.entries(AUDIO_FORMATS).map(([extension,value])=>[value.mime,Object.freeze({kind:'audio',name:extension.toUpperCase()+' 音频',extensions:Object.freeze([extension]),limit:MAX_AUDIO_BYTES})])),
   'application/zip': Object.freeze({kind:'archive',name:'ZIP 压缩文件',extensions:Object.freeze(['zip']),limit:MAX_ARCHIVE_BYTES}),
   'application/vnd.rar': Object.freeze({kind:'archive',name:'RAR 压缩文件',extensions:Object.freeze(['rar']),limit:MAX_ARCHIVE_BYTES}),
   'application/x-7z-compressed': Object.freeze({kind:'archive',name:'7z 压缩文件',extensions:Object.freeze(['7z']),limit:MAX_ARCHIVE_BYTES}),
   'application/pdf': Object.freeze({kind:'pdf',name:'PDF 文档',extensions:Object.freeze(['pdf']),limit:MAX_PDF_BYTES}),
   'video/mp4': Object.freeze({kind:'video',name:'MP4 视频',extensions:Object.freeze(['mp4','m4v']),limit:MAX_VIDEO_BYTES}),
   'video/webm': Object.freeze({kind:'video',name:'WebM 视频',extensions:Object.freeze(['webm']),limit:MAX_VIDEO_BYTES}),
+  'video/quicktime':Object.freeze({kind:'video',name:'MOV 实况视频',extensions:Object.freeze(['mov']),limit:MAX_VIDEO_BYTES}),
 });
 const ERRORS = Object.freeze({
   source:'附件下载地址无效，请返回消息重新操作。',
@@ -32,8 +35,8 @@ const TRANSPORT_ERRORS = Object.freeze({
   ATTACHMENT_NETWORK:'附件网络读取失败，请稍后再试。',
   ATTACHMENT_TIMEOUT:ERRORS.timeout,
   ATTACHMENT_ABORT:'附件下载已取消。',
-  ATTACHMENT_TOO_LARGE:'附件超过读取大小限制（PDF 50 MB，视频及压缩文件 200 MB）。',
-  ATTACHMENT_TYPE:'附件格式暂不支持。可下载 ZIP、RAR、7z、PDF、MP4 和 WebM。',
+  ATTACHMENT_TOO_LARGE:'附件超过读取/下载大小限制（XLSX/音频 20 MB，MD/CSV 5 MB，PDF 50 MB，视频及压缩文件 200 MB）。',
+  ATTACHMENT_TYPE:'附件格式暂不支持。可下载 XLSX、MD、CSV、ZIP/RAR/7z、PDF、MP4/MOV/WebM 及受支持的语音。',
 });
 
 function safeDownloadName(value,mime) {
@@ -48,8 +51,8 @@ function safeDownloadName(value,mime) {
 }
 function validateDownload(value) {
   const format=FORMATS[value?.mime];
-  if(!format||value.kind!==format.kind||!Buffer.isBuffer(value.bytes)||!value.bytes.length||
-      value.bytes.length>format.limit||detectedAttachmentMime(value.bytes)!==value.mime)throw new Error(ERRORS.content);
+  if(!format||value.kind!==format.kind||!Buffer.isBuffer(value.bytes)||(value.bytes.length===0&&format.kind!=='document')||
+      value.bytes.length>format.limit||detectedAttachmentMime(value.bytes,value.mime)!==value.mime)throw new Error(ERRORS.content);
   return {bytes:value.bytes,mime:value.mime,kind:value.kind,name:safeDownloadName(value.name,value.mime)};
 }
 

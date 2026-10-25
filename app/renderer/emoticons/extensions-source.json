@@ -808,6 +808,70 @@
           "unicode": "1F233",
           "meaning": "squared CJK ideograph 空; empty or vacant"
         }
+      },
+      {
+        "name": "/ee9095.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9095.png",
+        "verifiedAt": "2026-10-25T14:13:29.693Z",
+        "sha256": "7eb8c1055f0124c787afc62964a811fbe638d6e0fc5c227178db07155c8bddae",
+        "bytes": 1113,
+        "historicalEncoding": {
+          "source": "https://raw.githubusercontent.com/google/emoji4unicode/master/data/emoji4unicode.xml",
+          "sourceSha256": "221369d8cabd3f6f217ba82cf25d41c0f97d283cefa6a9a66de1af69121418d3",
+          "utf8Hex": "ee9095",
+          "pua": "E415",
+          "unicode": "1F604",
+          "meaning": "SMILING FACE WITH OPEN MOUTH AND SMILING EYES",
+          "excerpt": "<e docomo=\"&gt;E6F0\" glyphRefID=\"180\" google=\"FE338\" id=\"338\" img_from=\"softbank\" kddi=\"&gt;E471\" name=\"SMILING FACE WITH OPEN MOUTH AND SMILING EYES\" oldname=\"HAPPY FACE WITH OPEN MOUTH AND RAISED EYEBROWS\" softbank=\"E415\" unicode=\"+1F604\">"
+        }
+      },
+      {
+        "name": "/ee8cbe.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee8cbe.png",
+        "verifiedAt": "2026-10-25T14:13:29.693Z",
+        "sha256": "f29906390d86a7e449b8425d4a9cb428770c78676fa4f15a19aa526198a2d68e",
+        "bytes": 1060,
+        "historicalEncoding": {
+          "source": "https://raw.githubusercontent.com/google/emoji4unicode/master/data/emoji4unicode.xml",
+          "sourceSha256": "221369d8cabd3f6f217ba82cf25d41c0f97d283cefa6a9a66de1af69121418d3",
+          "utf8Hex": "ee8cbe",
+          "pua": "E33E",
+          "unicode": "1F35A",
+          "meaning": "COOKED RICE",
+          "excerpt": "<e docomo=\"&gt;E74C\" glyphRefID=\"478\" google=\"FE96A\" id=\"96A\" img_from=\"kddi\" kddi=\"EAB4\" name=\"COOKED RICE\" softbank=\"E33E\" unicode=\"+1F35A\">"
+        }
+      },
+      {
+        "name": "/ee84bc.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee84bc.png",
+        "verifiedAt": "2026-10-25T14:13:29.693Z",
+        "sha256": "50091d7fe5d3bfdab5e1ff32aceb5bba2c6a4fd57c71eb48bfb93ff5d316f443",
+        "bytes": 512,
+        "historicalEncoding": {
+          "source": "https://raw.githubusercontent.com/google/emoji4unicode/master/data/emoji4unicode.xml",
+          "sourceSha256": "221369d8cabd3f6f217ba82cf25d41c0f97d283cefa6a9a66de1af69121418d3",
+          "utf8Hex": "ee84bc",
+          "pua": "E13C",
+          "unicode": "1F4A4",
+          "meaning": "SLEEPING SYMBOL",
+          "excerpt": "<e docomo=\"E701\" glyphRefID=\"574\" google=\"FEB59\" id=\"B59\" img_from=\"docomo\" kddi=\"E475\" name=\"SLEEPING SYMBOL\" oldname=\"SLEEPING SIGN\" softbank=\"E13C\" unicode=\"+1F4A4\">"
+        }
+      },
+      {
+        "name": "/ee9094.png",
+        "src": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9094.png",
+        "verifiedAt": "2026-10-25T14:13:29.693Z",
+        "sha256": "2d41a3ace30bcd62e505a8e3875f35c87b731d7022e3c059117032ea2937e592",
+        "bytes": 1103,
+        "historicalEncoding": {
+          "source": "https://raw.githubusercontent.com/google/emoji4unicode/master/data/emoji4unicode.xml",
+          "sourceSha256": "221369d8cabd3f6f217ba82cf25d41c0f97d283cefa6a9a66de1af69121418d3",
+          "utf8Hex": "ee9094",
+          "pua": "E414",
+          "unicode": "263A",
+          "meaning": "WHITE SMILING FACE",
+          "excerpt": "<e docomo=\"&gt;E6F0\" google=\"FE336\" id=\"336\" kddi=\"E4FB\" name=\"WHITE SMILING FACE\" softbank=\"E414\" unicode=\"263A\">"
+        }
       }
     ]
   }

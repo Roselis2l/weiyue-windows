@@ -52,7 +52,7 @@ function harness(){
   scroll.childNodes=[...initial.map(card),space];
   initial.forEach(m=>model.messageSignatures.set(m.id,JSON.stringify(m)));
   const captureItems=()=>scroll.querySelectorAll('[data-message-id]').map(el=>({...rows.get(el.dataset.messageId),...el.getBoundingClientRect()}));
-  const document={visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}};
+  const document={body:{dataset:{},style:{setProperty(){}}},visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}};
   const modal={open:false};
   const api=async(name,payload)=>{
     if(name==='read.set'){writes.push(JSON.parse(JSON.stringify(payload)));events.push({at:now,type:'read.set',payload:{...payload}});if(commitBarrier)await commitBarrier;return{readState:{readThroughId:payload.readThroughId||model.state.readStates[payload.groupId].readThroughId}};}
@@ -78,7 +78,7 @@ function harness(){
     renderSidebar:()=>events.push({at:now,type:'sidebar'}),renderHeader:()=>events.push({at:now,type:'header'}),
     messageSignature:JSON.stringify,messageCard:card,node:(_tag,props)=>element(props?.['data-day']?{day:props['data-day']}:{}),
     dateLabel:()=>'',emptyState:()=>element(),locateReadBoundary:async()=>null,
-    window:{WeiyueAutoPage:paging,addEventListener:(name,callback)=>{const previous=windowListeners[name];windowListeners[name]=event=>{previous?.(event);callback(event);};},removeEventListener(){}},scroll});
+    window:{WeiyueAutoPage:paging,WeiyueInterfaceTheme:require('../app/renderer/interface-theme.js'),addEventListener:(name,callback)=>{const previous=windowListeners[name];windowListeners[name]=event=>{previous?.(event);callback(event);};},removeEventListener(){}},scroll});
   vm.runInContext(extracted+section('const autoPage =','const loginFlow =')+';model.filters=emptyFilters();bindReadingInput(scroll);',context);
   const run=code=>vm.runInContext(code,context);
   async function settle(waitWrites=true){for(let i=0;i<16;i++)await Promise.resolve();if(waitWrites)await model.readWrite;}

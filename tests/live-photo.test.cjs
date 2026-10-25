@@ -32,8 +32,13 @@ test('Live Photo marker survives normalization and resolved metadata',()=>{
   assert.equal(resolved.url,sourceUrl(videoFid));assert.equal(normalizeAttachment(resolved).livePhoto,true);
 });
 test('Live Photo metadata must match video FID and must identify a supported video format',()=>{
-  for(const value of [{...meta,fid:imageFid},{...meta,extension:'png'},{...meta,extension:'zip'},{...meta,extension:'mov'}])
+  for(const value of [{...meta,fid:imageFid},{...meta,extension:'png'},{...meta,extension:'zip'},{...meta,extension:'avi'}])
     assert.throws(()=>normalizeAttachmentMetadata(pending,value));
+});
+
+test('official MOV Live Photo metadata keeps the original container type and association',()=>{
+  const resolved=normalizeAttachmentMetadata(pending,{...meta,extension:'mov'});
+  assert.equal(resolved.kind,'video');assert.equal(resolved.mime,'video/quicktime');assert.equal(resolved.livePhoto,true);
 });
 test('marker is a boolean video property only, not an arbitrary metadata carrier',()=>{
   assert.equal(normalizeAttachment({...pending,livePhoto:'true'}).livePhoto,undefined);

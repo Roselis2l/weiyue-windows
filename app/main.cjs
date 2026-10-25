@@ -15,6 +15,7 @@ const {createAttachmentDownload}=require('./core/attachment-download.cjs');
 const {createImageViewer}=require('./core/image-viewer.cjs');
 const {createHeifDecoder}=require('./core/heif-decoder.cjs');
 const {createVideoDecoder}=require('./core/video-decoder.cjs');
+const {createAudioDecoder}=require('./core/audio-decoder.cjs');
 const {normalizeHttpUrl}=require('./renderer/linkify.js');
 const {createEmoticonAssets}=require('./core/emoticon-assets.cjs');
 const emoticonAssets=createEmoticonAssets({root:path.join(__dirname,'renderer'),manifest:require('./renderer/emoticon-manifest.js')});
@@ -45,7 +46,7 @@ protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,se
 const lock=app.requestSingleInstanceLock(); if(!lock) app.quit();
 let win,loginWindow,pendingLogin,store,vault,activeId,busy=false;
 let autoSync,revision=0,activeSync,accountEpoch=0,closeReady=false,closeTimer,closeFinishing=false;
-let imageViewer,activeAi,heifDecoder,videoDecoder,attachmentViewer,attachmentDownload,messageCleanup;
+let imageViewer,activeAi,heifDecoder,videoDecoder,audioDecoder,attachmentViewer,attachmentDownload,messageCleanup;
 const aiPreviews=new AiPreviewStore();
 const summaryDeletePreviews=new SummaryDeletePreviewStore();
 const automaticAccounts=new AccountAutoSync();
@@ -57,7 +58,7 @@ const sessions=new Map();
 const sessionRegistry=new AccountSessionRegistry({sessions,createSession:()=>{const s=session.fromPartition('weiyue-account-'+crypto.randomUUID());hardenSession(s);return s;},readCookies:id=>secrets(id).cookies||[],officialUrl});
 const avatars=new AvatarService({getContext:()=>({owner:activeId,epoch:accountEpoch,revision,closing:closing()}),getState:id=>store.getSnapshot(id),restoreSession:accountSession,defaultSession:()=>session.defaultSession,request:imageRequest});
 function preferences(){try{return JSON.parse(fs.readFileSync(path.join(dataRoot,'preferences.json'),'utf8'));}catch{return {};}}
-function clearMedia(){accountEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
+function clearMedia(){accountEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;audioDecoder?.dispose();audioDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
 function setActive(id){const changed=activeId!==id;activeId=id;fs.writeFileSync(path.join(dataRoot,'preferences.json'),JSON.stringify({activeId:id}));if(changed){preferredRefreshGroup=null;clearMedia();revision++;configureAutomatic();}}
 // Validated immutable snapshots are read-only. Mutations always go through Store.
 function account(){return store.getSnapshot(activeId);}
@@ -219,7 +220,8 @@ async function enrichMessages(id,p){
   };
   const job=(async()=>{
     const needsContext=m=>m.contextVersion!==1&&(isImageQuoteText(m.text)||m.senderName==='粉丝群');
-    const complete=m=>m.referenceVersion===1&&m.mediaVersion===1&&(m.attachmentVersion===1||!/^(?:文件消息|分享视频)$/.test((m.text||'').trim()))&&!needsContext(m);
+    const missingPlayable=m=>((m.text||'').trim()==='分享语音'&&!m.attachments?.some(a=>a.kind==='audio'))||((m.text||'').trim()==='实况照片'&&!m.attachments?.some(a=>a.kind==='video'&&a.livePhoto));
+    const complete=m=>m.referenceVersion===1&&m.mediaVersion===1&&(m.attachmentVersion===1||!/^(?:文件消息|分享视频)$/.test((m.text||'').trim()))&&!needsContext(m)&&!missingPlayable(m);
     const state=store.getSnapshot(id),targets=[...new Set(p.messageIds)].map(mid=>state.messages.find(m=>!m.localDeletion&&m.groupId===p.groupId&&m.id===mid)).filter(m=>m&&(!complete(m)||p.retry));if(!targets.length)return {count:0};
     check();syncPolicy?.assertAllowed();
     const s=await accountSession(id,{check}),c=client(s,{timeoutMs:10000,maxAttempts:1});const identity=await read(()=>c.identity());check();
@@ -458,7 +460,7 @@ async function start(){
     if(request.method!=='GET'||u.host!=='local')return new Response('Not found',{status:404});
     if(u.pathname.startsWith('/emoticons/'))return emoticonAssets.serve(request,u);
     if(pdfAssets.has(u.pathname))return net.fetch(pathToFileURL(path.join(__dirname,'pdfjs',u.pathname.slice('/pdfjs/'.length))).href);
-    if(!['/auto-page.js','/appearance.js','/appearance-settings.js','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
+    if(!['/auto-page.js','/appearance.js','/appearance-settings.js','/interface-theme.js','/interface-theme.css','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
     return net.fetch(pathToFileURL(path.join(__dirname,'renderer',u.pathname.slice(1))).href);
   });
   hardenSession(session.defaultSession);Menu.setApplicationMenu(null);
@@ -466,7 +468,7 @@ async function start(){
   imageViewer=createImageViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,
     getWorkArea:()=>screen.getDisplayMatching(win.getBounds()).workAreaSize,
     readImage:async source=>{const image=await serveImage({method:'GET'},new URL(source),true);if(image instanceof Response)throw new Error('原图加载失败，请重试。');return image;}});
-  attachmentViewer=createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment,decodeVideo:(value,options)=>{videoDecoder ||= createVideoDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return videoDecoder.decode(value,options);}});
+  attachmentViewer=createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment,decodeVideo:(value,options)=>{videoDecoder ||= createVideoDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return videoDecoder.decode(value,options);},decodeAudio:(value,options)=>{audioDecoder ||= createAudioDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return audioDecoder.decode(value,options);}});
   attachmentDownload=createAttachmentDownload({dialog,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));win.webContents.on('will-navigate',e=>e.preventDefault());win.webContents.on('will-attach-webview',e=>e.preventDefault());
   win.on('close',event=>{if(closeReady)return;event.preventDefault();if(closing())return;autoSync?.stop();activeSync?.controller.abort();clearMedia();closeTimer=setTimeout(()=>void finishClose(),2000);win.webContents.send('weiyue:before-close');});

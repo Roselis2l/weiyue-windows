@@ -26,30 +26,33 @@ function exactBytes(value,max=MAX_BYTES){
  return Buffer.from(new Uint8Array(Reflect.apply(bufferGet,value,[]),Reflect.apply(offsetGet,value,[]),length));
 }
 // Parse only bounded ISO BMFF structural fields. No EXIF, names or arbitrary
-// metadata strings are exposed. Encrypted/fragmented/ambiguous tracks are not
-// offered for conversion; the original file remains available to save.
+// metadata strings are exposed. ISO MP4 retains the single-video restriction.
+// QuickTime permits bounded auxiliary video tracks: only its first video track
+// is selected, matching the worker's explicit -map 0:v:0. QuickTime has a media
+// handler under mdia and a separate data handler under minf; these are distinct.
+// https://developer.apple.com/documentation/quicktime-file-format/handler_reference_atom
 function inspectHevcMp4(input){
  if(!Buffer.isBuffer(input)||input.length<24||input.length>MAX_BYTES)return null;
- const b=input,tracks=[];let boxes=0,brand=false,fragmented=false;
+ const b=input,tracks=[];let boxes=0,brand=false,quicktime=false,fragmented=false;
  function duration(at,end){if(at+20>end)return null;const version=b[at];if(![0,1].includes(version))return null;
   const p=at+(version===1?20:12);if(p+(version===1?12:8)>end)return null;const scale=b.readUInt32BE(p),ticks=version===1?Number(b.readBigUInt64BE(p+4)):b.readUInt32BE(p+4);
   return scale&&Number.isSafeInteger(ticks)&&ticks>0?{seconds:ticks/scale,scale,ticks}:null;}
- function walk(start,end,depth,track){
+ function walk(start,end,depth,track,parent=''){
   if(depth>6)throw new Error();
   for(let at=start;at<end;){
    if(++boxes>2048||at+8>end)throw new Error();let size=b.readUInt32BE(at),header=8;const type=b.toString('ascii',at+4,at+8);
    if(size===1){if(at+16>end)throw new Error();const n=b.readBigUInt64BE(at+8);if(n>BigInt(end-at))throw new Error();size=Number(n);header=16;}
    if(size===0)size=end-at;if(size<header||at+size>end)throw new Error();const p=at+header,stop=at+size;
    if(type==='ftyp'&&depth===0){if(size>4096||stop-p<8||(stop-p-8)%4)throw new Error();const brands=[b.toString('ascii',p,p+4)];for(let x=p+8;x<stop;x+=4)brands.push(b.toString('ascii',x,x+4));
-    brand=brands.some(x=>['mp42','mp41','isom','iso2','iso3','iso4','iso5','iso6','M4V '].includes(x))&&!brands.some(x=>['heic','heix','mif1','msf1','avif','avis'].includes(x));}
+    quicktime=brands[0]==='qt  ';brand=(quicktime||brands.some(x=>['mp42','mp41','isom','iso2','iso3','iso4','iso5','iso6','M4V '].includes(x)))&&!brands.some(x=>['heic','heix','mif1','msf1','avif','avis'].includes(x));}
    if(type==='moof')fragmented=true;
-   if(type==='trak'){const current={codecs:[],duration:null,frames:0,sampleTicks:0,handler:null};tracks.push(current);walk(p,stop,depth+1,current);}
-   else if(['moov','mdia','minf','stbl'].includes(type))walk(p,stop,depth+1,track);
-   else if(track&&type==='mdhd')track.duration=duration(p,stop);
-   else if(track&&type==='hdlr'){if(p+12>stop||track.handler)throw new Error();track.handler=b.toString('ascii',p+8,p+12);}
+   if(type==='trak'){if(tracks.length>=16||parent!=='moov')throw new Error();const current={codecs:[],duration:null,frames:0,sampleTicks:0,handler:null};tracks.push(current);walk(p,stop,depth+1,current,type);}
+   else if(['moov','mdia','minf','stbl'].includes(type))walk(p,stop,depth+1,track,type);
+   else if(track&&type==='mdhd'&&parent==='mdia'){if(track.duration)throw new Error();track.duration=duration(p,stop);}
+   else if(track&&type==='hdlr'&&parent==='mdia'){if(p+12>stop||track.handler)throw new Error();track.handler=b.toString('ascii',p+8,p+12);}
    else if(track&&type==='stts'){
     if(p+8>stop)throw new Error();const count=b.readUInt32BE(p+4);if(count>MAX_FRAMES||p+8+count*8>stop)throw new Error();
-    for(let x=0;x<count;x++){const samples=b.readUInt32BE(p+8+x*8),delta=b.readUInt32BE(p+12+x*8);if(!samples||!delta)throw new Error();track.frames+=samples;track.sampleTicks+=samples*delta;if(!Number.isSafeInteger(track.sampleTicks)||track.frames>MAX_FRAMES)throw new Error();}
+    for(let x=0;x<count;x++){const samples=b.readUInt32BE(p+8+x*8),delta=b.readUInt32BE(p+12+x*8);if(!samples||!delta)throw new Error();track.frames+=samples;track.sampleTicks+=samples*delta;if(!Number.isSafeInteger(track.sampleTicks)||track.frames>10000000)throw new Error();}
    }else if(track&&type==='stsd'){
     if(p+8>stop)throw new Error();const count=b.readUInt32BE(p+4);if(count>16)throw new Error();let x=p+8;
     for(let i=0;i<count;i++){if(x+8>stop)throw new Error();const n=b.readUInt32BE(x),codec=b.toString('ascii',x+4,x+8);if(n<8||x+n>stop)throw new Error();
@@ -59,7 +62,7 @@ function inspectHevcMp4(input){
   }
  }
  try{walk(0,b.length,0,null);}catch{return null;}
- const videos=tracks.filter(x=>x.handler==='vide');if(!brand||fragmented||videos.length!==1||tracks.some(x=>!x.handler))return null;const v=videos[0];
+ const videos=tracks.filter(x=>x.handler==='vide');if(!brand||fragmented||!videos.length||(!quicktime&&videos.length!==1)||tracks.some(x=>!x.handler||x.codecs.some(c=>['encv','enca'].includes(c))))return null;const v=videos[0];
  const seconds=v.duration?.seconds,sampleSeconds=v.duration?.scale?v.sampleTicks/v.duration.scale:NaN;
  if(v.codecs.length!==1||!['hvc1','hev1'].includes(v.codecs[0])||!v.width||!v.height||v.width>MAX_EDGE||v.height>MAX_EDGE||v.width*v.height>MAX_PIXELS||
   !Number.isFinite(seconds)||seconds<=0||seconds>MAX_SECONDS||!Number.isFinite(sampleSeconds)||sampleSeconds<=0||sampleSeconds>MAX_SECONDS||Math.abs(sampleSeconds-seconds)>Math.max(.002,1/v.duration.scale)||v.frames<1||v.frames>MAX_FRAMES||v.frames/seconds>120)return null;
@@ -121,7 +124,7 @@ function createVideoDecoder({BrowserWindow,ipcMain,session,appRoot,timeoutMs=TIM
   if(disposed||signal?.aborted)return Promise.reject(new VideoDecodeError('VIDEO_ABORT'));
   if(signal&&(typeof signal.addEventListener!=='function'||typeof signal.removeEventListener!=='function'))return Promise.reject(new VideoDecodeError('VIDEO_INVALID'));
   if(queue.length>=QUEUE_LIMIT)return Promise.reject(new VideoDecodeError('VIDEO_BUSY'));
-  let bytes;try{if(value?.mime!=='video/mp4')throw new VideoDecodeError('VIDEO_INVALID');bytes=exactBytes(value.bytes);if(!inspectHevcMp4(bytes))throw new VideoDecodeError('VIDEO_LIMIT');}catch(error){return Promise.reject(error);}
+  let bytes;try{if(!['video/mp4','video/quicktime'].includes(value?.mime))throw new VideoDecodeError('VIDEO_INVALID');bytes=exactBytes(value.bytes);if(!inspectHevcMp4(bytes))throw new VideoDecodeError('VIDEO_LIMIT');}catch(error){return Promise.reject(error);}
   return new Promise((resolve,reject)=>{const job={id:crypto.randomUUID(),bytes,signal,resolve,reject,settled:false};job.onAbort=()=>finish(job,new VideoDecodeError('VIDEO_ABORT'));
    job.timer=setTimeout(()=>finish(job,new VideoDecodeError('VIDEO_TIMEOUT')),timeoutMs);signal?.addEventListener('abort',job.onAbort,{once:true});queue.push(job);if(signal?.aborted)job.onAbort();else startNext();});
  }

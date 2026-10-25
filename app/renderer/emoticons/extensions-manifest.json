@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
-  "scope": "observed-official-chat-default-additions-and-nine-explicit-legacy-paths",
+  "scope": "observed-official-chat-default-additions-and-thirteen-explicit-legacy-paths",
   "source": {
     "file": "extensions-source.json",
-    "sha256": "32fc8749bde1edaa16d77760d9f434abd3013ceba35814e312bc334b58c39a29",
-    "bytes": 30558
+    "sha256": "4102cfc48c3281ad09f1a0a5b7c67fc74d5f14bdac4f1f3bb62aab190cff9973",
+    "bytes": 34062
   },
-  "verifiedAt": "2026-10-21T13:32:59.058Z",
+  "verifiedAt": "2026-10-25T14:13:29.693Z",
   "defaultPickerNames": 182,
   "newNamedMappings": 92,
-  "explicitLegacyPaths": 9,
-  "mappingCount": 101,
-  "uniqueResourceCount": 101,
-  "combinedMappingCount": 409,
-  "combinedUniqueResourceCount": 408,
+  "explicitLegacyPaths": 13,
+  "mappingCount": 105,
+  "uniqueResourceCount": 105,
+  "combinedMappingCount": 413,
+  "combinedUniqueResourceCount": 412,
   "requiredNames": [
     "苦涩",
     "流鼻血",
@@ -39,9 +39,13 @@
     "/ee858c.png",
     "/ee88a6.png",
     "/ee84a5.png",
-    "/ee88ab.png"
+    "/ee88ab.png",
+    "/ee9095.png",
+    "/ee8cbe.png",
+    "/ee84bc.png",
+    "/ee9094.png"
   ],
-  "limitation": "Only the observed default picker and nine explicit legacy paths supplement the prior public snapshot. Other chat categories, custom, paid and animated catalogues are not claimed as fully covered.",
+  "limitation": "Only the observed default picker and thirteen explicit legacy paths supplement the prior public snapshot. Other chat categories, custom, paid and animated catalogues are not claimed as fully covered.",
   "entries": [
     {
       "name": "不愧是你",
@@ -1251,6 +1255,54 @@
       "group": "official-chat-legacy-path",
       "format": "png",
       "bytes": 1023,
+      "width": 20,
+      "height": 20,
+      "animated": false
+    },
+    {
+      "name": "/ee9095.png",
+      "src": "app://local/emoticons/ee9095.png",
+      "sourceUrl": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9095.png",
+      "sha256": "7eb8c1055f0124c787afc62964a811fbe638d6e0fc5c227178db07155c8bddae",
+      "group": "official-chat-legacy-path",
+      "format": "png",
+      "bytes": 1113,
+      "width": 20,
+      "height": 20,
+      "animated": false
+    },
+    {
+      "name": "/ee8cbe.png",
+      "src": "app://local/emoticons/ee8cbe.png",
+      "sourceUrl": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee8cbe.png",
+      "sha256": "f29906390d86a7e449b8425d4a9cb428770c78676fa4f15a19aa526198a2d68e",
+      "group": "official-chat-legacy-path",
+      "format": "png",
+      "bytes": 1060,
+      "width": 20,
+      "height": 20,
+      "animated": false
+    },
+    {
+      "name": "/ee84bc.png",
+      "src": "app://local/emoticons/ee84bc.png",
+      "sourceUrl": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee84bc.png",
+      "sha256": "50091d7fe5d3bfdab5e1ff32aceb5bba2c6a4fd57c71eb48bfb93ff5d316f443",
+      "group": "official-chat-legacy-path",
+      "format": "png",
+      "bytes": 512,
+      "width": 20,
+      "height": 20,
+      "animated": false
+    },
+    {
+      "name": "/ee9094.png",
+      "src": "app://local/emoticons/ee9094.png",
+      "sourceUrl": "https://img.t.sinajs.cn/t4/appstyle/expression/emimage/ee9094.png",
+      "sha256": "2d41a3ace30bcd62e505a8e3875f35c87b731d7022e3c059117032ea2937e592",
+      "group": "official-chat-legacy-path",
+      "format": "png",
+      "bytes": 1103,
       "width": 20,
       "height": 20,
       "animated": false

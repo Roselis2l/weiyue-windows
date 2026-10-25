@@ -14,6 +14,8 @@
     <div id="notice" role="status" aria-live="polite"><p id="status">正在读取附件…</p><button id="retry" hidden>重新加载</button><button id="convert" hidden title="仅在本机转换兼容预览，另存为保留原文件">转换为兼容预览（本机）</button></div>
     <section id="pdf-stage" hidden aria-label="PDF 页面"><canvas id="page" aria-label="PDF 页面画布"></canvas></section>
     <video id="video" controls preload="metadata" playsinline hidden aria-label="视频播放器"></video>
+    <audio id="audio" controls preload="metadata" hidden aria-label="语音播放器"></audio>
+    <section id="document-stage" hidden aria-label="只读文档预览"><div id="document-notices" role="status"></div><label id="sheet-label" hidden>工作表 <select id="sheet-select" aria-label="选择工作表"></select></label><pre id="text-preview" hidden></pre><div id="table-scroll" tabindex="0" aria-label="表格预览，内容较宽时可横向滚动"><table id="document-table"></table></div></section>
   </main>
   <footer>
     <div id="pdf-controls" hidden><button id="previous" disabled>上一页</button><label>第 <input id="page-number" type="number" min="1" value="1" aria-label="页码"> / <span id="page-count">—</span> 页</label><button id="next" disabled>下一页</button><span class="divider"></span><button id="zoom-out" aria-label="缩小" disabled>−</button><output id="zoom">100%</output><button id="zoom-in" aria-label="放大" disabled>＋</button><button id="fit" disabled>适应宽度</button></div>

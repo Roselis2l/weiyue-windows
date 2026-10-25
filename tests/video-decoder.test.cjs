@@ -45,6 +45,24 @@ test('MP4 box length, extended size, nesting, track ambiguity and truncated meta
  const ambiguous=Buffer.concat([mp4(),mp4().subarray(24)]);assert.equal(inspectHevcMp4(ambiguous),null);
  let nested=box('stbl');for(let i=0;i<10;i++)nested=box('moov',nested);assert.equal(inspectHevcMp4(Buffer.concat([mp4(),nested])),null);
 });
+test('QuickTime Live Photo allows auxiliary tracks and distinguishes mdia media handler from minf data handler',()=>{
+ const base=mp4();base.write('qt  ',8);base.write('qt  ',16);
+ const track=base.subarray(32); // first trak, excluding ftyp and moov headers
+ const multiple=Buffer.concat([base.subarray(0,24),box('moov',track,track)]);
+ assert.equal(inspectHevcMp4(multiple)?.width,1920);
+ const alis=Buffer.alloc(24);alis.write('alis',8);
+ const alias=box('hdlr',alis),at=base.indexOf(Buffer.from('stbl'))-4;
+ const qt=Buffer.concat([base.subarray(0,at),alias,base.subarray(at)]);
+ for(const type of ['moov','trak','mdia','minf']){const pos=qt.indexOf(Buffer.from(type))-4;qt.writeUInt32BE(qt.readUInt32BE(pos)+alias.length,pos);}
+ assert.equal(inspectHevcMp4(qt)?.frames,48);
+ const tooMany=Buffer.concat([base.subarray(0,24),box('moov',...Array(17).fill(track))]);assert.equal(inspectHevcMp4(tooMany),null);
+ const encrypted=Buffer.from(track);encrypted.write('encv',encrypted.indexOf(Buffer.from('hvc1')));
+ assert.equal(inspectHevcMp4(Buffer.concat([base.subarray(0,24),box('moov',track,encrypted)])),null);
+});
+test('QuickTime audio sample counts are independent of video frame bounds',()=>{
+ const base=mp4();base.write('qt  ',8);base.write('qt  ',16);const audio=mp4({seconds:2,frames:96000,codec:'lpcm'}).subarray(32);audio.write('soun',audio.indexOf(Buffer.from('vide')));
+ const value=Buffer.concat([base.subarray(0,24),box('moov',base.subarray(32),audio)]);assert.equal(inspectHevcMp4(value)?.frames,48);
+});
 test('exact byte views and result MIME/signature/size checks reject spoofed values',()=>{
  const wrapped=Buffer.from([9,1,2,8]);assert.deepEqual(exactBytes(wrapped.subarray(1,3)),Buffer.from([1,2]));
  for(const input of ['private',[],new Uint16Array([1]),Object.create(Uint8Array.prototype)])assert.throws(()=>exactBytes(input));

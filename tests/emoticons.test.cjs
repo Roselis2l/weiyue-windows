@@ -19,7 +19,7 @@ test('all verified official names and both bracket forms render without changing
   const document=fakeDocument(),full=create({manifest:official,links});
   const names=Object.keys(official),text=names.map(name=>`[${name}]【${name}】`).join('，\n');
   const parts=full.tokenize(text),images=parts.filter(part=>part.type==='emoticon');
-  assert.equal(names.length,409);assert.equal(images.length,names.length*2);
+  assert.equal(names.length,413);assert.equal(images.length,names.length*2);
   assert.equal(parts.map(part=>part.text).join(''),text);
   assert.equal(document.requests.length,0,'Constructing and tokenizing a full catalogue must not preload images');
   for(const [index,name] of names.entries()){
@@ -49,6 +49,17 @@ test('long legacy path code failure retains its exact original copy text and fix
   for(const image of images){assert.equal(image.width,IMAGE_SIZE);assert.equal(image.height,IMAGE_SIZE);image.dispatch('error');}
   assert.equal(projectText(shown),text);
   assert.deepEqual(childrenByClass(shown,'emoticon-fallback-compact').map(node=>node.textContent),['【/ee8192.png】','[/ee858c.png]','[/ee88a6.png]','【/ee88a6.png】','[/ee84a5.png]','【/ee84a5.png】','[/ee88ab.png]','【/ee88ab.png】']);
+});
+
+test('four 1.1.26 legacy codes retain exact copied text and variation selectors in ready and failed states',()=>{
+  const official=require('../app/renderer/emoticon-manifest.js'),document=fakeDocument(),full=create({manifest:official,links});
+  const text='[/ee9095.png]【/ee8cbe.png】[/ee84bc.png][/ee9094.png]\ufe0f，[/ee9095.png]。';
+  const shown=document.createElement('div');full.appendText(shown,text);
+  const images=childrenByClass(shown,'emoticon-image');assert.equal(images.length,5);assert.equal(projectText(shown),text);
+  for(const image of images){assert.equal(image.width,IMAGE_SIZE);assert.equal(image.height,IMAGE_SIZE);image.dispatch('load');}
+  assert.equal(projectText(shown),text);
+  for(const image of images)image.dispatch('error');
+  assert.equal(projectText(shown),text);assert.ok(childrenByClass(shown,'emoticon-fallback').every(node=>node.hidden===false));
 });
 
 test('conflicting normalized names stay literal instead of selecting an arbitrary same-name emoticon',()=>{

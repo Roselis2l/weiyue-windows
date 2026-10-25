@@ -5,7 +5,7 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),asse
 const {_electron}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const {assertWindowsRuntimeReadable}=require('./windows-runtime-check.cjs');
 const root=path.resolve(__dirname,'..'),harness=fs.mkdtempSync(path.join(os.tmpdir(),'weiyue-emoticon-extension-'));
-const evidence=path.resolve(process.env.WEIYUE_EMOTICONS_OUTPUT||path.join(root,'artifacts/feature-1.1.20/emoticons/ui-'+Date.now()));
+const evidence=path.resolve(process.env.WEIYUE_EMOTICONS_OUTPUT||path.join(root,'artifacts/feature-1.1.26/emoticons/ui-'+Date.now()));
 fs.mkdirSync(evidence,{recursive:true});fs.mkdirSync(path.join(harness,'renderer'));fs.mkdirSync(path.join(harness,'core'));
 for(const name of ['emoticons.js','emoticon-manifest.js','linkify.js','style.css'])fs.copyFileSync(path.join(root,'app/renderer',name),path.join(harness,'renderer',name));
 fs.cpSync(path.join(root,'app/renderer/emoticons'),path.join(harness,'renderer/emoticons'),{recursive:true});
@@ -13,7 +13,7 @@ fs.copyFileSync(path.join(root,'app/core/emoticon-assets.cjs'),path.join(harness
 const required=require(path.join(harness,'renderer/emoticons/extensions-manifest.json')).requiredNames;
 const catalogManifest=require(path.join(harness,'renderer/emoticon-manifest.js'));
 const mappingCount=Object.keys(catalogManifest).length,legacyPathCount=required.filter(name=>name.startsWith('/')).length;
-assert.equal(required.length,25);assert.equal(legacyPathCount,9);assert.equal(mappingCount,409);
+assert.equal(required.length,29);assert.equal(legacyPathCount,13);assert.equal(mappingCount,413);
 fs.writeFileSync(path.join(harness,'package.json'),JSON.stringify({name:'weiyue-emoticon-extension-test',version:'1.0.0',main:'main.cjs'}));
 fs.writeFileSync(path.join(harness,'main.cjs'),`'use strict';
 const {app,BrowserWindow,protocol,session}=require('electron'),path=require('node:path');
@@ -24,12 +24,12 @@ globalThis.__test={requests:[],external:[],fail};
 app.whenReady().then(async()=>{
  session.defaultSession.webRequest.onBeforeRequest({urls:['http://*/*','https://*/*']},(d,cb)=>{__test.external.push(d.url);cb({cancel:true});});
  const manifest=require('./renderer/emoticon-manifest.js'),service=require('./core/emoticon-assets.cjs').createEmoticonAssets({root:path.join(__dirname,'renderer'),manifest});
-protocol.handle('app',r=>{__test.requests.push(r.url);if(__test.fail&&r.url===manifest['/ee88ab.png'].src)return new Response('Not found',{status:404});return service.serve(r,new URL(r.url));});
+protocol.handle('app',r=>{__test.requests.push(r.url);if(__test.fail&&['/ee9095.png','/ee8cbe.png','/ee84bc.png','/ee9094.png'].some(name=>r.url===manifest[name].src))return new Response('Not found',{status:404});return service.serve(r,new URL(r.url));});
  const win=new BrowserWindow({width:1180,height:880,webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true}});
  await win.loadFile(path.join(__dirname,'index.html'));
 });
 app.on('window-all-closed',()=>app.quit());`);
-fs.writeFileSync(path.join(harness,'index.html'),`<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src app:; connect-src 'none'"><title>微阅表情验收 · 示例数据</title><link rel="stylesheet" href="renderer/style.css"><link rel="stylesheet" href="fixture.css"><h1>微阅表情 · 示例数据</h1><p>指定的 16 个名称、9 个文件代码，使用官方原图；以下内容完全合成。</p><div id="requested"></div><div id="copy"></div><h2>全部已核实映射</h2><div id="all"></div><script src="renderer/linkify.js"></script><script src="renderer/emoticon-manifest.js"></script><script src="renderer/emoticons.js"></script><script src="fixture.js"></script>`);
+fs.writeFileSync(path.join(harness,'index.html'),`<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src app:; connect-src 'none'"><title>微阅表情验收 · 示例数据</title><link rel="stylesheet" href="renderer/style.css"><link rel="stylesheet" href="fixture.css"><h1>微阅表情 · 示例数据</h1><p>指定的 16 个名称、13 个文件代码，使用官方原图；以下内容完全合成。</p><div id="requested"></div><div id="copy"></div><h2>全部已核实映射</h2><div id="all"></div><script src="renderer/linkify.js"></script><script src="renderer/emoticon-manifest.js"></script><script src="renderer/emoticons.js"></script><script src="fixture.js"></script>`);
 fs.writeFileSync(path.join(harness,'fixture.css'),'body{margin:24px;background:#fafbfc;display:block;overflow:auto;height:auto;color:#24313b}h1{font-size:22px}p{font-size:14px}#requested{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px}.sample{padding:12px;background:#fff;border:1px solid #d9e1e5;border-radius:6px;display:flex;align-items:center;gap:10px}.sample .name{min-width:110px;font-size:13px}#all{line-height:32px}#copy{margin-top:18px;padding:12px;background:white;white-space:pre-wrap}');
 fs.writeFileSync(path.join(harness,'fixture.js'),`'use strict';
 const required=${JSON.stringify(required)},renderer=WeiyueEmoticons.create({manifest:WeiyueEmoticonManifest,links:WeiyueLinks});
@@ -37,7 +37,7 @@ renderer.installCopyHandler(document);
 for(const name of required){const row=document.createElement('div');row.className='sample';const label=document.createElement('span');label.className='name';label.textContent='['+name+']';const content=document.createElement('span');content.className='value';renderer.appendText(content,'['+name+']【'+name+'】');row.append(label,content);document.querySelector('#requested').append(row);}
 renderer.appendText(document.querySelector('#copy'),'连续 [苦涩][流鼻血]【老师好】[/ee8192.png]；未知[/unknown.png]。\\n链接 https://example.com/[/ee8192.png]?q=[苦涩] 保持原文。');
 renderer.appendText(document.querySelector('#all'),Object.keys(WeiyueEmoticonManifest).map(name=>'['+name+']').join(' '));`);
-const executablePath=path.join(root,'vendor/runtime/electron.exe');assertWindowsRuntimeReadable(executablePath);
+const executablePath=process.env.WEIYUE_ELECTRON_RUNTIME?path.resolve(process.env.WEIYUE_ELECTRON_RUNTIME):path.join(root,'vendor/runtime/electron.exe');assertWindowsRuntimeReadable(executablePath);
 const result={scope:'Synthetic fixture only; real emoticon renderer, source manifest, bytes and local protocol; no real account/AI/Notion.',requiredNames:required,checks:[],passed:false};
 let application;
 (async()=>{try{
@@ -61,10 +61,10 @@ let application;
  await application.close();application=null;
  application=await _electron.launch({executablePath,args:[harness,'--fail-path-emoticon'],timeout:30000});
  page=await application.firstWindow();
- await page.waitForFunction(()=>[...document.querySelectorAll('.inline-emoticon')].some(n=>n.dataset.originalToken==='【/ee88ab.png】'&&n.dataset.emoticonState==='failed'));
- const failed=await page.evaluate(()=>[...document.querySelectorAll('.inline-emoticon')].filter(n=>n.dataset.originalToken.includes('/ee88ab.png')).map(n=>({state:n.dataset.emoticonState,copy:WeiyueEmoticons.projectText(n),original:n.dataset.originalToken,visible:!n.querySelector('.emoticon-fallback').hidden})));
- assert.ok(failed.length>=3&&failed.every(x=>x.state==='failed'&&x.visible&&x.copy===x.original));
- result.failedAssetCode='[/ee88ab.png]';result.failedAssetCases=failed;
+ await page.waitForFunction(()=>['/ee9095.png','/ee8cbe.png','/ee84bc.png','/ee9094.png'].every(name=>[...document.querySelectorAll('.inline-emoticon')].some(n=>n.dataset.originalToken==='【'+name+'】'&&n.dataset.emoticonState==='failed')));
+ const failed=await page.evaluate(()=>[...document.querySelectorAll('.inline-emoticon')].filter(n=>['/ee9095.png','/ee8cbe.png','/ee84bc.png','/ee9094.png'].some(name=>n.dataset.originalToken.includes(name))).map(n=>({state:n.dataset.emoticonState,copy:WeiyueEmoticons.projectText(n),original:n.dataset.originalToken,visible:!n.querySelector('.emoticon-fallback').hidden})));
+ assert.equal(failed.length,12);assert.ok(failed.every(x=>x.state==='failed'&&x.visible&&x.copy===x.original));
+ result.failedAssetCodes=['[/ee9095.png]','[/ee8cbe.png]','[/ee84bc.png]','[/ee9094.png]'];result.failedAssetCases=failed;
  await page.screenshot({path:path.join(evidence,'synthetic-path-failure-fallback.png')});
  result.checks.push('Real local 404 preserves complete original file-code fallback and original copy text.');
  const network=await application.evaluate(()=>globalThis.__test.external);assert.deepEqual(network,[]);result.externalRequests=0;result.passed=true;

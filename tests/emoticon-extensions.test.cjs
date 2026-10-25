@@ -9,7 +9,7 @@ const {createEmoticonAssets}=require('../app/core/emoticon-assets.cjs');
 const {create}=require('../app/renderer/emoticons.js');
 const links=require('../app/renderer/linkify.js');
 const requiredNames=['苦涩','流鼻血','老师好','卡皮巴拉','泪奔','无聊','666','淡淡的','送花花','拜托','努力','捂嘴哭','手指比心','呵呵','流汗','融化'];
-const requiredPaths=['/ee8192.png','/ee8cb0.png','/ee9092.png','/ee808e.png','/ee819a.png','/ee858c.png','/ee88a6.png','/ee84a5.png','/ee88ab.png'];
+const requiredPaths=['/ee8192.png','/ee8cb0.png','/ee9092.png','/ee808e.png','/ee819a.png','/ee858c.png','/ee88a6.png','/ee84a5.png','/ee88ab.png','/ee9095.png','/ee8cbe.png','/ee84bc.png','/ee9094.png'];
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 
 test('official visible default picker and reviewed legacy route support every supplemental name and byte',async()=>{
@@ -17,13 +17,13 @@ test('official visible default picker and reviewed legacy route support every su
  assert.equal(hash(sourceBytes),extension.source.sha256);assert.equal(sourceBytes.length,extension.source.bytes);
  assert.equal(source.chatPicker.url,'https://api.weibo.com/chat/');assert.equal(source.chatPicker.category,'默认');
  assert.equal(source.chatPicker.entries.length,182);assert.equal(extension.newNamedMappings,92);
- assert.equal(extension.explicitLegacyPaths,9);assert.equal(extension.mappingCount,101);
+ assert.equal(extension.explicitLegacyPaths,13);assert.equal(extension.mappingCount,105);
  assert.deepEqual(extension.requiredNames,[...requiredNames,...requiredPaths]);
  assert.equal(source.pathCodes.basis.sourceUrl,'https://h5.sinaimg.cn/m/pcweibochat/js/app.48f8ddda.js');
  assert.equal(source.pathCodes.basis.sha256,'572ee8cdb4a0d4b9401ab4f5aca0c5bd1f043fe310063632694a47d76bb30aae');
  assert.match(source.pathCodes.basis.excerpt,/convertEmoji:function/);
  const expected=new Map([...base.entries,...extension.entries].map(({name,...descriptor})=>[name,descriptor]));
- assert.equal(expected.size,409);assert.deepEqual(Object.keys(manifest).sort(),[...expected.keys()].sort());
+ assert.equal(expected.size,413);assert.deepEqual(Object.keys(manifest).sort(),[...expected.keys()].sort());
  const service=createEmoticonAssets({root:rendererRoot,manifest});
  const unique=new Set();
  for(const {name,...descriptor} of extension.entries){
@@ -43,7 +43,7 @@ test('official visible default picker and reviewed legacy route support every su
   unique.add(descriptor.src);
  }
  assert.equal(unique.size,extension.uniqueResourceCount);
- assert.equal(new Set(Object.values(manifest).map(x=>x.src)).size,408);
+ assert.equal(new Set(Object.values(manifest).map(x=>x.src)).size,412);
  for(const item of source.chatPicker.entries)assert.ok(manifest[item.name.slice(1,-1)],item.name);
 });
 

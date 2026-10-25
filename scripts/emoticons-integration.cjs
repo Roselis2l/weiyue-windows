@@ -68,9 +68,9 @@ const raw={
   shared:'原微博合成正文[哈哈]【笑cry】与原文链接 https://example.com/post'
 };
 raw.unknown='未知[微阅QA115未收录代码]【QA115未知表情】[]【】普通括号保持原文 javascript:alert(1) <img src=x onerror=alert(1)>';
-const requestedLegacyCases=['/ee88ab.png','/ee84a5.png','/ee88a6.png'].map((name,index)=>({
+const requestedLegacyCases=['/ee88ab.png','/ee84a5.png','/ee88a6.png','/ee9095.png','/ee8cbe.png','/ee84bc.png','/ee9094.png'].map((name,index)=>({
   name,messageIndex:36+index,url:`https://example.com/[${name}]?q=【${name}】`,
-  text:`旧版代码 [${name}]、【${name}】；连续[${name}][${name}]，链接 https://example.com/[${name}]?q=【${name}】`
+  text:`旧版代码 [${name}]、【${name}】；连续[${name}][${name}]${name==='/ee9094.png'?'\ufe0f':''}，链接 https://example.com/[${name}]?q=【${name}】`
 }));
 assert.ok(!Object.hasOwn(officialManifest,'微阅QA115未收录代码')&&!Object.hasOwn(officialManifest,'QA115未知表情'),'UNKNOWN_FIXTURE_BECAME_KNOWN');
 const group=key=>fixtures.groups.find(g=>g.key===key);

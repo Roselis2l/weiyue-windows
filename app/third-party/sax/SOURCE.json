@@ -1,0 +1,32 @@
+{
+  "name": "sax",
+  "version": "1.6.1",
+  "license": "BlueOak-1.0.0",
+  "repository": "https://github.com/isaacs/sax-js",
+  "source": "https://registry.npmjs.org/sax/-/sax-1.6.1.tgz",
+  "integrity": "sha512-42tBVwLWnaQvW5zc4HbZrTuWccECCZfBi92FDuwtqxasH+JbPB3/FOKb1m222K42R4WxuxzzMsTswfzgtSu64Q==",
+  "downloadedAtUtc": "2026-10-25T14:13:15.121Z",
+  "files": [
+    {
+      "name": "package/lib/sax.js",
+      "bytes": 50818,
+      "sha256": "1cdc1270d987cb0f6ee66dd8efb01c50511aa14d17b6163bbbffb21df8cf1c06"
+    },
+    {
+      "name": "package/package.json",
+      "bytes": 789,
+      "sha256": "d7e5ff764b48b9532d1b9a8b481b8d54336e6309e362571e993645b790bea657"
+    },
+    {
+      "name": "package/LICENSE.md",
+      "bytes": 1552,
+      "sha256": "8a1af140fdfbf5afd3df27f7e662f989c5b963a300020dfafce42033cae9e004"
+    },
+    {
+      "name": "package/README.md",
+      "bytes": 8519,
+      "sha256": "9e6bd0717598300f338b4313c37b42cb334a0ead62902a03741147f15f4ebf1a"
+    }
+  ],
+  "note": "Downloaded data only; no package lifecycle scripts executed. Original JavaScript renamed sax.cjs for explicit CommonJS loading; bytes unchanged."
+}

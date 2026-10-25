@@ -130,3 +130,26 @@ test('old completed media still verifies context once; same-name ordinary sender
   assert.equal((await f.context.enrichMessages('weibo-1',request)).count,0);
   assert.deepEqual(f.calls,['identity','detail:20','detail:21']);
 });
+
+test('legacy voice and Live Photo placeholders can enrich without changing reading state or resurrecting tombstones',async t=>{
+  const f=fixture(t,{detail:async id=>({id,senderId:'7',attachments:id==='20'
+    ?[{kind:'audio',fid:'126001',state:'needs-metadata',name:'分享语音'}]
+    :[{kind:'video',fid:'126002',state:'needs-metadata',name:'实况照片',livePhoto:true}]})});
+  f.store.update('weibo-1',s=>{for(const m of s.messages){m.referenceVersion=1;m.mediaVersion=1;m.attachmentVersion=1;}
+    s.messages[0].text='分享语音';s.messages[1].text='实况照片';});
+  const before=f.store.getReadStats('weibo-1','2');
+  const request={groupId:'2',messageIds:['20','21','22']};
+  assert.equal((await f.context.enrichMessages('weibo-1',request)).count,2);
+  assert.deepEqual(f.calls,['identity','detail:20','detail:21']);
+  assert.equal(f.store.get('weibo-1').messages[0].attachments[0].kind,'audio');
+  assert.equal(f.store.get('weibo-1').messages[1].attachments[0].livePhoto,true);
+  assert.deepEqual(f.store.getReadStats('weibo-1','2'),before);
+  f.context.enrichmentAttempts.clear();
+  assert.equal((await f.context.enrichMessages('weibo-1',request)).count,0);
+  const calls=f.calls.length;
+  // A permanent-deletion marker is never an eligible content lookup target.
+  f.store.update('weibo-1',s=>{s.messages=s.messages.filter(m=>m.id!=='21');s.messageTombstones=[{id:'21',groupId:'2',time:1021}];s.schemaVersion=3;});
+  const preserved=f.store.get('weibo-1');
+  assert.equal((await f.context.enrichMessages('weibo-1',{groupId:'2',messageIds:['21'],retry:true})).count,0);
+  assert.equal(f.calls.length,calls);assert.deepEqual(f.store.get('weibo-1'),preserved);
+});

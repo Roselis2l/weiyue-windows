@@ -12,7 +12,7 @@ const filters = window.WeiyueFilters;
 const syncDisplay = window.WeiyueSyncStatus;
 const appearance = window.WeiyueAppearance;
 function applyAppearance(value) {
-  // Dedicated variables affect message areas only; no shared app theme changes.
+  // Message colors and application chrome are independent settings.
   window.WeiyueAppearanceSettings.apply($('workspace'),value);
 }
 function emptyFilters() {return {keyword:'',senderIds:[],start:'',end:'',importantOnly:false};}
@@ -173,6 +173,7 @@ async function refreshState({background=false}={}) {
   model.state = state;
   model.state.groups ||= []; model.state.accounts ||= []; model.state.settings ||= {}; model.state.stats ||= {}; model.state.readPositions ||= {}; model.state.readStates ||= {}; model.state.importantMembers ||= []; model.state.credentials ||= {};
   applyAppearance(model.state.settings.appearance);
+  window.WeiyueInterfaceTheme.apply(document.body,model.state.settings.interfaceTheme);
   if (!model.state.groups.some(g => g.selected !== false && String(g.id) === String(model.groupId))) model.groupId = reading.recentGroupId(model.state.groups,model.state.readStates);
   if(background && readingBusy()){queueReadingRefresh();updateUnreadBadges();updateReadChrome();return;}
   renderSidebar(); renderHeader();
@@ -759,6 +760,8 @@ function needsMessageContext(message) {
 function isLegacyShare(message) {
   if(isNotificationOnly(message))return false;
   return (!message.mediaVersion && /分享.*图片|我发布了新微博|分享.*微博/.test(message.text || '')) ||
+    ((message.text || '').trim()==='分享语音' && !message.attachments?.some(a=>a.kind==='audio')) ||
+    ((message.text || '').trim()==='实况照片' && !message.attachments?.some(a=>a.kind==='video' && a.livePhoto)) ||
     (!message.attachmentVersion && /^(?:文件消息|分享视频)$/.test((message.text || '').trim())) ||
     (!message.referenceVersion && (!!message.images?.length || !!message.sharedPost || !message.text?.trim() || /分享.*图片|分享.*微博|「图片」/.test(message.text || '')));
 }
@@ -769,11 +772,11 @@ function renderMessageContent(message) {
   if(message.images?.length)content.append(imageGallery(message.images,message));
   for(const attachment of message.attachments || []){
     const archive=attachment.kind==='archive';
-    const type=attachment.livePhoto?'实况照片':attachment.kind==='video'?'视频':attachment.kind==='pdf'?'PDF 文件':archive?'压缩文件':'文件';
-    const action=attachment.livePhoto?'播放实况照片':attachment.kind==='video'?'播放视频':archive?'下载压缩文件':'预览文件';
+    const type=attachment.livePhoto?'实况照片':attachment.kind==='video'?'视频':attachment.kind==='audio'?'语音':attachment.kind==='pdf'?'PDF 文件':attachment.kind==='document'?'文档':archive?'压缩文件':'文件';
+    const action=attachment.livePhoto?'播放实况照片':attachment.kind==='video'?'播放视频':attachment.kind==='audio'?'播放语音':archive?'下载压缩文件':'预览文件';
     const info=[type,attachment.size?((attachment.size/1024/1024).toFixed(2)+' MB'):'',attachment.state==='needs-metadata'?'点击读取文件信息':''].filter(Boolean).join(' · ');
     const download=async()=>{const result=await api('attachment.download',{source:attachment.src});if(!result?.canceled)toast('原文件已保存到所选位置。');};
-    content.append(node('section',{class:'attachment-card'},node('div',{class:'attachment-copy'},node('strong',{},attachment.name || type),node('small',{},info)),button(action,archive?download:()=>api('attachment.open',{source:attachment.src}),'small attachment-open',{'aria-label':action+' '+(attachment.name || type)}),attachment.kind==='file'?button('下载原文件',download,'small attachment-download'):null,node('span',{class:'attachment-save-hint'},archive?'选择保存位置，不解压或运行':'预览窗口内可另存原文件')));
+    content.append(node('section',{class:'attachment-card'},node('div',{class:'attachment-copy'},node('strong',{},attachment.name || type),node('small',{},info)),button(action,archive?download:()=>api('attachment.open',{source:attachment.src}),'small attachment-open',{'aria-label':action+' '+(attachment.name || type)}),['file','document'].includes(attachment.kind)?button('下载原文件',download,'small attachment-download'):null,node('span',{class:'attachment-save-hint'},archive?'选择保存位置，不解压或运行':'预览窗口内可另存原文件')));
   }
   const post=message.sharedPost;
   if(post && !isNotificationOnly(message)){
@@ -797,9 +800,9 @@ function renderMessageContent(message) {
   }
   if(isLegacyShare(message)){
     const error=model.enrichmentErrors.get(enrichmentKey(message));
-    const note=node('div',{class:'legacy-share-note'},error?`补全未完成：${error}`:'这条旧记录尚未检查实况照片、动图或完整引用，待按需补全。');
+    const note=node('div',{class:'legacy-share-note'},error?`补全未完成：${error}`:'这条记录尚缺语音、实况照片或完整分享信息，可按需补全。');
     if(accountKind()==='weibo')note.append(button(error?'重试补全':'补全这条分享',()=>enrichMessages([message],true),'text small'));
-    else note.textContent='这条导入记录未包含图片或原微博内容，可导入完整数据或在官方页面查看。';
+    else note.textContent='这条导入记录未包含完整媒体或原微博信息，可导入完整数据或在官方页面查看。';
     content.append(note);
   }
   if(message.mediaVersion && /分享.*图片/.test(message.text || '') && !message.images?.length && !post?.images?.length)content.append(node('p',{class:'legacy-share-note'},'这条消息未提供可用的图片地址，可在官方页面查看。'),officialChatButton());
@@ -1504,7 +1507,7 @@ function showSettings(restoredDraft) {
     settings.endpoint?node('p',{id:'ai-current-endpoint',class:'ai-settings-address'},settings.endpoint):null,
     button(settings.endpoint || settings.model?'编辑自定义模型':'添加自定义模型',()=>showAiConfiguration(draft),'full',{id:'configure-ai'}));
   const body=node('div',{},node('p',{class:'form-description'},'凭据由 Windows 保护并绑定当前本地工作区。已保存的 Key 不会回显。AI 模型与 Notion 连接分别保存。'),aiDetails,
-    node('div',{class:'form-section'},node('h3',{},'外观颜色'),node('p',{class:'form-description'},'调整聊天背景、成员昵称与消息框颜色，仅影响当前账号的阅读与收藏。'),button('编辑外观颜色',()=>showAppearanceSettings(draft),'full',{id:'configure-appearance',disabled:!accountId})),
+    node('div',{class:'form-section'},node('h3',{},'主题与外观颜色'),node('p',{class:'form-description'},'选择界面主题，或独立调整聊天背景、成员昵称与消息框颜色；仅影响当前账号。'),button('编辑主题与颜色',()=>showAppearanceSettings(draft),'full',{id:'configure-appearance',disabled:!accountId})),
     node('div',{class:'form-section'},node('h3',{},'Notion 连接'),node('p',{class:'form-description'},'使用你自己的 Notion integration，并在 Notion 页面中授予它访问权限。保存设置不会写入任何页面。'),field('Integration token',notionToken,creds.notion?'已保存的 Token 留空保持不变。':null)),
     node('div',{class:'form-section'},check('清除当前账号保存的 AI 与 Notion 凭据',draft.deleteSecrets,value=>draft.deleteSecrets=value,{id:'delete-secrets'})),
     node('div',{class:'source-note'},'没有后台定时发送。只有点击并确认 AI 总结或 Notion 导出后，选定内容才会发送到对应服务。'),
@@ -1518,10 +1521,10 @@ function showSettings(restoredDraft) {
 }
 function showAppearanceSettings(settingsDraft) {
   const accountId=model.state.account?.id,epoch=model.accountEpoch;
-  return window.WeiyueAppearanceSettings.open({api,node,button,modal,toast,appearance:model.state.settings.appearance,accountId,
+  return window.WeiyueAppearanceSettings.open({api,node,button,modal,toast,appearance:model.state.settings.appearance,interfaceTheme:model.state.settings.interfaceTheme,accountId,
     isCurrent:()=>accountId===model.state.account?.id && epoch===model.accountEpoch && !model.switching && !model.closing,
     onBack:()=>showSettings(settingsDraft),
-    onSaved:state=>{if(state.account?.id!==accountId)throw new Error('账号已切换，外观结果未应用。');model.state.settings.appearance=appearance.normalizeAppearance(state.settings?.appearance);applyAppearance(model.state.settings.appearance);}
+    onSaved:state=>{if(state.account?.id!==accountId)throw new Error('账号已切换，外观结果未应用。');model.state.settings.appearance=appearance.normalizeAppearance(state.settings?.appearance);model.state.settings.interfaceTheme=window.WeiyueInterfaceTheme.normalizeTheme(state.settings?.interfaceTheme);applyAppearance(model.state.settings.appearance);window.WeiyueInterfaceTheme.apply(document.body,model.state.settings.interfaceTheme);}
   });
 }
 function cleanupWorkActive(){return model.cleanupOperation?.running===true;}
