@@ -137,7 +137,7 @@ function buildPreview(summary, targetId, { draft, editable = false } = {}) {
   });
   const referencesText = referenceParts.join('\n\n');
   if (referencesText.length > MAX_EXPORT_BYTES) throw new NotionError('引用原文过长，请缩小本次导出范围。');
-  const sourceHash = digest(JSON.stringify({ sourceType, sourceIds, title: summary.title, body: summary.body, warning: summary.warning, contextText, referencesText }));
+  const sourceHash = digest(JSON.stringify({ sourceType, sourceIds, title: summary.title, body: summary.body, warning: summary.warning, contextText, referencesText, contentEpoch:summary.contentEpoch }));
   const edited = editable || draft !== undefined;
   if (draft !== undefined && (!draft || typeof draft !== 'object' || Array.isArray(draft) || typeof draft.includeReferences !== 'boolean')) throw new NotionError('请提交有效的编辑正文及引用原文选项。');
   const title = draft === undefined ? safePrefix(summary.title, 180) || '微阅时段摘要' : plainText(draft.title, '导出标题', 180, { empty: false }).trim();

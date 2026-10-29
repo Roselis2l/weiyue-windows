@@ -8,10 +8,13 @@ const {normalizeAttachment,mergeAttachments,attachmentSearchText}=require('./att
 const {normalizeReferences,mergeReferences,normalizeQuotePreview}=require('./message-references.cjs');
 const {normalizeSystemNotice}=require('./system-notices.cjs');
 const messageCleanup = require('./message-cleanup.cjs');
+const recallProtocol = require('./message-recalls.cjs');
+const editionPolicy = require('./edition-policy.cjs');
 
 const SCHEMA_VERSION = 1;
 const RECYCLE_SCHEMA_VERSION = 2;
 const PURGE_SCHEMA_VERSION = 3;
+const CONTENT_SCHEMA_VERSION = 4;
 const MAX_MESSAGES = 500000;
 const MAX_STATE_BYTES = 512 * 1024 * 1024;
 const MAX_TIME = 8640000000000000;
@@ -80,7 +83,7 @@ function assertJson(value, label = '数据', depth = 0, secrets = false) {
   fail(`${label}含有不能保存的值`);
 }
 
-function normalizeMessage(message) {
+function normalizeMessage(message, options = {}) {
   record(message, '消息');
   const normalized = {
     id: identifier(message.id, '消息 ID'),
@@ -90,6 +93,15 @@ function normalizeMessage(message) {
     text: stringValue(message.text, '消息正文', 1000000, ''),
     time: timestamp(message.time, '消息时间'),
   };
+  if (message.recall !== undefined) normalized.recall = recallProtocol.normalizeRecall(message.recall);
+  // Opaque edition payloads are local state only: never trust sync/import data.
+  if (options.trusted && message.editionData !== undefined) {
+    record(message.editionData, '本地扩展数据');
+    assertJson(message.editionData, '本地扩展数据', 0, true);
+    const serialized=JSON.stringify(message.editionData);
+    if(Buffer.byteLength(serialized,'utf8')>128*1024*1024)fail('本地扩展数据过大');
+    normalized.editionData=JSON.parse(serialized);
+  }
   if (message.systemNotice !== undefined) normalized.systemNotice = normalizeSystemNotice(message.systemNotice);
   if (message.contextVersion !== undefined) {
     if (message.contextVersion !== 1) fail('消息上下文版本不受支持');
@@ -173,6 +185,8 @@ function mergeSharedPost(previous, incoming) {
   return result;
 }
 function mergeRichMessage(previous, incoming) {
+  const notice=recallProtocol.canonicalNotice(previous,incoming);
+  if(notice)return editionPolicy.mergeRecall(previous,notice);
   if (!previous) return incoming;
   const result = { ...previous, ...incoming };
   // An official context refresh also clears stale classification. Legacy imports
@@ -303,14 +317,14 @@ function validateState(state, expectedId) {
     return group;
   }) };
   assertJson(state);
-  if (![SCHEMA_VERSION,RECYCLE_SCHEMA_VERSION,PURGE_SCHEMA_VERSION].includes(state.schemaVersion)) fail('本地数据版本不受支持，请保留原文件并升级应用');
+  if (![SCHEMA_VERSION,RECYCLE_SCHEMA_VERSION,PURGE_SCHEMA_VERSION,CONTENT_SCHEMA_VERSION].includes(state.schemaVersion)) fail('本地数据版本不受支持，请保留原文件并升级应用');
   const account = normalizeAccount(state.account);
   if (account.id !== expectedId) fail('账号数据不匹配');
   const groups = array(state.groups, '群列表', 10000).map(normalizeGroup);
   const groupIds = new Set(groups.map(group => group.id));
   if (groupIds.size !== groups.length) fail('群列表含重复 ID');
   const messages = array(state.messages, '消息').map(message => {
-    const normalized = normalizeMessage(message);
+    const normalized = normalizeMessage(message, {trusted:true});
     // These are trusted local-state fields, never accepted from a sync/import
     // descriptor. Repeated imports cannot hide or restore a saved message.
     if (message.localDeletion !== undefined) normalized.localDeletion = messageCleanup.normalizeLocalDeletion(message.localDeletion);
@@ -325,7 +339,7 @@ function validateState(state, expectedId) {
   }
   const messageTrash = messageCleanup.validateMessageTrash(state.messageTrash, messages, groups);
   const messageTombstones = messageCleanup.validateMessageTombstones(state.messageTombstones, messages, groups);
-  if (messageTombstones.length && state.schemaVersion !== PURGE_SCHEMA_VERSION) fail('永久删除标记需要受支持的数据版本，请保留原文件并升级应用');
+  if (messageTombstones.length && state.schemaVersion < PURGE_SCHEMA_VERSION) fail('永久删除标记需要受支持的数据版本，请保留原文件并升级应用');
   const tombstoneKeys=new Set(messageTombstones.map(messageKey));
   const hiddenKeys = new Set(messages.filter(message => message.localDeletion).map(messageKey));
   for (const group of groups) {
@@ -369,9 +383,9 @@ function validateState(state, expectedId) {
   // than silently discard tombstones during their normalization. Restoring a
   // batch does not downgrade the account. Normalize early unreleased schema-1
   // recycle fixtures in memory too; reading alone never rewrites their bytes.
-  const schemaVersion = state.schemaVersion===PURGE_SCHEMA_VERSION ? PURGE_SCHEMA_VERSION : messageTrash.length ? RECYCLE_SCHEMA_VERSION : state.schemaVersion;
+  const schemaVersion = state.schemaVersion>=PURGE_SCHEMA_VERSION ? state.schemaVersion : messageTrash.length ? RECYCLE_SCHEMA_VERSION : state.schemaVersion;
   return { ...state, schemaVersion, account, groups, messages, bookmarks, readPositions, readStates, importantMembers, messageTrash,
-    ...(state.messageTombstones !== undefined || schemaVersion===PURGE_SCHEMA_VERSION ? {messageTombstones} : {}) };
+    ...(state.messageTombstones !== undefined || schemaVersion>=PURGE_SCHEMA_VERSION ? {messageTombstones} : {}) };
 }
 
 function filterMessages(messages, query = {}, importantMembers = []) {
@@ -402,6 +416,7 @@ class Store {
     if (typeof root !== 'string' || !root) fail('本地数据目录无效');
     this.root = path.resolve(root);
     this._snapshots = new Map();
+    this._contentEpochCache = new WeakMap();
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
   }
   _file(id) {
@@ -492,6 +507,19 @@ class Store {
     const state=this._read(this._file(id),identifier(id),true);
     if(!state)fail('账号不存在，请先创建或登录账号');return state;
   }
+  // All user-facing reads must use this edition projection before filtering.
+  getVisibleSnapshot(id) {
+    const state=this.getSnapshot(id);
+    if(this._visibleState===state)return this._visibleProjection;
+    this._visibleState=state;this._visibleProjection=freezeTree(editionPolicy.projectAccount(state));
+    return this._visibleProjection;
+  }
+  getVisible(id) {return clone(this.getVisibleSnapshot(id));}
+  contentEpoch(id) {
+    const state=this.getSnapshot(id);
+    if(this._contentEpochCache.has(state))return this._contentEpochCache.get(state);
+    const epoch=editionPolicy.contentEpoch(state);this._contentEpochCache.set(state,epoch);return epoch;
+  }
   update(id, mutator) {
     this._assertWritable(id);
     if (typeof mutator !== 'function') fail('更新操作无效');
@@ -510,6 +538,7 @@ class Store {
         else group.latestPendingRanges = rest;
       }
     }
+    if(state.messages.some(message=>message.recall||(message.editionData&&Object.keys(message.editionData).length)))state.schemaVersion=Math.max(CONTENT_SCHEMA_VERSION,state.schemaVersion);
     return this._write(identifier(id), state);
   }
   mergeMessages(accountId, groups, messages, options = {}) {
@@ -565,7 +594,7 @@ class Store {
     return inserted;
   }
   queryMessages(accountId, query = {}) {
-    const state = this.getSnapshot(accountId), found = filterMessages(state.messages, query, state.importantMembers);
+    const state = this.getVisibleSnapshot(accountId), found = filterMessages(state.messages, query, state.importantMembers);
     const limit = query.limit === undefined ? 200 : query.limit;
     let offset = query.offset === undefined ? 0 : query.offset;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2000) fail('每页条数必须是 1 到 2000 的整数');
@@ -632,7 +661,7 @@ class Store {
     const keyword = stringValue(query.keyword, '关键词', 10000, '').trim().toLocaleLowerCase();
     const tag = stringValue(query.tag, '标签', 80, '').trim().toLocaleLowerCase();
     const groupId = query.groupId ? identifier(query.groupId, '群 ID') : null;
-    const state = this.get(accountId), messages = new Map(state.messages.map(message => [messageKey(message), message]));
+    const state = this.getVisible(accountId), messages = new Map(state.messages.map(message => [messageKey(message), message]));
     return state.bookmarks.map(bookmark => ({ ...bookmark, messages: bookmark.messageIds.map(id => messages.get(messageKey({ groupId: bookmark.groupId, id }))).sort(compareMessages) }))
       .filter(bookmark => (!groupId || bookmark.groupId === groupId)
         && (!tag || bookmark.tags.some(item => item.toLocaleLowerCase() === tag))

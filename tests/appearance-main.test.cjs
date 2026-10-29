@@ -12,7 +12,7 @@ function harness({unreadable=false}={}){
  const states=new Map(['account-A','account-B'].map(id=>[id,{account:{id,name:'Synthetic '+id,kind:'import'},groups:[],messages:[],bookmarks:[],summaries:[],readPositions:{group:'42'},readStates:{group:{anchorId:'42',readThroughId:'80',unreadIds:['81']}},importantMembers:['member'],settings:{model:'preserved-model',autoSyncEnabled:false},exports:{}}]));
  const calls={writes:0,vaultWrites:0,secretReads:0,network:0};
  const scope={activeId:'account-A',accountEpoch:1,busy:false,cleanupBusy:()=>false,revision:7,dataRoot:'synthetic-only',
-  normalizeAppearance,saveAppearanceSettings,visibleMessages:messages=>messages,avatars:{source(){throw Error('no groups in fixture');}},
+  buildIdentity:require('../app/core/build-identity.cjs').validateBuildIdentity(require('../app/edition.json'),require('../package.json').version),normalizeAppearance,saveAppearanceSettings,visibleMessages:messages=>messages,avatars:{source(){throw Error('no groups in fixture');}},
   closing:()=>false,account:()=>states.get(scope.activeId),publicReadStats:()=>plain(states.get(scope.activeId).readStates),
   secrets:()=>{calls.secretReads++;if(unreadable)throw Error('synthetic credentials locked');return{aiKey:'MOCK-ONLY',notionToken:'MOCK-NOTION'};},
   vault:{write(){calls.vaultWrites++;throw Error('appearance must not touch vault');}},

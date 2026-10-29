@@ -29,7 +29,7 @@ const model = {
   renderedReading: null, readBoundary: null, layoutVersion: 0, intentVersion: 0, scrollTop: 0, pointerScrolling: false, touchY: null,
   pointerReading: null, messageDrag: null, readingInput: null, pagingGestureSequence: 0, readingActivity: null, readingCommits: new Map(), pendingReadingRefresh: null, pendingReadingTimer: null,
   messageObserver: null, drafts: new Map(), readWrite: Promise.resolve(), lastReadPayload: '',
-  syncStatus: null, syncRevision: null, polling: false, pollTimer: null, refreshRunning: false, manualSync: false, cleanupOperation: null,
+  syncStatus: null, syncRevision: null, contentRevision: null, polling: false, pollTimer: null, refreshRunning: false, manualSync: false, cleanupOperation: null,
   messageSignatures: new Map(), closing: false, enrichmentAttempted: new Set(), enrichmentErrors: new Map(), enriching: false, enrichmentRetryTimer: null
 };
 const readIntent = reading.createReadIntentGate();
@@ -157,6 +157,7 @@ function modal(title, body, actions = [], options = {}) {
   invalidateReadingIntent();
   const dialog = $('modal');
   model.modalCloseHandler=options.onClose || null;
+  dialog.dataset.contentSensitive=String(options.contentSensitive===true||['待处理内容预览','准备 AI 总结内容','确认发送至 AI 服务','编辑 Notion 导出预览','整理这条收藏','删除摘要？','确认本地消息回收','确认永久删除','永久删除所选回收批次'].includes(title));
   dialog.removeAttribute('data-context');
   dialog.classList.remove('image-viewer','ai-config-dialog');
   dialog.replaceChildren(node('div', { class: 'modal-head' }, node('h2', { id:'modal-title' }, title), button('×', requestModalClose, 'text', { 'aria-label':'关闭对话框' })), node('div', { class: 'modal-body' }, body), node('div', { class:'modal-footer' }, button(options.closeLabel || '取消', requestModalClose, '', {id:'modal-close'}), actions));
@@ -171,6 +172,8 @@ function emptyState(title, description, actions = [], welcome = false) {
 async function refreshState({background=false}={}) {
   const epoch=model.accountEpoch,state=await api('state');if(epoch!==model.accountEpoch)return;
   model.state = state;
+  const application=state.application;
+  if(application){$('edition-label').textContent=application.label+' '+application.version;document.title='微阅 · '+application.label+' '+application.version;}
   model.state.groups ||= []; model.state.accounts ||= []; model.state.settings ||= {}; model.state.stats ||= {}; model.state.readPositions ||= {}; model.state.readStates ||= {}; model.state.importantMembers ||= []; model.state.credentials ||= {};
   applyAppearance(model.state.settings.appearance);
   window.WeiyueInterfaceTheme.apply(document.body,model.state.settings.interfaceTheme);
@@ -222,7 +225,6 @@ function renderHeader() {
     actions.push(button('同步最新',()=>sync(false),'soft',{id:'sync-latest',title:'检查新消息，并从已保存的位置继续补齐离线消息；不跳转阅读位置。'}));
     actions.push(button('更早历史',()=>sync(true),'',{id:'sync-history',title:'读取本机最早记录之前的历史；中间的离线缺口由“补齐离线消息”继续读取。'}));
   }
-  actions.push(button('工具栏',()=>{$('app').classList.toggle('show-inspector');},'mobile-panel-toggle'));
   // Navigation already identifies the view and group. Keep the actual controls
   // and task status without spending a second row on the same title.
   $('workspace-header').replaceChildren(node('div',{class:'header-utility-row'},node('div',{class:'header-status-area'},node('span',{id:'header-status',class:'header-status'}),node('div',{class:'sync-status-stack',hidden:accountKind()!=='weibo'},node('p',{id:'sync-status-line',class:'sync-status-line'}),node('p',{id:'sync-gap-line',class:'sync-gap-line'}))),node('div',{class:'header-actions',role:'group','aria-label':'工作区操作'},actions)));
@@ -508,6 +510,7 @@ async function refreshReadingIncrementally(force=false) {
     const latestAnchor=captureViewport() || anchor;
     model.readBoundary=boundary;model.offset=result.offset;model.total=result.total || 0;model.messages=result.messages || [];
     patchMessageList(model.messages,latestAnchor);
+    document.querySelectorAll('#message-scroll .content-stale').forEach(element=>element.classList.remove('content-stale'));
     if(force){const members=await api('members.list',{groupId});if(version===model.queryVersion && groupId===model.groupId){
       if(readingBusy()){queueReadingRefresh(force);return;}
       const changed=JSON.stringify(model.members)!==JSON.stringify(members || []);model.members=members || [];
@@ -660,7 +663,7 @@ function messageCard(m) {
   const selected=model.selected.has(String(m.id));const important=isImportant(m.senderId);let tone=0;for(const char of String(m.senderId))tone=(tone+char.charCodeAt(0))%5;
   const card=node('article',{class:`message${selected?' chosen':''}${important?' is-important':''}`, 'data-message-id':m.id,'data-sender-id':m.senderId});
   const cb=node('input',{type:'checkbox',class:'message-check',checked:selected,'aria-label':`选择 ${m.senderName} ${fmt(m.time)} 的消息`,onchange:e=>{if(e.target.checked)model.selected.add(String(m.id));else model.selected.delete(String(m.id));card.classList.toggle('chosen',e.target.checked);model.inspected=m;updateSelection();}});
-  const bookmark=messageIconButton('bookmark',()=>{model.selected=new Set([String(m.id)]);model.inspected=m;updateSelection();$('app').classList.add('show-inspector');$('bookmark-note')?.focus();},{'data-action':'bookmark-message'});
+  const bookmark=messageIconButton('bookmark',()=>{model.selected=new Set([String(m.id)]);model.inspected=m;updateSelection();void revealInspector('bookmark-note');},{'data-action':'bookmark-message'});
   updateBookmarkAction(bookmark,m.senderName,selected);
   const priority=messageIconButton('important',async event=>{
     const keyboardFocus=event.detail===0 && priority.matches(':focus-visible');
@@ -769,6 +772,8 @@ function enrichmentKey(message) {return `${model.state.account?.id || ''}\u0000$
 function renderMessageContent(message) {
   const openLink=url=>void run('open-external-link',()=>api('external.open',{url}));
   const content=node('div',{class:'message-content'},emoticons.appendText(node('div',{class:'message-text'}),message.text || '',openLink));
+  if(message.recall?.state==='withdrawn')content.prepend(node('div',{class:'recall-label',role:'note'},message.recall.originalAvailable?'已撤回 · 本机此前保存的内容':'已撤回'));
+  if(message.recalledMediaLocalOnly&&(message.images?.length||message.attachments?.length||message.sharedPost?.images?.length))content.append(node('p',{class:'legacy-share-note'},'撤回媒体仅能打开本次运行已缓存的原件；缓存不存在或重启后无法恢复。'));
   if(message.images?.length)content.append(imageGallery(message.images,message));
   for(const attachment of message.attachments || []){
     const archive=attachment.kind==='archive';
@@ -788,7 +793,7 @@ function renderMessageContent(message) {
     if(post.truncated)card.append(node('p',{class:'shared-post-warning'},'当前返回的微博正文可能不完整，请打开原微博查看全文。'));
     const originalLink=links.createLink(document,post.url,'打开原微博 ↗',openLink);
     if(originalLink){originalLink.classList.add('post-original-link');card.append(originalLink);}
-    if(post.state!=='ready' && post.url && accountKind()==='weibo')card.append(button('重试读取原文',()=>enrichMessages([message],true),'text small'));
+    if(!message.recall && post.state!=='ready' && post.url && accountKind()==='weibo')card.append(button('重试读取原文',()=>enrichMessages([message],true),'text small'));
     content.append(card);
   }
   if(message.references?.length)content.append(...window.WeiyueReferences.render(message,{node,appendText:emoticons.appendText,imageGallery,createLink:(url,title,cb)=>links.createLink(document,url,title,cb),openLink}));
@@ -798,7 +803,7 @@ function renderMessageContent(message) {
   }else if(!message.contextVersion && /^「(?:@[^\r\n:]{1,256}:)?图片」\r?\n- - - - - - - - - - - - - - -\r?\n/.test(message.text || '')){
     content.append(node('p',{class:'legacy-share-note quote-image-note'},'引用图片信息尚未补全，可尝试重新同步。'),officialChatButton());
   }
-  if(isLegacyShare(message)){
+  if(!message.recall && isLegacyShare(message)){
     const error=model.enrichmentErrors.get(enrichmentKey(message));
     const note=node('div',{class:'legacy-share-note'},error?`补全未完成：${error}`:'这条记录尚缺语音、实况照片或完整分享信息，可按需补全。');
     if(accountKind()==='weibo')note.append(button(error?'重试补全':'补全这条分享',()=>enrichMessages([message],true),'text small'));
@@ -835,7 +840,7 @@ async function enrichVisibleMessages() {
   const visible=new Set([...scroll.querySelectorAll('[data-message-id]')].filter(element=>{const rect=element.getBoundingClientRect();return rect.bottom>bounds.top && rect.top<bounds.bottom;}).map(element=>element.dataset.messageId));
   await enrichMessages(model.messages.filter(message=>visible.has(String(message.id))));
 }
-function selectionBar() { return node('div',{id:'selection-bar',class:'selection-bar',hidden:!model.selected.size},node('span',{},`已选择 ${model.selected.size} 条消息`),button('整理收藏',()=>{renderInspector();$('app').classList.add('show-inspector');$('bookmark-note')?.focus();},'primary small'),button('取消',()=>{model.selected.clear();updateSelection();},'text small')); }
+function selectionBar() { return node('div',{id:'selection-bar',class:'selection-bar',hidden:!model.selected.size},node('span',{},`已选择 ${model.selected.size} 条消息`),button('整理收藏',()=>{renderInspector();void revealInspector('bookmark-note');},'primary small'),button('取消',()=>{model.selected.clear();updateSelection();},'text small')); }
 function updateSelection() { document.querySelectorAll('[data-message-id]').forEach(el=>{const yes=model.selected.has(el.dataset.messageId);el.classList.toggle('chosen',yes);el.querySelector('input[type=checkbox]').checked=yes;const action=el.querySelector('[data-action="bookmark-message"]');if(action)updateBookmarkAction(action,el.querySelector('.sender-name')?.textContent || '',yes);});const bar=$('selection-bar');if(bar)bar.replaceWith(selectionBar());renderInspector(); }
 function bindReadingInput(scroll) {
   model.readingInput?.dispose();
@@ -1139,11 +1144,27 @@ async function pollUpdates() {
     const status=await api('sync.status',{accountId:model.state.account?.id,groupId:model.view==='read'?model.groupId:null});
     if(epoch!==model.accountEpoch || status?.accountId && status.accountId!==model.state.account?.id)return;
     const changed=model.syncRevision!==status.revision;
+    const contentChanged=model.contentRevision!==null&&model.contentRevision!==status.contentRevision;
+    model.contentRevision=status.contentRevision;
+    if(contentChanged){
+      invalidateReadingIntent();model.preview=null;model.summary=null;model.inspected=null;
+      // Conceal stale content immediately even while an IME/search edit defers
+      // DOM patching. Visibility preserves measured height and reading position.
+      document.querySelectorAll('#message-scroll .message-content,#message-scroll .system-notice-preview,.bookmark-card,.summary-document,.summary-list-card,#inspector .quote-preview').forEach(element=>element.classList.add('content-stale'));
+      model.messageSignatures.clear();window.getSelection()?.removeAllRanges();
+      if($('modal').open&&$('modal').dataset.contentSensitive==='true')closeModal();
+      toast('消息状态已更新，相关内容预览已失效。');
+    }
     model.syncStatus=status;if(readingBusy())queueReadingRefresh();else renderSyncStatus();
     if(changed){
       await refreshState({background:true});
       if(epoch!==model.accountEpoch)return;
       await refreshReadingIncrementally(true);updateReadChrome();model.syncRevision=status.revision;
+      if(contentChanged&&epoch===model.accountEpoch){
+        if(model.view==='bookmarks')await loadBookmarks();
+        else if(model.view==='summaries'){model.summaries=await api('summary.list');if(epoch===model.accountEpoch)renderSummaries();}
+        if(epoch===model.accountEpoch&&!readingBusy())renderInspector();
+      }
     }
   }catch(error){
     // Background errors are visible beside the sync controls, never blocking reading.
@@ -1201,7 +1222,9 @@ function renderAiRequestStatus() {
   if(here&&running)actions.push(button('取消请求',async()=>{await api('summary.ai.cancel',{requestId:request.requestId,previewId:request.previewId});toast('已请求取消；服务已接收的内容和费用无法撤回。');},'text small',{id:'cancel-ai-request'}));
   if(here && request.status==='complete')actions.push(button('查看摘要',async()=>{
     const epoch=model.accountEpoch;await flushReading(false);stashReadingDraft();if(epoch!==model.accountEpoch)return;
-    model.summary=request.summary;model.groupId=request.summary.groupId;model.view='summaries';renderSidebar();renderHeader();renderSummary();renderInspector();
+    const summaries=await api('summary.list');if(epoch!==model.accountEpoch)return;
+    const fresh=summaries.find(summary=>summary.id===request.summary?.id);if(!fresh)throw new Error('摘要已不存在，请刷新列表。');
+    model.summaries=summaries;model.summary=fresh;model.groupId=fresh.groupId;model.view='summaries';renderSidebar();renderHeader();renderSummary();renderInspector();
   },'text small',{id:'view-ai-summary'}));
   if(!running)actions.push(button('关闭',()=>{if(model.aiRequest===request)model.aiRequest=null;renderAiRequestStatus();},'text small',{id:'dismiss-ai-status','aria-label':'关闭 AI 请求状态'}));
   header.append(node('div',{id:'ai-request-status',class:'ai-request-status '+request.status,role:'status','aria-live':'polite','aria-busy':String(running)},running?node('span',{class:'busy-indicator','aria-hidden':'true'}):null,node('span',{id:'ai-request-message'},message),...actions));
@@ -1216,7 +1239,7 @@ function startAiSummary(range,preview) {
       await flushReading(false);stashReadingDraft();
       if(request.epoch!==model.accountEpoch || request.accountId!==model.state.account?.id)throw new Error('工作区已切换');
       const summary=await api('summary.ai',{previewId:request.previewId,requestId:request.requestId,confirmed:true});
-      request.summary=summary;request.status='complete';
+      request.summary={id:summary.id,groupId:summary.groupId};request.status='complete';
       // Updating navigation never replaces the reading DOM or opens the result by itself.
       try{await refreshState();model.summaries=await api('summary.list');}catch{/* The returned summary is already saved; listing can be refreshed later. */}
     }catch(error){
@@ -1288,7 +1311,7 @@ function confirmRemoveBookmark(b) {modal('移除这条收藏？',node('p',{class
 async function exportBookmarks(format) {const result=await api('export.bookmarks',{query:model.bookmarkQuery,format});if(!result?.canceled&&!result?.cancelled)toast('收藏导出完成。文件包含原文、备注和标签，请妥善保管。');}
 function renderSummaries() {
   const host=$('workspace-content');
-  if(!model.summaries.length){host.replaceChildren(emptyState('给一段讨论，留一份回顾','在右侧选择群聊的起止时段，先检查覆盖情况，再生成本地摘录或调用自己的 AI 服务。',[button('打开摘要工具',()=>{$('app').classList.add('show-inspector');$('summary-start')?.focus();},'soft')]));return;}
+  if(!model.summaries.length){host.replaceChildren(emptyState('给一段讨论，留一份回顾','在右侧选择群聊的起止时段，先检查覆盖情况，再生成本地摘录或调用自己的 AI 服务。',[button('打开摘要工具',()=>{void revealInspector('summary-start');},'soft')]));return;}
   const cards=model.summaries.slice().sort((a,b)=>b.createdAt-a.createdAt).map(s=>node('article',
     {class:'summary-list-card','data-summary-id':s.id},
     node('button',{type:'button',class:'summary-open','aria-label':`查看摘要：${s.title}`,onclick:()=>{model.summary=s;model.groupId=s.groupId;model.preview=null;renderSidebar();renderHeader();renderSummary();renderInspector();}},
@@ -1857,5 +1880,23 @@ window.api?.onBeforeClose?.(()=>{
   void (async()=>{try{await flushReading(false);await model.readWrite.catch(()=>{});}catch(error){reportError(error);}finally{await api('window.closeReady').catch(()=>{});}})();
 });
 document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key==='f'&&!$('modal').open){event.preventDefault();($('message-search') || $('bookmark-search'))?.focus();}});
-void run('startup',async()=>{await refreshState();await loadReading(true);startUpdatePolling();});
+async function revealInspector(targetId) {
+  const owner=readingOwner();if(await panelLayout.expand('right')&&owner===readingOwner())$(targetId)?.focus({preventScroll:true});
+}
+function capturePanelLayout() {
+  const owner=readingOwner(),anchor=captureViewport(),scroll=$('workspace-content').querySelector('.content-scroll');
+  const bounds=scroll?.getBoundingClientRect(),visible=scroll&&[...scroll.children].find(element=>element.getBoundingClientRect().bottom>bounds.top);
+  const content=scroll?{scroll,element:visible,offset:visible?visible.getBoundingClientRect().top-bounds.top:0,top:scroll.scrollTop}:null;
+  invalidateReadingIntent();return {owner,anchor,content};
+}
+function restorePanelLayout(context) {
+  if(!context||context.owner!==readingOwner())return;
+  if(context.anchor){restoreViewport(context.anchor);return;}
+  const content=context.content;if(!content?.scroll.isConnected)return;
+  if(content.element?.isConnected)content.scroll.scrollTop+=content.element.getBoundingClientRect().top-content.scroll.getBoundingClientRect().top-content.offset;
+  else content.scroll.scrollTop=content.top;
+}
+const panelLayout=window.WeiyueLayout.create({shell:$('app'),leftPanel:$('sidebar'),rightPanel:$('inspector'),leftButton:$('toggle-left-panel'),rightButton:$('toggle-right-panel'),
+  save:value=>window.api.call('layout.save',value),beforeChange:capturePanelLayout,afterChange:restorePanelLayout,onError:error=>toast(error.message,true)});
+void run('startup',async()=>{panelLayout.initialize(await window.api.call('layout.get'));await refreshState();await loadReading(true);startUpdatePolling();});
 })();

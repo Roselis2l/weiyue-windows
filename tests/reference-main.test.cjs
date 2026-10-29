@@ -4,11 +4,14 @@ const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),cryp
 const {Store}=require('../app/core/store.cjs');
 const {safeImageUrl}=require('../app/core/media.cjs');
 const {normalizeSource}=require('../app/core/image-viewer.cjs');
+const editionPolicy=require('../app/core/edition-policy.cjs');
+const {BoundedMediaCache}=require('../app/core/bounded-media-cache.cjs');
 const main=fs.readFileSync(path.join(__dirname,'../app/main.cjs'),'utf8');
 function section(start,end){const a=main.indexOf(start),b=main.indexOf(end,a);assert.ok(a>=0&&b>a);return main.slice(a,b);}
 const decorate=section('const mediaToken=','// net.request');
 const serve=section('async function serveImage(','function attachmentRecord(');
 const dispatch=section('async function handle(','async function start(');
+const observe=section('function observeContent(','function setActive(');
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGpsAAAAASUVORK5CYII=','base64');
 const plain=value=>JSON.parse(JSON.stringify(value));
 const deferred=()=>{let resolve;return{promise:new Promise(r=>{resolve=r;}),resolve:value=>resolve(value)};};
@@ -20,14 +23,16 @@ function fixture({fetch}={}){
     text:'合成引用 [哈哈]',state:'ready',images:[{url:`https://wx1.sinaimg.cn/original/${id}.png`,originalUrl:`https://wx1.sinaimg.cn/original/${id}.png`,thumbnailUrl:`https://wx1.sinaimg.cn/preview/${id}.png`}]});
   const message={id:'message',groupId:'group',senderId:'member',senderName:'合成成员',text:'原始消息【哈哈】',time:1792544400000,referenceVersion:1,
     references:Array.from({length:20},(_,i)=>reference(i+100)),images:[{url:'https://wx1.sinaimg.cn/own.png'}],sharedPost:{state:'ready',text:'主帖',images:[{url:'https://wx1.sinaimg.cn/post.png'}]}};
-  const state={account:{id:'synthetic-one',name:'合成账号',kind:'import'},messages:[message]};
+  const state={account:{id:'synthetic-one',name:'合成账号',kind:'import'},messages:[message],bookmarks:[],summaries:[],exports:{}};
   const requested=[];
-  const scope={crypto,activeId:'synthetic-one',accountEpoch:0,store:{get:id=>{assert.equal(id,scope.activeId);return state;},getSnapshot:id=>{assert.equal(id,scope.activeId);return state;}},Response,URL,AbortController,
-    safeImageUrl,session:{defaultSession:{}},imageCache:new Map(),imageJobs:new Map(),cachedImageBytes:0,activeImages:0,imageWaiters:[],
+  const closed={images:0,attachments:0,downloads:0};
+  const scope={crypto,activeId:'synthetic-one',accountEpoch:0,mediaEpoch:0,contentRevision:0,revision:0,observedContent:new Map(),store:{get:id=>{assert.equal(id,scope.activeId);return state;},getSnapshot:id=>{assert.equal(id,scope.activeId);return state;},getVisibleSnapshot:id=>{assert.equal(id,scope.activeId);return editionPolicy.projectAccount(state);},contentEpoch:()=>editionPolicy.contentEpoch(state)},Response,URL,AbortController,
+    imageViewer:{closeAll:()=>closed.images++},attachmentViewer:{closeAll:()=>closed.attachments++},attachmentDownload:{cancelAll:()=>closed.downloads++},activeAi:null,aiPreviews:new Map(),summaryDeletePreviews:new Map(),
+    safeImageUrl,session:{defaultSession:{}},imageCache:new Map(),imageJobs:new Map(),attachmentCache:new BoundedMediaCache(64*1024*1024),cachedImageBytes:0,activeImages:0,imageWaiters:[],
     fetchImage:async options=>{requested.push(options.url);return fetch?fetch(options):{bytes:png,mime:'image/png'};},accountSession:()=>{throw new Error('No real session');},imageRequest(){throw new Error('No real network');},closing:()=>false,
     heifDecoder:null,createHeifDecoder:()=>{throw new Error('No HEIC fixture');},BrowserWindow:class{},ipcMain:{},__dirname:path.resolve(__dirname,'../app'),avatars:{source:()=>undefined}};
-  vm.createContext(scope);vm.runInContext(decorate+serve+';globalThis.decorate=decorateMessage;globalThis.serve=serveImage;',scope);
-  return{scope,state,message,requested,read:(url,original=false)=>scope.serve({method:'GET'},new URL(url),original)};
+  vm.createContext(scope);vm.runInContext(observe+decorate+serve+';globalThis.decorate=decorateMessage;globalThis.serve=serveImage;',scope);
+  return{scope,state,message,requested,closed,read:(url,original=false)=>scope.serve({method:'GET'},new URL(url),original)};
 }
 
 test('actual DTO assigns opaque account/message scoped sources independently to every reference image',()=>{
@@ -66,13 +71,25 @@ test('wrong account token and soft-deleted message block reference media even wh
 });
 test('account change while a reference image is loading suppresses the late response and cache',async()=>{
   const gate=deferred(),f=fixture({fetch:()=>gate.promise});const work=f.read(source());await tick();
-  f.scope.accountEpoch++;f.scope.activeId='synthetic-two';for(const job of f.scope.imageJobs.values())job.controller.abort();
+  f.scope.accountEpoch++;f.scope.mediaEpoch++;f.scope.activeId='synthetic-two';for(const job of f.scope.imageJobs.values())job.controller.abort();
   gate.resolve({bytes:png,mime:'image/png'});
   assert.equal((await work).status,502);assert.equal(f.scope.imageCache.size,0);assert.equal(f.scope.imageJobs.size,0);assert.equal(f.scope.activeImages,0);
 });
 test('a malicious stored reference image fails the same safe host check before transport',async()=>{
   const f=fixture();f.message.references[0].images=[{url:'https://wx1.sinaimg.cn.evil.invalid/private.png'}];
   assert.equal((await f.read(source())).status,404);assert.deepEqual(f.requested,[]);
+});
+
+test('public withdrawal removes cached referenced, shared-post and own image access consistently',async()=>{
+  const f=fixture();for(const part of ['reference-0','post','message'])assert.equal((await f.read(source(part))).status,200);
+  assert.equal(f.requested.length,3);f.message.recall={state:'withdrawn',protocol:'weibo-group-344',observedAt:1793000000000};
+  for(const part of ['reference-0','post','message'])assert.equal((await f.read(source(part))).status,404);
+  assert.equal(f.requested.length,3);assert.equal(f.scope.mediaEpoch,1);assert.deepEqual(f.closed,{images:1,attachments:1,downloads:1});
+});
+test('a withdrawal during referenced-image retrieval aborts delivery and leaves no readable cached bytes',async()=>{
+  const gate=deferred(),f=fixture({fetch:()=>gate.promise});const work=f.read(source());await tick();
+  f.message.recall={state:'withdrawn',protocol:'weibo-group-344',observedAt:1793000000000};f.scope.observeContent();gate.resolve({bytes:png,mime:'image/png'});
+  assert.equal((await work).status,502);assert.equal(f.scope.imageCache.size,0);assert.equal(f.scope.imageJobs.size,0);assert.equal(f.closed.images,1);
 });
 
 test('opening an image stops the previous video preview before creating the image window',async()=>{

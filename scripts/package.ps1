@@ -46,6 +46,11 @@ foreach ($Relative in $SourceWhitelist) {
 foreach ($Relative in @('app\main.cjs', 'app\preload.cjs', 'app\renderer\index.html', 'app\renderer\app.js', 'app\renderer\style.css', 'docs\REFERENCE-LICENSE.txt')) {
     if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $Relative) -PathType Leaf)) { throw ('Required application file is missing: ' + $Relative) }
 }
+# Edition identity is part of the reviewed source tree, not a CLI/runtime flag.
+# This common packager never discovers or copies private modules or overlays.
+$EditionJson = & node (Join-Path $PSScriptRoot 'lib\build-edition.cjs') (Join-Path $ProjectRoot 'app\edition.json')
+if ($LASTEXITCODE -ne 0) { throw 'Edition metadata validation failed. No application was packaged.' }
+$Edition = ($EditionJson -join [Environment]::NewLine) | ConvertFrom-Json
 foreach ($Existing in @($PortableRoot, $PortableZip, $SourceZip, (Join-Path $DistributionRoot 'SHA256SUMS.txt'))) {
     if (Test-Path -LiteralPath $Existing) { throw ('Output already exists; preserve it and choose a clean build workspace before retrying: ' + $Existing) }
 }
@@ -80,6 +85,9 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot 'docs\REFERENCE-LICENSE.txt') -De
 $BuildInfo = [ordered]@{
     application = 'WeiYue Windows'
     applicationVersion = (Get-Content -LiteralPath (Join-Path $ProjectRoot 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+    edition = $Edition.id
+    editionLabel = $Edition.label
+    editionMetadataSha256 = $Edition.sha256
     electronVersion = $ElectronVersion
     electronArchive = $ArchiveName
     electronSha256 = $ActualHash

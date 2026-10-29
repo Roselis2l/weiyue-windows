@@ -47,7 +47,7 @@ test('settling cleanup after window disposal does not close a destroyed window',
 const handleSource=main.slice(main.indexOf('async function handle(action,p){'),main.indexOf('\nasync function start(){'));
 function handleFixture(){
   const writes=[],switches=[];let running=true;
-  const context=vm.createContext({activeId:'synthetic-a',busy:false,
+  const context=vm.createContext({activeId:'synthetic-a',busy:false,buildIdentity:require('../app/core/build-identity.cjs').validateBuildIdentity(require('../app/edition.json'),require('../package.json').version),
     cleanupBusy:()=>running,store:{accounts:()=>[{id:'synthetic-b'}],bookmark:(id,p)=>{writes.push({id,p});return 'saved';}},
     setActive:id=>switches.push(id),snapshot:()=>({safe:true})});
   vm.runInContext(handleSource,context);

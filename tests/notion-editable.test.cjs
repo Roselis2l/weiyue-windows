@@ -211,7 +211,7 @@ function mainHarness({ confirm = async () => {}, fetch = async () => createRespo
   const local = state(), calls = { secrets: [], writes: 0, dialogs: [] };
   const context = vm.createContext({
     activeId: 'local-account', busy: false, cleanupBusy: () => false, account: () => local,
-    store: { get: id => { assert.equal(id, 'local-account'); return local; }, update: (id, fn) => { assert.equal(id, 'local-account'); calls.writes++; fn(local); } },
+    store: { contentEpoch:()=>local.contentEpoch,getVisible: id => { assert.equal(id, 'local-account'); return local; }, update: (id, fn) => { assert.equal(id, 'local-account'); calls.writes++; fn(local); } },
     secrets: id => { calls.secrets.push(id); return { notionToken: 'offline-fixture-token' }; },
     confirmSend: async (...args) => { calls.dialogs.push(args); await confirm(local, context); },
     NotionClient, buildPreview, buildEditablePreview, resolveNotionSource, net: { fetch },
@@ -227,6 +227,23 @@ test('main local preview can be dismissed without any token, network request, di
   assert.equal(preview.title, '原摘要');
   assert.equal(h.calls.secrets.length, 0); assert.equal(h.calls.dialogs.length, 0);
   assert.equal(requests, 0); assert.equal(h.calls.writes, 0); assert.equal(h.calls.secrets.length, 0); assert.equal(h.context.busy, false);
+});
+
+test('a content epoch change rejects an old Notion draft even when saved text is identical',async()=>{
+  let requests=0;const h=mainHarness({fetch:async()=>{requests++;return createResponse();}});
+  h.local.contentEpoch='before';const preview=await h.handle('notion.preview',{summaryId:'s1',targetId:target});
+  h.local.contentEpoch='after';
+  await assert.rejects(h.handle('notion.export',{summaryId:'s1',targetId:target,sourceHash:preview.sourceHash,draft:draft(),confirmed:true}),/来源已变化/);
+  assert.equal(requests,0);assert.equal(h.calls.writes,0);
+});
+
+test('saving one projected export preserves unrelated private journal fields byte for byte',async()=>{
+  const h=mainHarness();h.local.exports.unrelated={status:'completed',draft:{body:'synthetic retained draft',title:'synthetic',includeReferences:true}};
+  const original=structuredClone(h.local.exports.unrelated);
+  h.context.store.getVisible=()=>({...h.local,exports:{...h.local.exports,unrelated:{status:'completed'}}});
+  const preview=await h.handle('notion.preview',{summaryId:'s1',targetId:target});
+  await h.handle('notion.export',{summaryId:'s1',targetId:target,sourceHash:preview.sourceHash,draft:draft(),confirmed:true});
+  assert.deepEqual(h.local.exports.unrelated,original);
 });
 
 test('main still requires explicit submit, valid target and source hash, and rejects changed preview source', async () => {

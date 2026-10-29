@@ -12,7 +12,7 @@ const MAX_TIMER_MS = 2147483647;
 const MAX_DATE_MS = 8640000000000000;
 
 const STOP_MESSAGES = Object.freeze({
-  AUTH_REQUIRED: '微博登录已失效，自动更新已暂停。请在官方页面重新登录后手动恢复。',
+  AUTH_REQUIRED: '微博登录已失效，自动更新已暂停。请在官方页面重新登录，成功后将按原设置恢复。',
   ACCESS_DENIED: '微博拒绝访问，自动更新已暂停。请在官方页面确认权限或验证提示后手动恢复。',
   API_REJECTED: '微博拒绝读取，自动更新已暂停。请在官方页面确认权限或风控提示后手动恢复。',
   RISK_CONTROL: '微博要求验证，自动更新已暂停。请在官方页面完成验证后手动恢复。',
@@ -140,6 +140,23 @@ class AutoSync {
       this.errorCode = this.cooldownUntil > this.now() ? 'RATE_LIMIT' : '';
     }
     if (!Number.isFinite(this.cooldownUntil)) this.blocked = '微博要求的等待时间超出可安全计时范围，自动更新已暂停。';
+    this.plan(this.intervalMs);
+    return this.status();
+  }
+
+  // A successfully verified login proves only authentication recovery. It is
+  // not a general security reset, and must not change a user's saved switch or
+  // discard a server cooldown. Repeated successful login is idempotent when
+  // neither this narrow block nor the persisted preference needs changing.
+  authenticationRestored({ enabled = this.enabled } = {}) {
+    if (typeof enabled !== 'boolean') throw new TypeError('自动更新开关必须是布尔值。');
+    const recovered = !!this.blocked && this.errorCode === 'AUTH_REQUIRED';
+    if (!recovered && this.enabled === enabled) return this.status();
+    this.clear(); this.generation++; this.enabled = enabled;
+    if (recovered) {
+      this.error = ''; this.blocked = ''; this.failures = 0; this.holdReason = '';
+      this.errorCode = this.cooldownUntil > this.now() ? 'RATE_LIMIT' : '';
+    }
     this.plan(this.intervalMs);
     return this.status();
   }

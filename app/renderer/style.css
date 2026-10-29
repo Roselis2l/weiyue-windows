@@ -337,3 +337,5 @@
 .appearance-status{font-size:11px;line-height:1.7;margin-top:12px;color:var(--muted)}
 @media(max-width:600px){.appearance-fields{grid-template-columns:1fr}}
 @media(forced-colors:active){.message .sender-name,.bookmark-message .sender-name,.message.is-important .sender-name,.bookmark-message.is-important .sender-name{color:CanvasText}}
+:root .recall-label{font-size:11px;font-weight:600;color:inherit;opacity:.82;margin-bottom:5px}
+:root .content-stale{visibility:hidden;pointer-events:none;user-select:none}

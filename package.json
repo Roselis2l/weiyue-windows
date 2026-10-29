@@ -1,6 +1,6 @@
 {
   "name": "weiyue-windows",
-  "version": "1.1.26",
+  "version": "1.1.27",
   "description": "本地优先的 Windows 微博群聊阅读、收藏与时段摘要应用",
   "main": "app/main.cjs",
   "author": "WeiYue Windows contributors",

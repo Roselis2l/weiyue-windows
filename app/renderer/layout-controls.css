@@ -1,0 +1,22 @@
+/* Persistent controls are outside the rerendered sync header. Hidden panels keep
+   their live nodes and input values, while the middle column takes their width. */
+.app-shell{--sidebar-width:220px;--inspector-width:286px;grid-template-columns:var(--sidebar-width) minmax(0,1fr) var(--inspector-width)}
+.app-shell>.sidebar{grid-column:1;grid-row:1}
+.app-shell>.workspace{grid-column:2;grid-row:1}
+.app-shell>.inspector{grid-column:3;grid-row:1;display:block}
+.app-shell.left-collapsed{--sidebar-width:0px}
+.app-shell.right-collapsed{--inspector-width:0px}
+.layout-toolbar{display:flex;align-items:center;gap:8px;padding:3px 12px;min-height:30px;flex:none;border-bottom:1px solid var(--line);background:var(--ui-surface,var(--paper));color:var(--ui-text,var(--text));min-width:0}
+.layout-toggle{font-size:11px;line-height:20px;min-height:24px;padding:1px 7px;flex:none;border:1px solid transparent;border-radius:5px;color:var(--ui-accent,var(--green));white-space:nowrap}
+.layout-toggle:hover{background:var(--ui-hover,var(--green-light));border-color:var(--line)}
+.layout-toggle:focus-visible{outline:2px solid var(--ui-accent,var(--green));outline-offset:1px}
+.layout-edition{margin:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--ui-muted,var(--muted))}
+.layout-toolbar #toggle-right-panel{margin-left:auto}
+@media(min-width:1600px){.app-shell{--sidebar-width:238px;--inspector-width:308px}}
+@media(max-width:1130px){.app-shell{--sidebar-width:182px;--inspector-width:246px}}
+@media(max-width:930px){.app-shell{--sidebar-width:170px;--inspector-width:240px;grid-template-columns:var(--sidebar-width) minmax(0,1fr) var(--inspector-width)}}
+@media(max-width:700px){.app-shell{--sidebar-width:130px;--inspector-width:190px}.layout-toolbar{padding-left:5px;padding-right:5px;gap:4px}.layout-toggle{padding-left:4px;padding-right:4px}}
+/* Collapse wins over every responsive default, including a resized window. */
+.app-shell.left-collapsed{--sidebar-width:0px}
+.app-shell.right-collapsed{--inspector-width:0px}
+.app-shell>.sidebar[hidden],.app-shell>.inspector[hidden]{display:none!important}

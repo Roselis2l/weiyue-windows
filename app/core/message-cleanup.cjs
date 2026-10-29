@@ -223,7 +223,7 @@ function previewMessageCleanup(state, input, { onProgress } = {}) {
   const reasonCounts = {};
   for (const message of retained) for (const reason of reasons.get(keyOf(message))) reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
   const rows = active.slice(0, 100).map(message => ({ id: message.id, groupId: message.groupId, time: message.time, senderId: message.senderId,
-    senderName: message.senderName, text: message.text.slice(0, 240), action: reasons.get(keyOf(message))?.size ? 'retain' : selection.mode,
+    senderName: message.senderName, text: require('./edition-policy.cjs').projectMessage(message).text.slice(0, 240), action: reasons.get(keyOf(message))?.size ? 'retain' : selection.mode,
     reasons: [...(reasons.get(keyOf(message)) || [])] }));
   const fingerprint = createHash('sha256').update(JSON.stringify({ accountId: state.account.id, groupName: group.name, selection, matched,
     decisions: active.map(message => [message.id, [...(reasons.get(keyOf(message)) || [])]]), warnings,
@@ -287,7 +287,7 @@ function removePermanently(state, messages, onProgress) {
   state.messages = remaining;
   state.messageTombstones = normalizedMarkers;
   state.messageTrash = trash;
-  state.schemaVersion = 3;
+  state.schemaVersion = Math.max(3, state.schemaVersion || 1);
 }
 
 function previewMessagePurge(state, input, { onProgress } = {}) {
@@ -344,7 +344,7 @@ function previewMessagePurge(state, input, { onProgress } = {}) {
     retainedCount: retained.length, alreadyDeletedCount: matched.length, reasonCounts, reasonLabels: REASONS,
     warnings: warningList, summaryRanges,
     sample: matched.slice(0, 100).map(message => ({ id: message.id, groupId: message.groupId, time: message.time, senderId: message.senderId,
-      senderName: message.senderName, text: message.text.slice(0, 240), action: reasons.get(keyOf(message)).size ? 'retain' : 'permanent', reasons: [...reasons.get(keyOf(message))] })),
+      senderName: message.senderName, text: require('./edition-policy.cjs').projectMessage(message).text.slice(0, 240), action: reasons.get(keyOf(message)).size ? 'retain' : 'permanent', reasons: [...reasons.get(keyOf(message))] })),
     sampleTruncated: matched.length > 100,
     retentionNote: '重新核对所选批次的原保留规则及当前收藏、摘要、导出、未读、阅读位置和同步起点。受保护消息继续留在回收区；未选批次不受影响。',
     recycleNote: '永久删除不可从回收区恢复；将移除所选消息正文、成员和媒体记录，仅保留群 ID、消息 ID 和原始时间，防止同步或导入立即补回。既有备份、媒体缓存和微博服务端消息不受影响。',

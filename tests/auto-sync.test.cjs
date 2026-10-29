@@ -125,7 +125,7 @@ test('auth, access, risk and protocol safety errors pause until explicit user re
     const f = fixture({ run: async () => { calls++; if (fail) throw failed(code); } }); enable(f.controller);
     await f.clock.advance(60000); assert.equal(calls, 1);
     assert.equal(f.controller.status().enabled, true); assert.equal(f.controller.status().nextRunAt, null);
-    assert.match(f.controller.status().pausedReason, /手动恢复/);
+    assert.match(f.controller.status().pausedReason, code === 'AUTH_REQUIRED' ? /重新登录.*按原设置恢复/ : /手动恢复/);
     assert.doesNotMatch(f.controller.status().error, /secret|private/);
     f.controller.stop(); f.controller.start(); await f.clock.advance(3600000); assert.equal(calls, 1);
     fail = false; f.controller.configure({ enabled: true });

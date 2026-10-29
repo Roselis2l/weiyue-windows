@@ -16,6 +16,13 @@ const resolve = (messages, options = {}) => prepareSummaryContent(prepared(messa
 const readyPost = patch => ({state: 'ready', text: '分享微博完整正文', images: [], author: '模拟作者', ...patch});
 const loader = async () => ({bytes: PNG, mime: 'image/png'});
 
+test('withdrawn sources use saved text without refreshing posts or images',async()=>{
+  const source=message('10',{text:'分享图片',recall:{state:'withdrawn'},images:[image('old')],sharedPost:readyPost({state:'unavailable',text:'此前保存的正文'})});
+  const forbidden=()=>{throw new Error('Unexpected network');};
+  const result=await resolve([source],{client:{messageDetail:forbidden},loadImage:forbidden});
+  assert.equal(result.content[0].images.length,0);assert.match(result.content[0].text,/此前保存的正文/);assert.equal(result.coverage.imageCount,0);assert.equal(result.coverage.omissions.length,1);
+});
+
 test('cached post and repost body are additional real text, and images contain actual bytes without AI requests', async () => {
   const sharedPost = normalizeSharedPost({status: {text_raw: '评论正文', retweeted_status: {
     text_raw: '原始微博正文', user: {screen_name: '转发作者'}, pic_urls: [image('repost')],

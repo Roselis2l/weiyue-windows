@@ -33,7 +33,7 @@ test('actual local IPC validates beforeId in the active account and preserves re
 });
 test('paging helper is loaded before app and explicitly allowed through the app protocol',()=>{
  const html=read('app/renderer/index.html'),main=read('app/main.cjs');assert.ok(html.indexOf('src="auto-page.js"')<html.indexOf('src="app.js"'));
- assert.match(main,/\['\/auto-page\.js',/);
+ assert.match(main,/if\(!\[[^\]]*'\/auto-page\.js'[^\]]*\]\.includes\(u.pathname\)\)/);
 });
 test('renderer uses stable local append and refresh without rebuilding or silently shrinking the loaded window',()=>{
  const source=read('app/renderer/app.js');

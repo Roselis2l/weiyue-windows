@@ -4,29 +4,39 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm'), crypto = require('node:crypto');
 const { AccountSessionRegistry } = require('../app/core/account-session.cjs');
 const { safeImageUrl } = require('../app/core/media.cjs');
+const editionPolicy = require('../app/core/edition-policy.cjs');
+const { BoundedMediaCache } = require('../app/core/bounded-media-cache.cjs');
+const { normalizeSource: normalizeAttachmentSource } = require('../app/core/attachment-viewer.cjs');
 
 // Exercise the actual protocol handler with fake storage, sessions and image
 // transport. Loading the Electron entry point itself would open a real app.
 const source = fs.readFileSync(path.join(__dirname, '../app/main.cjs'), 'utf8');
 const handler = source.slice(source.indexOf('async function serveImage('), source.indexOf('async function enrichMessages('));
+const observe = source.slice(source.indexOf('function observeContent('), source.indexOf('function setActive('));
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const image = { bytes: Buffer.from([137, 80, 78, 71]), mime: 'image/png' };
-function fixture({ kind = 'import', accountSession, fetchImage, createHeifDecoder = () => { throw new Error('Unexpected HEIC decoder'); } }) {
-  const state = { account: { kind }, messages: Array.from({ length: 105 }, (_, i) => ({
+function fixture({ kind = 'import', accountSession, fetchImage, fetchAttachment=async()=>{throw Error('Unexpected attachment read');}, createHeifDecoder = () => { throw new Error('Unexpected HEIC decoder'); } }) {
+  const state = { account: { id:'weibo-test',kind }, bookmarks:[],summaries:[],exports:{}, messages: Array.from({ length: 105 }, (_, i) => ({
     id: String(i + 1), groupId: 'g', images: [{ url: 'https://wx1.sinaimg.cn/large/' + (i + 1) + '.jpg' }],
   })) };
+  const closed={images:0,attachments:0,downloads:0};
   const scope = {
-    activeId: 'weibo-test', accountEpoch: 0, store: { get: () => state, getSnapshot: () => state }, Response, URL, AbortController,
+    activeId: 'weibo-test', accountEpoch: 0, mediaEpoch:0,contentRevision:0,revision:0,observedContent:new Map(),
+    store: { get: () => state, getSnapshot: () => state,getVisibleSnapshot:()=>editionPolicy.projectAccount(state),contentEpoch:()=>editionPolicy.contentEpoch(state) }, Response, URL, AbortController,
     safeImageUrl, session: { defaultSession: {} }, imageCache: new Map(), imageJobs: new Map(),
+    attachmentCache:new BoundedMediaCache(64*1024*1024),normalizeAttachmentSource,resolveAttachment:async value=>value,fetchAttachment,
+    imageViewer:{closeAll:()=>closed.images++},attachmentViewer:{closeAll:()=>closed.attachments++},attachmentDownload:{cancelAll:()=>closed.downloads++},activeAi:null,aiPreviews:new Map(),summaryDeletePreviews:new Map(),
     cachedImageBytes: 0, activeImages: 0, imageWaiters: [], fetchImage, accountSession, imageRequest() {}, closing: () => false,
     heifDecoder: null, createHeifDecoder, BrowserWindow: class {}, ipcMain: {}, __dirname: path.resolve(__dirname, '../app'),
     mediaToken: id => crypto.createHash('sha256').update(id).digest('hex').slice(0, 32),
   };
   vm.createContext(scope);
-  vm.runInContext(handler + ';globalThis.run=serveImage;', scope);
+  vm.runInContext(observe+'function account(){observeContent();return store.getVisibleSnapshot(activeId);}\n'+handler + ';globalThis.run=serveImage;', scope);
   scope.request = n => scope.run({ method: 'GET' }, new URL('app://media/' + scope.mediaToken(scope.activeId) + '/g/' + n + '/message/0/preview'));
   scope.original = n => scope.run({ method: 'GET' }, new URL('app://media/' + scope.mediaToken(scope.activeId) + '/g/' + n + '/message/0/original'), true);
+  scope.state=state;scope.closed=closed;
+  scope.attachmentSource=n=>'app://attachment/'+scope.mediaToken(scope.activeId)+'/g/'+n+'/0';
   return scope;
 }
 
@@ -66,6 +76,7 @@ test('canceling all images during restoration prevents a late session cache and 
   const f = fixture({ kind: 'weibo', accountSession: (id, options) => registry.restore(id, options), fetchImage: async () => { fetched++; return image; } });
   const tasks = [1, 2, 3, 4].map(n => f.request(n));
   f.accountEpoch++;
+  f.mediaEpoch++;
   for (const job of f.imageJobs.values()) job.controller.abort();
   gate.resolve();
   assert.ok((await Promise.all(tasks)).every(result => result.status === 502));
@@ -80,6 +91,7 @@ test('account changes abort active images and drain queued jobs without fetching
   const f = fixture({ fetchImage: ({ signal }) => { fetched++; return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new Error('Canceled')), { once: true })); } });
   const tasks = [1, 2, 3, 4, 5, 6].map(n => f.request(n));
   f.accountEpoch++;
+  f.mediaEpoch++;
   for (const job of f.imageJobs.values()) job.controller.abort();
   assert.ok((await Promise.all(tasks)).every(result => result.status === 502));
   assert.equal(fetched, 4);
@@ -198,7 +210,7 @@ test('account change during HEIC decode rejects late display and leaves no origi
   });
   const pending = f.original(1);
   await settle(); assert.ok(decodeSignal);
-  f.accountEpoch++; f.activeId = 'another-account';
+  f.accountEpoch++; f.mediaEpoch++;f.activeId = 'another-account';
   for (const job of f.imageJobs.values()) job.controller.abort();
   gate.resolve(image);
   assert.equal((await pending).status, 502); assert.equal(decodeSignal.aborted, true);
@@ -220,4 +232,35 @@ test('HEIC decode failure cleans the job and an explicit later access can retry 
   assert.equal(f.imageCache.size, 0); assert.equal(f.imageJobs.size, 0); assert.equal(f.activeImages, 0);
   assert.equal((await f.request(1)).status, 200);
   assert.equal(fetches, 2); assert.equal(decodes, 2); assert.equal(f.imageCache.size, 1);
+});
+
+const withdrawn=()=>({state:'withdrawn',protocol:'weibo-group-344',observedAt:1793000000000});
+test('withdrawal invalidates open media and blocks an already cached image before transport or cache access',async()=>{
+ let reads=0;const f=fixture({fetchImage:async()=>{reads++;return image;}});
+ assert.equal((await f.request(1)).status,200);assert.equal(f.imageCache.size,1);
+ f.state.messages[0].recall=withdrawn();
+ assert.equal((await f.request(1)).status,404);assert.equal(reads,1);
+ assert.equal(f.mediaEpoch,1);assert.equal(f.contentRevision,1);
+ assert.deepEqual(f.closed,{images:1,attachments:1,downloads:1});
+ assert.equal(f.imageCache.size,0,'Public withdrawal clears retained bytes as well as blocking the old source');
+});
+test('withdrawal while an image response is pending rejects late bytes and never populates the cache',async()=>{
+ const gate=deferred(),f=fixture({fetchImage:async()=>gate.promise});const pending=f.original(1);await settle();
+ f.state.messages[0].recall=withdrawn();f.observeContent();gate.resolve(image);
+ assert.equal((await pending).status,502);assert.equal(f.imageCache.size,0);assert.equal(f.imageJobs.size,0);assert.equal(f.activeImages,0);
+});
+test('withdrawal prevents a cached PDF from escaping through its old account-bound attachment source',async()=>{
+ let reads=0;const value={kind:'pdf',mime:'application/pdf',name:'synthetic.pdf',bytes:Buffer.from('%PDF-1.7\n')};
+ const f=fixture({fetchAttachment:async()=>{reads++;return value;}});
+ f.state.messages[0].attachments=[{kind:'pdf',fid:'127001',state:'ready',name:'synthetic.pdf',mime:'application/pdf',url:'https://upload.api.weibo.com/2/mss/msget?fid=127001'}];
+ const src=f.attachmentSource(1);assert.equal(await f.readStoredAttachment(src),value);assert.equal(await f.readStoredAttachment(src),value);assert.equal(reads,1);
+ f.state.messages[0].recall=withdrawn();await assert.rejects(f.readStoredAttachment(src),/附件记录不存在/);
+ assert.equal(reads,1);assert.equal(f.attachmentCache.items.size,0);assert.equal(f.closed.attachments,1);
+});
+test('withdrawal during PDF download refuses the pending original and does not prime its memory cache',async()=>{
+ const gate=deferred(),f=fixture({fetchAttachment:async()=>gate.promise});
+ f.state.messages[0].attachments=[{kind:'pdf',fid:'127002',state:'ready',name:'synthetic.pdf',mime:'application/pdf',url:'https://upload.api.weibo.com/2/mss/msget?fid=127002'}];
+ const pending=f.readStoredAttachment(f.attachmentSource(1));await settle();
+ f.state.messages[0].recall=withdrawn();f.observeContent();gate.resolve({kind:'pdf',mime:'application/pdf',name:'synthetic.pdf',bytes:Buffer.from('%PDF-1.7\n')});
+ await assert.rejects(pending,/附件读取已取消/);assert.equal(f.attachmentCache.items.size,0);assert.equal(f.closed.attachments,1);
 });

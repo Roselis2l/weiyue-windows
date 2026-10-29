@@ -133,6 +133,13 @@ async function prepareSummaryContent(prepared, {
     checkAbort(signal);
     const item = {messageId: message.id, text: '', images: [], omissions: [], postCount: 0};
     content.push(item);
+    if(message.recall?.state==='withdrawn'){
+      // A withdrawn source is a fixed local snapshot. Never re-fetch its post,
+      // image or attachment while preparing an explicitly requested summary.
+      if(message.sharedPost?.text){item.text='[本机已保存的分享微博]\n'+message.sharedPost.text.slice(0,MAX_POST_CHARS);item.postCount=1;postCount++;}
+      omit(item,'post','撤回消息仅使用本机已保存的文字，不补取原帖或媒体。');
+      continue;
+    }
     let post = inferredPost(message);
     let detailRead = false;
     const notification = pureNotification(message, post);

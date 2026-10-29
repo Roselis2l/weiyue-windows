@@ -31,6 +31,10 @@ const {LoginFlow}=require('./core/login-flow.cjs');
 const {AccountSessionRegistry}=require('./core/account-session.cjs');
 const {AutoSync}=require('./core/auto-sync.cjs');
 const {AccountAutoSync}=require('./core/account-auto-sync.cjs');
+const {createLayoutPreferences}=require('./core/layout-preferences.cjs');
+const {validateBuildIdentity}=require('./core/build-identity.cjs');
+const {BoundedMediaCache}=require('./core/bounded-media-cache.cjs');
+const buildIdentity=validateBuildIdentity(require('./edition.json'),require('../package.json').version);
 const {RefreshPlan,AUTOMATIC_INTERVAL_MS,BACKGROUND_HEAD_INTERVAL_MS,AUTOMATIC_TIME_BUDGET_MS,AUTOMATIC_MAX_PAGES,AUTOMATIC_HEAD_EVERY_PAGES,AUTOMATIC_DEADLINE_MS}=require('./core/refresh-plan.cjs');
 const {fetchImage,safeImageUrl}=require('./core/media.cjs');
 const {AvatarService}=require('./core/avatar-service.cjs');
@@ -40,12 +44,15 @@ const loginFlow=new LoginFlow();
 const argData=process.argv.find(x=>x.startsWith('--data-dir='));
 const dataRoot=argData?path.resolve(argData.slice(11)):app.isPackaged?path.join(path.dirname(process.execPath),'data'):path.resolve(__dirname,'../.local-data');
 fs.mkdirSync(dataRoot,{recursive:true});
+const layoutPreferences=createLayoutPreferences(path.join(dataRoot,'preferences.json'));
 app.setPath('userData',path.join(dataRoot,'browser'));
 app.setName('微阅 Windows');
 protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 const lock=app.requestSingleInstanceLock(); if(!lock) app.quit();
 let win,loginWindow,pendingLogin,store,vault,activeId,busy=false;
 let autoSync,revision=0,activeSync,accountEpoch=0,closeReady=false,closeTimer,closeFinishing=false;
+let mediaEpoch=0,contentRevision=0;const observedContent=new Map();
+const attachmentCache=new BoundedMediaCache(64*1024*1024);
 let imageViewer,activeAi,heifDecoder,videoDecoder,audioDecoder,attachmentViewer,attachmentDownload,messageCleanup;
 const aiPreviews=new AiPreviewStore();
 const summaryDeletePreviews=new SummaryDeletePreviewStore();
@@ -58,10 +65,24 @@ const sessions=new Map();
 const sessionRegistry=new AccountSessionRegistry({sessions,createSession:()=>{const s=session.fromPartition('weiyue-account-'+crypto.randomUUID());hardenSession(s);return s;},readCookies:id=>secrets(id).cookies||[],officialUrl});
 const avatars=new AvatarService({getContext:()=>({owner:activeId,epoch:accountEpoch,revision,closing:closing()}),getState:id=>store.getSnapshot(id),restoreSession:accountSession,defaultSession:()=>session.defaultSession,request:imageRequest});
 function preferences(){try{return JSON.parse(fs.readFileSync(path.join(dataRoot,'preferences.json'),'utf8'));}catch{return {};}}
-function clearMedia(){accountEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;audioDecoder?.dispose();audioDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
-function setActive(id){const changed=activeId!==id;activeId=id;fs.writeFileSync(path.join(dataRoot,'preferences.json'),JSON.stringify({activeId:id}));if(changed){preferredRefreshGroup=null;clearMedia();revision++;configureAutomatic();}}
+function clearMedia(){accountEpoch++;mediaEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;audioDecoder?.dispose();audioDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
+function observeContent(id=activeId){
+  if(!id||!store)return;
+  const next=store.contentEpoch(id),previous=observedContent.get(id);observedContent.set(id,next);
+  if(previous===undefined||previous===next||id!==activeId)return;
+  mediaEpoch++;contentRevision++;revision++;
+  for(const job of imageJobs.values())job.controller.abort();
+  if(!store.getVisibleSnapshot(id).messages.some(message=>message.recall?.originalAvailable)){
+    imageCache.clear();cachedImageBytes=0;attachmentCache.clear();
+  }
+  // Local bytes remain bounded and account-scoped. The visible record is always
+  // checked before any cache access, including after a withdrawal or deletion.
+  imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();
+  activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();
+}
+function setActive(id){const changed=activeId!==id;layoutPreferences.setActiveId(id);activeId=id;if(changed){preferredRefreshGroup=null;clearMedia();revision++;configureAutomatic();}}
 // Validated immutable snapshots are read-only. Mutations always go through Store.
-function account(){return store.getSnapshot(activeId);}
+function account(){observeContent();return store.getVisibleSnapshot(activeId);}
 function cleanupBusy(){return !!messageCleanup?.isBusy();}
 function secrets(id=activeId){return vault.read(id);}
 function publicReadStats(id=activeId,groupId){const all=store.getReadStats(id,groupId);const clean=s=>{const {unreadIds,...rest}=s;return rest;};return groupId===undefined?Object.fromEntries(Object.entries(all).map(([key,value])=>[key,clean(value)])):clean(all);}
@@ -70,7 +91,7 @@ function snapshot(){
   const readStates=publicReadStats();
   return {accounts:store.accounts(),account:s.account,groups:s.groups.map(g=>{const {avatarUrl,...rest}=g;return {...rest,...readStates[g.id],avatarSrc:avatars.source('group',g.id)};}),readPositions:s.readPositions,readStates,importantMembers:s.importantMembers,settings:{...s.settings,appearance:normalizeAppearance(s.settings.appearance)},stats:{messages:visibleMessages(s.messages).length,recycledMessages:s.messages.filter(m=>m.localDeletion).length,bookmarks:s.bookmarks.length,summaries:s.summaries.length},sessionReady:!!sec.cookies?.length,credentials:{ai:!!sec.aiKey,notion:!!sec.notionToken},credentialError,dataRoot,revision};
 }
-function syncStatus(){return {...(autoSync?.status()||{enabled:false,intervalMs:AUTOMATIC_INTERVAL_MS,running:false}),backgroundIntervalMs:BACKGROUND_HEAD_INTERVAL_MS,running:!!activeSync||!!autoSync?.status().running,accountId:activeId,revision};}
+function syncStatus(){observeContent();return {...(autoSync?.status()||{enabled:false,intervalMs:AUTOMATIC_INTERVAL_MS,running:false}),backgroundIntervalMs:BACKGROUND_HEAD_INTERVAL_MS,running:!!activeSync||!!autoSync?.status().running,accountId:activeId,revision,contentRevision};}
 function captureRefreshContext(p){
   // A delayed poll from a previous account cannot change the current priority.
   if(p.accountId!==activeId)return;
@@ -119,7 +140,7 @@ async function runSync(p={},automatic=false){
     const result=await syncAccount({store,accountId:id,client:c,groupId:p.groupId,history:!!p.history,
       continuous:!p.history,maxPages:p.history?10:automatic?AUTOMATIC_MAX_PAGES:120,timeBudgetMs:automatic?AUTOMATIC_TIME_BUDGET_MS:90000,
       ...(automatic?{preferredGroupId:preferred,headGroupIds:plan.headGroupIds,retryUnresolvedGroupIds:plan.retryUnresolvedGroupIds}:{}),
-      pageDelayMs:1000,headEveryPages:automatic?AUTOMATIC_HEAD_EVERY_PAGES:12,signal:controller.signal,onChange:progress=>{revision++;if(progress.kind==='head')refreshPlan(id).recordHead(progress.groupId);if(progress.retriedUnresolved===true)refreshPlan(id).recordUnresolvedAttempt(progress.groupId);}});check();
+      pageDelayMs:1000,headEveryPages:automatic?AUTOMATIC_HEAD_EVERY_PAGES:12,signal:controller.signal,onChange:progress=>{observeContent(id);revision++;if(progress.kind==='head')refreshPlan(id).recordHead(progress.groupId);if(progress.retriedUnresolved===true)refreshPlan(id).recordUnresolvedAttempt(progress.groupId);}});check();
     await rememberCookies(id,s);return {...result,state:snapshot()};
   }catch(error){if(!automatic)syncPolicy?.recordFailure(error);throw error;}
   finally{clearTimeout(timer);busy=false;activeSync=null;}
@@ -144,11 +165,12 @@ function imageRequest(s,url,options){return new Promise((resolve,reject)=>{
 });}
 async function serveImage(request,u,returnImage=false){
   const imageWeight=value=>value.bytes.length+(value.original?.bytes.length||0);
-  const id=activeId,epoch=accountEpoch;let parts;try{parts=u.pathname.slice(1).split('/').map(decodeURIComponent);}catch{return new Response('Invalid image',{status:400});}
+  observeContent();const id=activeId,epoch=mediaEpoch;let parts;try{parts=u.pathname.slice(1).split('/').map(decodeURIComponent);}catch{return new Response('Invalid image',{status:400});}
   if(request.method!=='GET'||parts.length!==6||parts[0]!==mediaToken(id)||!/^(?:message|post|reference-(?:[0-9]|1[0-9]))$/.test(parts[3])||!/^\d{1,3}$/.test(parts[4])||!['preview','original'].includes(parts[5]))return new Response('Not found',{status:404});
-  const state=store.getSnapshot(id),m=state.messages.find(m=>!m.localDeletion&&m.groupId===parts[1]&&m.id===parts[2]);const descriptor=(parts[3].startsWith('reference-')?m?.references?.[Number(parts[3].slice(10))]?.images:parts[3]==='post'?m?.sharedPost?.images:m?.images)?.[Number(parts[4])];
+  const state=store.getVisibleSnapshot(id),m=state.messages.find(m=>!m.localDeletion&&m.groupId===parts[1]&&m.id===parts[2]);const descriptor=(parts[3].startsWith('reference-')?m?.references?.[Number(parts[3].slice(10))]?.images:parts[3]==='post'?m?.sharedPost?.images:m?.images)?.[Number(parts[4])];
   const url=safeImageUrl(parts[5]==='original'?(descriptor?.originalUrl||descriptor?.url):(descriptor?.thumbnailUrl||descriptor?.url));if(!url)return new Response('Image unavailable',{status:404});
   const key=mediaToken(id)+'|'+url;let cached=imageCache.get(key);
+  if(!cached&&m.recalledMediaLocalOnly)return new Response('Withdrawn image was not cached locally',{status:410,headers:{'Cache-Control':'no-store'}});
   if(!cached){
     let job=imageJobs.get(key);
     if(!job){
@@ -156,7 +178,7 @@ async function serveImage(request,u,returnImage=false){
       job.promise=(async()=>{
         let acquired=false;try{
           if(activeImages>=4)await new Promise((resolve,reject)=>{if(imageWaiters.length>=100)return reject(new Error('Image queue full'));imageWaiters.push(resolve);});
-          activeImages++;acquired=true;const check=()=>{if(controller.signal.aborted||epoch!==accountEpoch||closing())throw new Error('Canceled');};check();const s=state.account.kind==='weibo'?await accountSession(id,{check}):session.defaultSession;check();
+          activeImages++;acquired=true;const check=()=>{observeContent(id);if(controller.signal.aborted||epoch!==mediaEpoch||closing())throw new Error('Canceled');};check();const s=state.account.kind==='weibo'?await accountSession(id,{check}):session.defaultSession;check();
           let value=await fetchImage({url,fetch:(target,options)=>imageRequest(s,target,options),signal:controller.signal,allowHeif:true,allowRasterMimeCorrection:true});check();
           if(value.mime==='image/heic'){
             const original=value;
@@ -175,7 +197,9 @@ async function serveImage(request,u,returnImage=false){
     }
     try{cached=await job.promise;}catch{return new Response('Image unavailable; retry or view in Weibo',{status:502,headers:{'Cache-Control':'no-store'}});}
   }else{imageCache.delete(key);imageCache.set(key,cached);}
-  if(epoch!==accountEpoch||id!==activeId)return new Response('Account changed',{status:403});
+  observeContent(id);if(epoch!==mediaEpoch||id!==activeId)return new Response('Content changed',{status:403});
+  const fresh=store.getVisibleSnapshot(id).messages.find(item=>!item.localDeletion&&item.groupId===m.groupId&&item.id===m.id);
+  if(!fresh||JSON.stringify(fresh.recall)!==JSON.stringify(m.recall))return new Response('Content changed',{status:403});
   if(returnImage)return cached;
   return new Response(cached.bytes,{headers:{'Content-Type':cached.mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Access-Control-Allow-Origin':'app://local'}});
 }
@@ -189,9 +213,12 @@ function attachmentRecord(source){
   return {state,message,index,attachment};
 }
 async function readStoredAttachment(source,{signal}={}){
-  const id=activeId,epoch=accountEpoch;
+  observeContent();const id=activeId,epoch=mediaEpoch;
   const {state,message,index,attachment}=attachmentRecord(source);
-  const check=()=>{if(signal?.aborted||id!==activeId||epoch!==accountEpoch||closing())throw new Error('附件读取已取消。');};
+  const cacheKey=JSON.stringify([id,message.groupId,message.id,index,attachment.fid||attachment.url||attachment.name]);
+  const check=()=>{observeContent(id);if(signal?.aborted||id!==activeId||epoch!==mediaEpoch||closing())throw new Error('附件读取已取消。');const fresh=attachmentRecord(source);if(JSON.stringify(fresh.message.recall)!==JSON.stringify(message.recall)||(fresh.attachment.fid||fresh.attachment.url||fresh.attachment.name)!==(attachment.fid||attachment.url||attachment.name))throw new Error('消息内容已变化，请重新打开。');};
+  check();const cached=attachmentCache.get(cacheKey);if(cached){check();return cached;}
+  if(message.recalledMediaLocalOnly)throw new Error('这份撤回附件没有保存在本次运行的本地缓存中，无法恢复。');
   check();const s=state.account.kind==='weibo'?await accountSession(id,{check}):session.defaultSession;check();
   if(state.account.kind==='weibo'){
     const identity=await client(s,{timeoutMs:12000,maxAttempts:1}).identity({signal});check();
@@ -204,7 +231,7 @@ async function readStoredAttachment(source,{signal}={}){
     if(!fresh||fresh.attachments?.[index]?.fid!==attachment.fid)throw new Error('附件记录已变化。');
     store.mergeMessages(id,[],[{...fresh,attachments:mergeAttachments(fresh.attachments,[ready]),attachmentVersion:1}],{history:true});revision++;
   }
-  const result=await fetchAttachment({attachment:ready,fetch:transport,signal});check();return result;
+  const result=await fetchAttachment({attachment:ready,fetch:transport,signal});check();attachmentCache.set(cacheKey,result);return result;
 }
 async function enrichMessages(id,p){
   if(account().account.kind!=='weibo')return {count:0};if(!Array.isArray(p.messageIds)||p.messageIds.length>10)throw new Error('每次最多补全 10 条已存消息。');
@@ -222,14 +249,14 @@ async function enrichMessages(id,p){
     const needsContext=m=>m.contextVersion!==1&&(isImageQuoteText(m.text)||m.senderName==='粉丝群');
     const missingPlayable=m=>((m.text||'').trim()==='分享语音'&&!m.attachments?.some(a=>a.kind==='audio'))||((m.text||'').trim()==='实况照片'&&!m.attachments?.some(a=>a.kind==='video'&&a.livePhoto));
     const complete=m=>m.referenceVersion===1&&m.mediaVersion===1&&(m.attachmentVersion===1||!/^(?:文件消息|分享视频)$/.test((m.text||'').trim()))&&!needsContext(m)&&!missingPlayable(m);
-    const state=store.getSnapshot(id),targets=[...new Set(p.messageIds)].map(mid=>state.messages.find(m=>!m.localDeletion&&m.groupId===p.groupId&&m.id===mid)).filter(m=>m&&(!complete(m)||p.retry));if(!targets.length)return {count:0};
+    const state=store.getVisibleSnapshot(id),targets=[...new Set(p.messageIds)].map(mid=>state.messages.find(m=>!m.localDeletion&&!m.recall&&m.groupId===p.groupId&&m.id===mid)).filter(m=>m&&(!complete(m)||p.retry));if(!targets.length)return {count:0};
     check();syncPolicy?.assertAllowed();
     const s=await accountSession(id,{check}),c=client(s,{timeoutMs:10000,maxAttempts:1});const identity=await read(()=>c.identity());check();
     if('weibo-'+identity.id!==id){const error=Object.assign(new Error('登录账号不一致，请重新登录。'),{code:'ACCOUNT_MISMATCH'});syncPolicy?.recordFailure(error);throw error;}let count=0;
     for(const old of targets){check();const attemptKey=key+'|'+old.id;if(Date.now()-(enrichmentAttempts.get(attemptKey)||0)<60000)continue;
       const detail=await read(()=>{enrichmentAttempts.set(attemptKey,Date.now());return c.messageDetail(old.groupId,old.id);});check();const patch={...old,mediaVersion:1,attachmentVersion:1,referenceVersion:1};if(detail.references)patch.references=detail.references;if(detail.attachments)patch.attachments=detail.attachments;if(detail.images)patch.images=detail.images;if(detail.sharedPost)patch.sharedPost=detail.sharedPost;if(detail.senderId===old.senderId&&detail.senderAvatarUrl)patch.senderAvatarUrl=detail.senderAvatarUrl;
       if(detail.contextVersion===1){patch.contextVersion=1;delete patch.systemNotice;delete patch.quotePreview;if(detail.systemNotice)patch.systemNotice=detail.systemNotice;if(detail.quotePreview)patch.quotePreview=detail.quotePreview;}
-      store.mergeMessages(id,[],[patch],{history:true});revision++;count++;if(count<targets.length)await new Promise(r=>setTimeout(r,1000));
+      store.mergeMessages(id,[],[detail.recall?detail:patch],{history:true});observeContent(id);revision++;count++;if(count<targets.length)await new Promise(r=>setTimeout(r,1000));
     }return {count};
   })();enrichmentJobs.set(key,job);try{return await job;}finally{enrichmentJobs.delete(key);}
 }
@@ -242,7 +269,7 @@ async function rememberCookies(id,s){
 function client(s,options={}){return new WeiboClient({...options,fetch:(url,options)=>s.fetch(url,{...options,credentials:'include'})});}
 function group(s,id){const g=s.groups.find(x=>x.id===id);if(!g)throw new Error('群聊不存在');return g;}
 function summaryFor(p){const s=account();return prepareSummary({messages:visibleMessages(s.messages).filter(m=>m.groupId===p.groupId),group:group(s,p.groupId),start:Number(p.start),end:Number(p.end)});}
-const aiOwner=()=>activeId+'|'+accountEpoch;
+const aiOwner=()=>activeId+'|'+accountEpoch+'|'+mediaEpoch+'|'+store.contentEpoch(activeId);
 function checkAiOperation(operation){if(operation.controller.signal.aborted||operation.owner!==aiOwner()||closing())throw new Error('本次 AI 操作已取消。');}
 async function prepareAiPreview(p){
   if(busy)throw new Error('已有操作正在进行，请稍后准备 AI 内容。');
@@ -316,7 +343,9 @@ async function handle(action,p){
   // cannot replace the state captured by a confirmed cleanup transaction.
   if(cleanupBusy()&&['demo','login.open','login.complete','logout','settings.save','settings.ai.save','settings.appearance.save','import','groups.select','read.set','important.set','bookmark.add','bookmark.remove','summary.local','summary.ai.prepare','summary.ai','summary.delete','sync.configure','notion.export'].includes(action))throw new Error('本地数据操作正在进行，完成后可继续保存或同步。');
   switch(action){
-    case 'state':return snapshot();
+    case 'state':return {...snapshot(),application:buildIdentity};
+    case 'layout.get':return layoutPreferences.getLayout();
+    case 'layout.save':return layoutPreferences.saveLayout(p);
     case 'ai.providers':return listAiProviders();
     case 'account.switch':if(!store.accounts().some(a=>a.id===p.id))throw new Error('账号不存在');setActive(p.id);return snapshot();
     case 'demo':{const a=store.seedDemo();setActive(a.id);return snapshot();}
@@ -419,7 +448,11 @@ async function handle(action,p){
       },save:async({identity,groups,check})=>{
         const cookies=(await loginSession.cookies.get({})).filter(c=>officialUrl('https://'+c.domain.replace(/^\./,'')));check();const newId='weibo-'+identity.id;
         store.ensureAccount({id:newId,name:identity.name,kind:'weibo'});vault.write(newId,{...secrets(newId),cookies});sessionRegistry.adopt(newId,loginSession);
-        store.mergeMessages(newId,groups,[]);revision++;setActive(newId);if(pendingLogin===loginSession)pendingLogin=null;if(loginWindow&&!loginWindow.isDestroyed())loginWindow.close();return snapshot();
+        // Official contacts carry a default selection flag, not this app's saved
+        // synchronization preference. Preserve existing group choices on login.
+        store.mergeMessages(newId,groups.map(({selected,...group})=>group),[]);revision++;setActive(newId);
+        automaticAccounts.authenticationRestored(newId,{enabled:store.getSnapshot(newId).settings.autoSyncEnabled!==false});
+        if(pendingLogin===loginSession)pendingLogin=null;if(loginWindow&&!loginWindow.isDestroyed())loginWindow.close();return snapshot();
       }});
       }finally{busy=false;}
     }
@@ -429,7 +462,7 @@ async function handle(action,p){
     case 'sync':return runSync(p,false);
     case 'notion.targets':{const token=secrets().notionToken;if(!token)throw new Error('请配置自己的 Notion 集成 Token，并在 Notion 授权目标页面。');return new NotionClient({token,fetch:net.fetch}).listTargets();}
     case 'notion.preview':case 'notion.export':{
-      const source=resolveNotionSource(account(),p);
+      const source={...resolveNotionSource(account(),p),contentEpoch:store.contentEpoch(id)};
       if(action==='notion.preview')return buildEditablePreview(source,p.targetId,account().exports);
       const preview=buildPreview(source,p.targetId,{editable:true,draft:p.draft});
       if(p.confirmed!==true||!p.draft||typeof p.sourceHash!=='string'||!/^[a-f0-9]{64}$/.test(p.sourceHash))throw new Error('请在编辑预览中核对内容并确认导出目标。');
@@ -439,10 +472,15 @@ async function handle(action,p){
       const sourceHash=preview.sourceHash,targetId=preview.targetId,selection=preview.sourceType==='bookmarks'?{bookmarkIds:[...preview.sourceIds]}:{summaryId:preview.sourceIds[0]};
       busy=true;try{
         if(activeId!==id)throw new Error('当前账号已变化，请重新打开导出预览。');
-        const state=store.get(id),freshSource=resolveNotionSource(state,selection);
+        const state=store.getVisible(id),freshSource={...resolveNotionSource(state,selection),contentEpoch:store.contentEpoch(id)};
         if(buildPreview(freshSource,targetId,{draft}).sourceHash!==sourceHash)throw new Error('导出来源已变化，请重新打开导出预览并核对内容。');
         const token=secrets(id).notionToken;if(!token)throw new Error('请先配置 Notion Token。');
-        return await new NotionClient({token,fetch:net.fetch}).exportSummary(freshSource,targetId,{draft,sourceHash,journal:state.exports,saveJournal:journal=>store.update(id,s=>{s.exports=journal;})});
+        return await new NotionClient({token,fetch:net.fetch}).exportSummary(freshSource,targetId,{draft,sourceHash,journal:state.exports,saveJournal:journal=>store.update(id,s=>{
+          // Projection is for display/transmission, never a replacement for
+          // unrelated persisted entries that may contain a protected draft.
+          if(!Object.hasOwn(journal,preview.key))throw new Error('当前导出日志缺失，已停止写入。');
+          s.exports={...s.exports,[preview.key]:journal[preview.key]};
+        })});
       }finally{busy=false;}
     }
     case 'external.open':{const url=normalizeHttpUrl(p.url);if(!url)throw new Error('仅允许 HTTP 或 HTTPS 网页地址。');await shell.openExternal(url);return true;}
@@ -451,7 +489,11 @@ async function handle(action,p){
 }
 async function start(){
   store=new Store(path.join(dataRoot,'accounts'));vault=new Vault(path.join(dataRoot,'credentials'),safeStorage);
-  messageCleanup=createMessageCleanupController({store,asyncOperations:true,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||enrichmentJobs.size>0,closing:closing()}),onChange:()=>{revision++;aiPreviews.clear();}});
+  messageCleanup=createMessageCleanupController({store,asyncOperations:true,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||enrichmentJobs.size>0,closing:closing()}),onChange:()=>{
+    revision++;contentRevision++;mediaEpoch++;
+    for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();
+    imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();
+  }});
   const all=store.accounts();if(!all.length)store.seedDemo();const saved=preferences().activeId;setActive(store.accounts().some(a=>a.id===saved)?saved:store.accounts()[0].id);
    protocol.handle('app',request=>{
     const u=new URL(request.url);
@@ -460,11 +502,11 @@ async function start(){
     if(request.method!=='GET'||u.host!=='local')return new Response('Not found',{status:404});
     if(u.pathname.startsWith('/emoticons/'))return emoticonAssets.serve(request,u);
     if(pdfAssets.has(u.pathname))return net.fetch(pathToFileURL(path.join(__dirname,'pdfjs',u.pathname.slice('/pdfjs/'.length))).href);
-    if(!['/auto-page.js','/appearance.js','/appearance-settings.js','/interface-theme.js','/interface-theme.css','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
+    if(!['/layout-controls.js','/layout-controls.css','/auto-page.js','/appearance.js','/appearance-settings.js','/interface-theme.js','/interface-theme.css','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
     return net.fetch(pathToFileURL(path.join(__dirname,'renderer',u.pathname.slice(1))).href);
   });
   hardenSession(session.defaultSession);Menu.setApplicationMenu(null);
-  win=new BrowserWindow({width:1440,height:930,minWidth:1000,minHeight:680,title:'微阅',backgroundColor:'#f6f5f0',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,spellcheck:false}});
+  win=new BrowserWindow({width:1440,height:930,minWidth:1000,minHeight:680,title:'微阅 · '+buildIdentity.label+' '+buildIdentity.version,backgroundColor:'#f6f5f0',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,spellcheck:false}});
   imageViewer=createImageViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,
     getWorkArea:()=>screen.getDisplayMatching(win.getBounds()).workAreaSize,
     readImage:async source=>{const image=await serveImage({method:'GET'},new URL(source),true);if(image instanceof Response)throw new Error('原图加载失败，请重试。');return image;}});

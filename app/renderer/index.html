@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="message-cleanup.css">
   <link rel="stylesheet" href="interface-theme.css">
+  <link rel="stylesheet" href="layout-controls.css">
   <script src="reading-state.js" defer></script>
   <script src="drag-scroll.js" defer></script>
   <script src="auto-page.js" defer></script>
@@ -22,12 +23,12 @@
   <script src="appearance.js" defer></script>
   <script src="interface-theme.js" defer></script>
   <script src="appearance-settings.js" defer></script>
+  <script src="layout-controls.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
   <div id="app" class="app-shell">
-    <aside class="sidebar" aria-label="工作区与群聊">
-      <div class="brand"><div class="brand-name">微阅</div></div>
+    <aside id="sidebar" class="sidebar" aria-label="工作区与群聊">
       <div id="account-area" class="account-area"></div>
       <nav id="navigation" class="navigation" aria-label="主导航"></nav>
       <div class="sidebar-section-heading"><span>我的群聊</span><button id="manage-groups" class="icon-button" title="选择同步群聊" aria-label="选择同步群聊">＋</button></div>
@@ -35,6 +36,11 @@
       <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span>本地优先 · 保留阅读位置</div><p>新消息定期更新，离线记录分批补齐。<br>AI 和 Notion 仍由你主动确认。</p><button id="settings-button" class="settings-button">⚙<span>设置与连接</span><span class="trailing">↗</span></button></div>
     </aside>
     <main id="workspace" class="workspace" aria-label="群聊阅读工作台">
+      <div class="layout-toolbar" role="group" aria-label="阅读栏位布局">
+        <button id="toggle-left-panel" class="layout-toggle" type="button" aria-controls="sidebar" aria-expanded="true" title="收起左栏">收起左栏</button>
+        <span id="edition-label" class="layout-edition"></span>
+        <button id="toggle-right-panel" class="layout-toggle" type="button" aria-controls="inspector" aria-expanded="true" title="收起右栏">收起右栏</button>
+      </div>
       <header id="workspace-header" class="workspace-header"></header>
       <section id="cleanup-progress" class="cleanup-progress" role="status" aria-live="polite" aria-atomic="true" hidden></section>
       <div id="workspace-content" class="workspace-content"></div>

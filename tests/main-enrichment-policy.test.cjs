@@ -7,6 +7,9 @@ const source=fs.readFileSync(path.join(__dirname,'../app/main.cjs'),'utf8');
 const start=source.indexOf('async function enrichMessages(id,p){'),end=source.indexOf('\nfunction hardenSession',start);
 assert.ok(start>=0&&end>start,'extract the actual shipped enrichment entry point');
 const extracted=source.slice(start,end);
+const observerStart=source.indexOf('function observeContent(id=activeId){'),observerEnd=source.indexOf('\nfunction setActive',observerStart);
+assert.ok(observerStart>=0&&observerEnd>observerStart,'extract the actual content invalidation observer');
+const observer=source.slice(observerStart,observerEnd);
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
 function policy(){
@@ -27,17 +30,24 @@ function fixture(t,options={}){
     store.mergeMessages(id,[],[{id:'22',groupId:'2',senderId:'7',senderName:'Synthetic',text:'Synthetic new message',time:1022}]);
   }
   const oldPolicy=policy(),newPolicy=policy(),calls=[],restores=[];
+  const invalidations={image:0,imageViewer:0,attachmentViewer:0,download:0,ai:0,aiPreview:0,summaryPreview:0};
   const context={activeId:'weibo-1',accountEpoch:1,busy:false,cleanupBusy:()=>false,revision:0,store,autoSync:oldPolicy.controller,
+    observedContent:new Map(),mediaEpoch:0,contentRevision:0,
+    imageCache:new Map([['synthetic','cached image']]),cachedImageBytes:12,attachmentCache:new Map([['synthetic','cached attachment']]),
+    imageJobs:new Map([['synthetic-in-flight',{controller:{abort:()=>invalidations.image++}}]]),
+    imageViewer:{closeAll:()=>invalidations.imageViewer++},attachmentViewer:{closeAll:()=>invalidations.attachmentViewer++},
+    attachmentDownload:{cancelAll:()=>invalidations.download++},activeAi:{controller:{abort:()=>invalidations.ai++}},
+    aiPreviews:{clear:()=>invalidations.aiPreview++},summaryDeletePreviews:{clear:()=>invalidations.summaryPreview++},
     isImageQuoteText:require('../app/core/message-references.cjs').isImageQuoteText,
     enrichmentJobs:new Map(),enrichmentAttempts:new Map(),closing:()=>false,
-    account:()=>store.get(context.activeId),
+    account:()=>{context.observeContent();return store.getVisibleSnapshot(context.activeId);},
     accountSession:async(id,{check})=>{restores.push(id);check();if(options.restore)await options.restore(context);return {};},
     client:()=>({identity:async()=>{calls.push('identity');return options.identity?options.identity(context):{id:'1'};},
       messageDetail:async(groupId,id)=>{calls.push(`detail:${id}`);return options.detail?options.detail(id,context):{id,senderId:'7',images:[{id:`image-${id}`,originalUrl:'https://wx1.sinaimg.cn/large/synthetic.jpg'}]};}}),
     setTimeout:fn=>{fn();return 1;},
   };
-  vm.createContext(context);vm.runInContext(extracted,context);
-  return {context,store,oldPolicy,newPolicy,calls,restores,
+  vm.createContext(context);vm.runInContext(observer+'\n'+extracted,context);
+  return {context,store,oldPolicy,newPolicy,calls,restores,invalidations,
     run:(ids=['20','21'])=>context.enrichMessages('weibo-1',{groupId:'2',messageIds:ids,retry:true}),
     switchAccount:()=>{context.activeId='weibo-2';context.accountEpoch++;context.autoSync=newPolicy.controller;}};
 }
@@ -152,4 +162,22 @@ test('legacy voice and Live Photo placeholders can enrich without changing readi
   const preserved=f.store.get('weibo-1');
   assert.equal((await f.context.enrichMessages('weibo-1',{groupId:'2',messageIds:['21'],retry:true})).count,0);
   assert.equal(f.calls.length,calls);assert.deepEqual(f.store.get('weibo-1'),preserved);
+});
+
+test('a withdrawn detail replaces old media, invalidates active previews and preserves read/unread identity',async t=>{
+  const {normalizeMessages}=require('../app/core/weibo.cjs'),{NOTICE}=require('../app/core/message-recalls.cjs');
+  const detail=normalizeMessages({messages:[{mid:'20',gid:'2',from_uid:'7',content:'SYNTHETIC_STALE_CONTENT',time:1.02,type:344,sub_type:101,from_user:{screen_name:'Synthetic'},pic_ids:['obsolete']}]},'2')[0];
+  assert.equal(detail.recall.state,'withdrawn');
+  const f=fixture(t,{detail:async()=>detail});
+  f.store.update('weibo-1',s=>{const m=s.messages.find(m=>m.id==='20');m.text='SYNTHETIC_STALE_CONTENT';m.images=[{id:'obsolete',originalUrl:'https://wx1.sinaimg.cn/large/synthetic.jpg'}];});
+  const before=f.store.getReadStats('weibo-1','2'),other=f.store.get('weibo-2');
+  const result=await f.run(['20']);assert.equal(result.count,1);assert.deepEqual(f.calls,['identity','detail:20']);
+  const saved=f.store.get('weibo-1').messages.find(m=>m.id==='20');
+  assert.equal(saved.text,NOTICE);assert.equal(saved.recall.state,'withdrawn');assert.equal(saved.images,undefined);assert.equal(saved.attachments,undefined);assert.equal(saved.references,undefined);
+  assert.equal(JSON.stringify(f.store.getVisibleSnapshot('weibo-1')).includes('SYNTHETIC_STALE_CONTENT'),false);
+  assert.deepEqual(f.store.getReadStats('weibo-1','2'),before);assert.deepEqual(f.store.get('weibo-2'),other);
+  assert.deepEqual(f.invalidations,{image:1,imageViewer:1,attachmentViewer:1,download:1,ai:1,aiPreview:1,summaryPreview:1});
+  assert.equal(f.context.contentRevision,1);assert.equal(f.context.mediaEpoch,1);assert.equal(f.oldPolicy.records.length,0);
+  assert.equal(f.context.imageCache.size,0);assert.equal(f.context.cachedImageBytes,0);assert.equal(f.context.attachmentCache.size,0);
+  assert.equal((await f.run(['20'])).count,0);assert.deepEqual(f.calls,['identity','detail:20']);
 });

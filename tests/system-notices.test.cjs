@@ -38,9 +38,9 @@ test('persisted notification marker requires valid protocol evidence and strips 
   for(const bad of [null,true,[],{}, {kind:'weibo-system'}, {kind:'weibo-system',type:321,subType:0}, {kind:'weibo-system',type:0,subType:0}, {kind:'unknown',type:344,subType:0}, {kind:'weibo-system',type:344,subType:0,dmType:undefined}])assert.throws(()=>normalizeSystemNotice(bad),TypeError);
 });
 test('wire normalizer preserves system metadata without altering original text, time, IDs or sender identity',()=>{
-  const raw={id:'9007199254740993555',gid:'91',from_uid:'72',from_user:{id:'72',screen_name:'粉丝群'},time:1792544400,content:'合成系统通知\n完整第二行',type:344,sub_type:331};
+  const raw={id:'9007199254740993555',gid:'91',from_uid:'72',from_user:{id:'72',screen_name:'粉丝群'},time:1792544400,content:'合成系统通知\n完整第二行',type:323,sub_type:101};
   const [message]=normalizeMessages({messages:[raw]},'91');
-  assert.deepEqual(message.systemNotice,{kind:'weibo-system',type:344,subType:331});
+  assert.deepEqual(message.systemNotice,{kind:'weibo-system',type:323,subType:101});
   assert.equal(message.id,raw.id);assert.equal(message.senderId,raw.from_uid);assert.equal(message.text,raw.content);assert.equal(message.time,raw.time*1000);
   const [ordinary]=normalizeMessages({messages:[{...raw,type:321,sub_type:0}]},'91');
   assert.equal(ordinary.systemNotice,undefined);assert.equal(ordinary.text,raw.content);

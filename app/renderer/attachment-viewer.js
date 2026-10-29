@@ -3,6 +3,7 @@ const $=id=>document.getElementById(id);
 const viewport=$('viewport'),canvas=$('page'),video=$('video'),audio=$('audio');
 let documentTask=null,pdf=null,renderTask=null,renderChain=Promise.resolve(),blobUrl=null,epoch=0,renderEpoch=0;
 let pageNumber=1,pageCount=0,scale=1,fitted=true,saving=false,converting=false,hasOriginal=false,toastTimer;
+let resizeTimer=null,observedViewportWidth=viewport.clientWidth;
 const pdfButtons=['previous','next','zoom-in','zoom-out','fit'].map($);
 function toast(text){clearTimeout(toastTimer);$('toast').textContent=text;$('toast').hidden=false;toastTimer=setTimeout(()=>{$('toast').hidden=true;},6000);}
 function showStatus(text,retry=false){$('notice').hidden=false;$('status').textContent=text;$('retry').hidden=!retry;$('convert').hidden=true;}
@@ -13,6 +14,7 @@ function controls(){
   $('page-count').textContent=String(pageCount||'—');$('zoom').textContent=Math.round(scale*100)+'%';
 }
 async function clean(){
+  clearTimeout(resizeTimer);resizeTimer=null;
   renderEpoch++;renderTask?.cancel();renderTask=null;
   for(const player of [video,audio]){player.onloadedmetadata=null;player.onerror=null;player.pause();player.removeAttribute('src');player.load();player.hidden=true;}if(blobUrl){URL.revokeObjectURL(blobUrl);blobUrl=null;}
   const task=documentTask;documentTask=null;pdf=null;pageCount=0;
@@ -164,13 +166,22 @@ $('page-number').addEventListener('change',event=>go(Number(event.target.value))
 function zoom(delta){if(!pdf)return;fitted=false;scale=Math.max(.25,Math.min(3,scale+delta));controls();requestRender();}
 $('zoom-in').addEventListener('click',()=>zoom(.25));$('zoom-out').addEventListener('click',()=>zoom(-.25));
 $('fit').addEventListener('click',()=>{fitted=true;requestRender();});
-let resizeTimer;new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{if(pdf&&fitted)requestRender();},120);}).observe(viewport);
+// Fitting depends on available width, not height. Status visibility, footer
+// layout and a height-only window resize must not clear/repaint the PDF.
+// CSS reserves the scrollbar gutter so page height cannot toggle fit width.
+const viewportObserver=new ResizeObserver(()=>{
+  const width=viewport.clientWidth;
+  if(width===observedViewportWidth)return;
+  observedViewportWidth=width;clearTimeout(resizeTimer);
+  resizeTimer=setTimeout(()=>{resizeTimer=null;if(pdf&&fitted)requestRender();},120);
+});
+viewportObserver.observe(viewport);
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape'){event.preventDefault();windowAction('close');}
   if(!pdf||event.target instanceof HTMLInputElement||event.ctrlKey||event.altKey||event.metaKey)return;
   if(event.key==='PageDown'){event.preventDefault();go(pageNumber+1);}
   if(event.key==='PageUp'){event.preventDefault();go(pageNumber-1);}
 });
-window.addEventListener('beforeunload',()=>{epoch++;void clean();});
+window.addEventListener('beforeunload',()=>{epoch++;viewportObserver.disconnect();void clean();});
 void load();
 

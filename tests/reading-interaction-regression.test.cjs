@@ -52,7 +52,7 @@ function harness(){
   scroll.childNodes=[...initial.map(card),space];
   initial.forEach(m=>model.messageSignatures.set(m.id,JSON.stringify(m)));
   const captureItems=()=>scroll.querySelectorAll('[data-message-id]').map(el=>({...rows.get(el.dataset.messageId),...el.getBoundingClientRect()}));
-  const document={body:{dataset:{},style:{setProperty(){}}},visibilityState:'visible',hasFocus:()=>true,addEventListener(){},removeEventListener(){}};
+  const document={body:{dataset:{},style:{setProperty(){}}},visibilityState:'visible',hasFocus:()=>true,querySelectorAll:selector=>{assert.equal(selector,'#message-scroll .content-stale');return[];},addEventListener(){},removeEventListener(){}};
   const modal={open:false};
   const api=async(name,payload)=>{
     if(name==='read.set'){writes.push(JSON.parse(JSON.stringify(payload)));events.push({at:now,type:'read.set',payload:{...payload}});if(commitBarrier)await commitBarrier;return{readState:{readThroughId:payload.readThroughId||model.state.readStates[payload.groupId].readThroughId}};}

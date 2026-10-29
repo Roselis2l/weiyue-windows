@@ -275,11 +275,15 @@ function normalizeMessages(data, groupId) {
     const senderName = typeof sender.screen_name === 'string' && sender.screen_name.trim() ? sender.screen_name : sender.name;
     const text = message.content ?? message.text ?? '';
     if (typeof text !== 'string') throw invalid('消息正文格式无法确认。');
+    const context = normalizeMessageContext(message);
+    const recalled = require('./message-recalls.cjs').canonicalNotice(null,{id,groupId,senderId:normalizedSenderId,
+      senderName:typeof senderName==='string'&&senderName.trim()?senderName:'发送者待确认',text,time:messageTime(message),...context,
+      ...(senderAvatarUrl?{senderAvatarUrl}:{})});
+    if(recalled)return recalled;
     const images = normalizeImages(message);
     const sharedPost = normalizeSharedPost(message);
     const references = normalizeMessageReferences(message);
     const attachments = normalizeMessageAttachments(message);
-    const context = normalizeMessageContext(message);
     return {id, groupId, senderId: normalizedSenderId,
       senderName: typeof senderName === 'string' && senderName.trim() ? senderName : '发送者待确认',
       text: text || (images.length ? '分享图片' : '[非文字或空消息；未返回可显示的媒体，请在微博官方查看。]'), time: messageTime(message), mediaVersion: 1, referenceVersion: 1,
