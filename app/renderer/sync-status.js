@@ -6,6 +6,16 @@
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
 
+  function validOfflineDate(value) {
+    if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||value<'0001-01-01')return false;
+    const time=Date.parse(value+'T00:00:00Z');
+    return Number.isFinite(time)&&new Date(time).toISOString().slice(0,10)===value;
+  }
+  function offlinePolicy(value) {
+    if(value?.mode==='none')return {mode:'none'};
+    if(value?.mode==='date'&&validOfflineDate(value.date))return {mode:'date',date:value.date};
+    return {mode:'auto'};
+  }
   function count(value) { return Number.isSafeInteger(value) && value >= 0 ? value : null; }
   function ranges(group) {
     if (Array.isArray(group?.latestPendingRanges)) return group.latestPendingRanges;
@@ -13,11 +23,43 @@
   }
   function finiteTime(value) { return typeof value === 'number' && Number.isFinite(value); }
   function chinaTime(value) { return new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}); }
-  function groupStatus(group, {formatTime = chinaTime} = {}) {
+  function baseGroupStatus(group, {formatTime = chinaTime,offlineMessages} = {}) {
+    const boundary=group?.historyBoundary;
+    if(finiteTime(boundary?.start)){
+      const policy=offlinePolicy(offlineMessages), dateCutoff=policy.mode==='date'?Date.parse(policy.date+'T00:00:00+08:00'):null;
+      const cutoff=dateCutoff===null?boundary.start:Math.max(boundary.start,dateCutoff),scan=group?.offlineDateScan;
+      const scanCutoff=finiteTime(scan?.cutoff)?scan.cutoff:validOfflineDate(scan?.date)?Date.parse(scan.date+'T00:00:00+08:00'):null;
+      const matches=scanCutoff===cutoff,head=matches?scan?.headPending:null;
+      const complete=matches&&scan.complete===true&&scan.reachedDate===true&&!head;
+      const unresolved=matches&&(scan.unresolved===true||head?.status==='unresolved');
+      const recovery=group?.historyRecovery,recovering=recovery&&recovery.complete!==true;
+      const blocked=group?.syncProgress?.phase==='blocked';
+      const parts=['保留起点 '+formatTime(boundary.start)+'（北京时间）'];
+      if(policy.mode==='none')parts.push('不补离线消息，仅检查最新消息');
+      else if(complete)parts.push('本次补齐范围已衔接');
+      else if(unresolved)parts.push('范围内仍有待核实缺口');
+      else parts.push('范围内待补齐');
+      if(cutoff>boundary.start)parts.push('本次补至 '+formatTime(cutoff));
+      const deleted=(group.historyDeletedRanges||[]).filter(r=>finiteTime(r.start)&&finiteTime(r.end)&&r.start<r.end);
+      parts.push(deleted.length?'主动删除 '+deleted.length+' 段历史，不自动补回':'主动删除的历史不自动补回');
+      if(recovering)parts.push(recovery.unresolved?'所选历史时段尚未取回':'正在重新获取所选历史时段');
+      if(blocked)parts.push(group.syncProgress.reason||'本轮读取已暂停');
+      return {needsBackfill:policy.mode!=='none'&&!complete||!!recovering,unresolved:!!unresolved||!!recovery?.unresolved,tone:unresolved||recovery?.unresolved||blocked?'warning':'normal',actionLabel:'同步最新',text:parts.join(' · ')};
+    }
     const pending = ranges(group), progress = group?.syncProgress || {};
-    const unresolved = progress.phase === 'unresolved' || pending.some(item => item.status === 'unresolved');
+    const unresolved = progress.phase === 'unresolved' || (offlineMessages?.mode==='date'&&group?.offlineDateScan?.date===offlineMessages.date&&(group.offlineDateScan.unresolved===true||group.offlineDateScan.headPending?.status==='unresolved')) || pending.some(item => item.status === 'unresolved');
     const blocked = progress.phase === 'blocked';
     const needsBackfill = pending.length > 0 || unresolved || blocked;
+    const policy=offlinePolicy(offlineMessages);
+    if(policy.mode!=='auto'){
+      const complete=policy.mode==='date'&&group?.offlineDateScan?.date===policy.date&&group.offlineDateScan.complete===true&&group.offlineDateScan.reachedDate===true&&!group.offlineDateScan.headPending;
+      const parts=[policy.mode==='none'?'离线消息：不补齐，仅检查新消息':(complete?'本次已到选定日期 ':'离线消息：补齐至 ')+policy.date+' 00:00（北京时间，含）'];
+      if(policy.mode==='date'&&group?.offlineDateScan?.date===policy.date&&group.offlineDateScan.headPending)parts.push('较新的离线时段仍待补齐');
+      if(policy.mode==='date'&&group?.offlineDateScan?.date===policy.date&&(group.offlineDateScan.unresolved||group.offlineDateScan.headPending?.status==='unresolved')&&!complete)parts.push('平台未返回更早消息，无法确认已覆盖至选定日期');
+      if(needsBackfill)parts.push(unresolved?'仍有未衔接的离线缺口':'保留'+(pending.length?' '+pending.length+' 段':'')+'未衔接记录');
+      if(policy.mode==='date'&&blocked)parts.push(progress.reason||'本轮读取已暂停');
+      return {needsBackfill,unresolved,tone:unresolved||blocked?'warning':'normal',actionLabel:'同步最新',text:parts.join(' · ')};
+    }
     const added = count(progress.added), parts = [];
     if (needsBackfill) parts.push(unresolved ? '离线消息仍有缺口' : blocked ? '离线补扫已暂停' : '补齐离线消息');
     else if (progress.phase === 'joined') parts.push('本次离线消息已与本机记录衔接');
@@ -30,6 +72,16 @@
     else if (pending.length) parts.push(`仍有 ${pending.length} 段待衔接`);
     return {needsBackfill, unresolved, tone:unresolved || blocked ? 'warning' : 'normal',
       actionLabel:unresolved ? '检查并继续补扫' : needsBackfill ? '补齐离线消息' : '同步最新',text:parts.join(' · ')};
+  }
+
+  function groupStatus(group, options={}) {
+    const result=baseGroupStatus(group,options);
+    if(finiteTime(group?.historyBoundary?.start))return result;
+    const deleted=(group?.historyDeletedRanges||[]).filter(r=>finiteTime(r.start)&&finiteTime(r.end)&&r.start<r.end);
+    const recovery=group?.historyRecovery,parts=[result.text];
+    if(deleted.length)parts.push('主动删除 '+deleted.length+' 段历史，不自动补回');
+    if(recovery&&recovery.complete!==true)parts.push(recovery.unresolved?'所选历史时段尚未取回':'正在重新获取所选历史时段');
+    return {...result,needsBackfill:result.needsBackfill||!!(recovery&&recovery.complete!==true),unresolved:result.unresolved||!!recovery?.unresolved,tone:recovery?.unresolved?'warning':result.tone,text:parts.join(' · ')};
   }
 
   function automaticStatus(status, {formatTime = value => new Date(value).toLocaleTimeString('zh-CN')} = {}) {
@@ -49,14 +101,17 @@
     return {text,tone,toggleLabel};
   }
 
-  function manualResult({history = false, added, group} = {}) {
+  function manualResult({history = false, added, group,offlineMessages} = {}) {
     const amount = count(added), prefix = amount === null ? '本轮读取已保存' : `本轮新增 ${amount.toLocaleString('zh-CN')} 条`;
+    if(finiteTime(group?.historyBoundary?.start))return prefix+'。'+groupStatus(group,{offlineMessages}).text+'。';
     if (history) return `${amount === null ? '本轮更早历史记录已保存' : `本轮新增 ${amount.toLocaleString('zh-CN')} 条更早历史记录`}。此操作只向本机最早记录之前读取。`;
+    const policy=offlinePolicy(offlineMessages);
+    if(policy.mode!=='auto')return prefix+'。'+groupStatus(group,{offlineMessages:policy}).text+'。阅读位置保持不变。';
     const current = groupStatus(group);
     if (current.needsBackfill) return `${prefix}。离线消息仍未补齐，已保存续补位置。`;
     if (group?.syncProgress?.phase === 'joined') return `${prefix}。本次离线消息已与本机记录衔接，阅读位置保持不变。`;
     return `${prefix}。阅读位置保持不变。`;
   }
 
-  return {groupStatus,automaticStatus,manualResult};
+  return {groupStatus,automaticStatus,manualResult,offlinePolicy,validOfflineDate};
 });

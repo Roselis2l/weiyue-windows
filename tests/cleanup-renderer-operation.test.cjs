@@ -2,13 +2,13 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const progress=require('../app/renderer/cleanup-progress.js');
 const renderer=fs.readFileSync(require.resolve('../app/renderer/app.js'),'utf8');
-const start=renderer.indexOf('function cleanupWorkActive()'),end=renderer.indexOf('\nasync function showMessageCleanup()',start);
+const start=renderer.indexOf('const cleanupAutoDismiss='),end=renderer.indexOf('\nasync function showMessageCleanup()',start);
 assert(start>=0&&end>start);
 function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};}
 function setup(){
   const apply=deferred(),calls=[],intervals=new Set();let status={accountId:'a',groupId:'g',jobId:'job',kind:'permanent',phase:'processing',running:true,processed:1,total:2};
   const model={state:{account:{id:'a'},groups:[{id:'g',name:'Synthetic'}]},accountEpoch:3,groupId:'g',view:'bookmarks',queryVersion:0,closing:false,cleanupOperation:null};
-  const context=vm.createContext({model,window:{WeiyueCleanupProgress:progress,api:{call:async(action,payload)=>{calls.push({action,payload});if(action==='messages.cleanup.status')return status;return apply.promise;}}},
+  const context=vm.createContext({model,window:{WeiyueCleanupProgress:progress,api:{call:async(action,payload)=>{calls.push({action,payload});if(action==='messages.cleanup.status')return {...status,requestId:status.requestId??payload.requestId};return apply.promise;}}},
     $:()=>null,flushReading:async()=>calls.push({action:'flush'}),invalidateReadingIntent:()=>{},autoPage:{reset(){}},renderSyncStatus:()=>{},scheduleReadingRefresh:()=>{},
     refreshState:async()=>calls.push({action:'refresh-state'}),renderSidebar:()=>calls.push({action:'sidebar'}),renderHeader:()=>calls.push({action:'header'}),
     setInterval:callback=>{intervals.add(callback);return callback;},clearInterval:callback=>intervals.delete(callback),setTimeout,
@@ -73,4 +73,27 @@ test('UI refresh failure remains a completed data operation and offers refresh-o
   assert.equal(h.model.cleanupOperation.refreshError,true);assert.equal(h.model.cleanupOperation.status.phase,'completed');assert.match(h.model.cleanupOperation.status.detail,/数据操作已完成/);
   h.context.refreshState=async()=>{};await h.context.refreshCleanupOutcome(h.model.cleanupOperation);
   assert.equal(h.model.cleanupOperation.refreshError,false);assert.equal(h.calls.filter(c=>c.action==='messages.cleanup.apply').length,1);
+});
+
+test('preflight rejection is visibly not started even when the previous job was a successful preview',async()=>{
+  const h=setup(),pending=h.run();await tick();
+  h.setStatus({accountId:'a',groupId:'g',kind:'cleanup',phase:'not-started',commitState:'not-committed',error:'已有操作正在进行'});
+  h.apply.reject(Error('已有操作正在进行'));await pending;
+  assert.equal(h.model.cleanupOperation.status.phase,'not-started');
+  assert.match(h.model.cleanupOperation.status.detail,/未提交，原数据保持/);
+  assert.doesNotMatch(h.model.cleanupOperation.status.detail,/结果尚待核实/);
+});
+test('unrelated prior request failure never proves this submission uncommitted',async()=>{
+  const h=setup(),pending=h.run();await tick();
+  h.setStatus({accountId:'a',groupId:'g',requestId:'old-request',kind:'permanent',phase:'failed',commitState:'not-committed'});
+  for(const poll of h.intervals)await poll();await tick();assert.equal(h.model.cleanupOperation.status.phase,'submitting');
+  h.apply.reject(Error('connection lost'));await pending;
+  assert.equal(h.model.cleanupOperation.status.phase,'uncertain');
+});
+test('waiting for synchronization is displayed without fabricated message counts',async()=>{
+  const h=setup(),pending=h.run();await tick();
+  h.setStatus({accountId:'a',groupId:'g',jobId:'job',kind:'permanent',phase:'waiting',running:true,processed:null,total:null});
+  for(const poll of h.intervals)await poll();await tick();
+  assert.match(progress.describe(h.model.cleanupOperation.status).label,/等待当前同步结束/);
+  h.apply.resolve(result);await pending;
 });

@@ -277,8 +277,12 @@ async function fetchAttachment({attachment,fetch,signal,timeoutMs=120000}={}) {
     (value.kind==='archive'&&archiveFormat(value.mime)?.aliases.includes(declared))||
     (value.kind==='document'&&documentFormat(value.mime)?.aliases.includes(declared))||
     (value.kind==='audio'&&audioFormat(value.mime)?.aliases.includes(declared));
-  if(!acceptedMime||detectedAttachmentMime(result.bytes,value.mime)!==value.mime)fail('ATTACHMENT_TYPE');
-  return {bytes:result.bytes,mime:value.mime,name:value.name,kind:value.kind};
+  const detected=detectedAttachmentMime(result.bytes,value.mime);
+  // MSS can label an uploaded QuickTime movie as .mp4/video/mp4. Trust the
+  // validated container signature only for this observed MP4 -> MOV mismatch.
+  const mislabeledMov=value.kind==='video'&&value.mime==='video/mp4'&&detected==='video/quicktime';
+  if(!acceptedMime||(detected!==value.mime&&!mislabeledMov))fail('ATTACHMENT_TYPE');
+  return {bytes:result.bytes,mime:mislabeledMov?detected:value.mime,name:value.name,kind:value.kind};
 }
 module.exports={AttachmentError,normalizeAttachment,normalizeAttachments,attachmentSearchText,safeAttachmentUrl,
   normalizeMessageAttachments:normalizeAttachments,mergeAttachments,

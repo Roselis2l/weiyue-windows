@@ -57,7 +57,7 @@ test('permanent tombstones dominate recall and old imports; schema never downgra
   const {store}=setup(t);store.mergeMessages('a',[],[message()]);store.mergeMessages('a',[],[notice(message().id)]);
   const selection={groupId:'g',startMinute:'2026-10-21T09:00',endMinute:'2026-10-21T09:00',retainSenderIds:[],retainSummaryRanges:false,mode:'permanent'};
   const preview=store.previewMessageCleanup('a',selection);assert.equal(preview.deleteCount,1);store.applyMessageCleanup('a',selection,preview.fingerprint);
-  store.mergeMessages('a',[],[message(),notice(message().id)]);assert.equal(store.get('a').messages.length,0);assert.equal(store.get('a').schemaVersion,4);assert.equal(store.get('a').messageTombstones.length,1);
+  store.mergeMessages('a',[],[message(),notice(message().id)]);assert.equal(store.get('a').messages.length,0);assert.equal(store.get('a').schemaVersion,5);assert.equal(store.get('a').messageTombstones.length,1);
 });
 test('cleanup preview exposes safe text while maintaining the raw-state confirmation fingerprint',t=>{
   const {store}=setup(t);store.mergeMessages('a',[],[notice(message().id)]);store.update('a',state=>{state.messages[0].editionData={opaque:secret};});

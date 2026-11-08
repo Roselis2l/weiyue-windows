@@ -4,6 +4,7 @@
 // frontier. Only an explicit restore makes a recycled record visible again.
 const { createHash, randomUUID } = require('node:crypto');
 const { parseChinaMinuteRange } = require('../renderer/filter-controls.js');
+const historyBoundary = require('./history-boundary.cjs');
 
 const MAX_TIME = 8640000000000000;
 const MAX_BATCHES = 100000;
@@ -17,7 +18,7 @@ const REASONS = Object.freeze({
   bookmark: '收藏原文', summaryReference: '摘要引用原文', exportReference: '导出关联原文',
   readPosition: '阅读位置', unread: '未读消息', syncAnchor: '同步续扫起点',
   retainedMember: '指定保留成员', summaryRange: '摘要或 AI 总结时段',
-  uncertainSummary: '摘要来源不完整，保守保留', uncertainExport: '导出来源无法追溯，保守保留',
+  uncertainSummary: '摘要来源不完整，保守保留',
 });
 
 function rangeIndex(ranges) {
@@ -59,10 +60,11 @@ function normalizeSelection(input) {
   if (input.retainSenderIds !== undefined && (!Array.isArray(input.retainSenderIds) || input.retainSenderIds.length > 100000 || Array.from(input.retainSenderIds).some(id => !validId(id))))
     throw new Error('保留成员必须使用有效的成员 ID。');
   if (input.retainSummaryRanges !== undefined && typeof input.retainSummaryRanges !== 'boolean') throw new Error('保留摘要时段选项无效。');
+  if (input.markUnreadAsRead !== undefined && typeof input.markUnreadAsRead !== 'boolean') throw new Error('markUnreadAsRead must be a boolean');
   const mode = input.mode === undefined ? 'recycle' : input.mode;
   if (mode !== 'recycle' && mode !== 'permanent') throw new Error('清理方式无效，请选择本地回收或永久删除。');
   return { groupId: input.groupId, startMinute: input.startMinute, endMinute: input.endMinute,
-    retainSenderIds: [...new Set(input.retainSenderIds || [])].sort(), retainSummaryRanges: input.retainSummaryRanges !== false, mode };
+    retainSenderIds: [...new Set(input.retainSenderIds || [])].sort(), retainSummaryRanges: input.retainSummaryRanges !== false, markUnreadAsRead: input.markUnreadAsRead === true, mode };
 }
 
 function validateMessageTombstones(raw, messages, groups) {
@@ -120,6 +122,7 @@ function validateMessageTrash(raw, messages, groups) {
     // Reading an older batch must not introduce a persisted field on the next
     // unrelated read-position/settings save. New batches explicitly store mode.
     if (!Object.hasOwn(item.selection, 'mode')) delete selection.mode;
+    if (!Object.hasOwn(item.selection, 'markUnreadAsRead')) delete selection.markUnreadAsRead;
     const normalized = { id: item.id, groupId: item.groupId, createdAt: item.createdAt, restoredAt: item.restoredAt, selection, messageIds };
     batches.set(item.id, { ...normalized, messageIdSet: new Set(messageIds) });
     return normalized;
@@ -136,11 +139,11 @@ function validateMessageTrash(raw, messages, groups) {
   return result;
 }
 
-function protection(state, selection) {
+function protection(state, selection, markUnreadAsRead = false) {
   const groupIds = new Set(state.groups.map(group => group.id));
   const reasons = new Map(), warnings = [], summaryRanges = [];
   const conservativeGroups = new Set();
-  let protectAllExport = false;
+  let hasUntraceableExport = false;
   const add = (groupId, id, reason) => {
     if (!validId(groupId) || !validId(id)) return;
     const key = keyOf({ groupId, id });
@@ -174,35 +177,35 @@ function protection(state, selection) {
   if (conservativeGroups.has(selection.groupId)) warnings.push('部分摘要缺少可核对的来源或起止时段，或引用与时段信息不一致；无法从标题、正文或引用首尾推断完整范围，本群消息将保守保留。');
 
   // Notion journals do not retain message IDs/ranges independently of their
-  // source records. A deleted source therefore cannot be guessed or narrowed.
+  // source records. Unknown sources do not add retention; known references and
+  // all independent protections still apply to the selected deletion range.
   for (const entry of Object.values(state.exports || {})) {
-    if (!isRecord(entry)) { protectAllExport = true; continue; }
+    if (!isRecord(entry)) { hasUntraceableExport = true; continue; }
     const type = entry.sourceType === 'bookmarks' ? 'bookmarks' : entry.sourceType === 'summary' || entry.sourceType === undefined ? 'summary' : null;
     const ids = Array.isArray(entry.sourceIds) && entry.sourceIds.length ? entry.sourceIds : type === 'summary' && validId(entry.summaryId) ? [entry.summaryId] : [];
-    if (!type || !ids.length || ids.some(id => !validId(id))) { protectAllExport = true; continue; }
+    if (!type || !ids.length || ids.some(id => !validId(id))) { hasUntraceableExport = true; continue; }
     for (const id of ids) {
       const source = (type === 'bookmarks' ? bookmarks : summaries).get(id);
-      if (!source) { protectAllExport = true; continue; }
+      if (!source) { hasUntraceableExport = true; continue; }
       if (type === 'bookmarks') for (const mid of source.messageIds || []) add(source.groupId, mid, 'exportReference');
       else if (Array.isArray(source.refs)) for (const ref of source.refs) {
         if (isRecord(ref) && validId(ref.id) && groupIds.has(ref.groupId)) add(ref.groupId, ref.id, 'exportReference');
-        else protectAllExport = true;
-      } else protectAllExport = true;
+        else hasUntraceableExport = true;
+      } else hasUntraceableExport = true;
     }
   }
-  if (protectAllExport) warnings.push('存在已导出但本地来源已删除或无法追溯的记录；导出日志没有独立保存原文 ID 或时段，因此本账号消息将保守保留。');
+  if (hasUntraceableExport) warnings.push('部分导出来源已删除或无法追溯，不再因此保留消息；按所选群、时间范围及其他保留规则处理。');
   for (const [groupId, stateRead] of Object.entries(state.readStates || {})) {
-    add(groupId, stateRead.anchorId, 'readPosition'); add(groupId, stateRead.readThroughId, 'readPosition');
-    for (const id of stateRead.unreadIds || []) add(groupId, id, 'unread');
+    if(selection.mode!=='permanent'){add(groupId, stateRead.anchorId, 'readPosition'); add(groupId, stateRead.readThroughId, 'readPosition');}
+    if (!markUnreadAsRead || groupId !== selection.groupId) for (const id of stateRead.unreadIds || []) add(groupId, id, 'unread');
   }
-  for (const [groupId, id] of Object.entries(state.readPositions || {})) add(groupId, id, 'readPosition');
-  for (const group of state.groups) for (const pending of group.latestPendingRanges || (group.latestPending ? [group.latestPending] : [])) add(group.id, pending.arrivalAfterId, 'syncAnchor');
+  if(selection.mode!=='permanent')for (const [groupId, id] of Object.entries(state.readPositions || {})) add(groupId, id, 'readPosition');
+  if(selection.mode!=='permanent')for (const group of state.groups) for (const pending of group.latestPendingRanges || (group.latestPending ? [group.latestPending] : [])) add(group.id, pending.arrivalAfterId, 'syncAnchor');
   const retainedMembers = new Set(selection.retainSenderIds);
   const ranges = rangeIndex(summaryRanges);
   for (const message of state.messages) {
     if (retainedMembers.has(message.senderId)) add(message.groupId, message.id, 'retainedMember');
     if (conservativeGroups.has(message.groupId)) add(message.groupId, message.id, 'uncertainSummary');
-    if (protectAllExport) add(message.groupId, message.id, 'uncertainExport');
     if (rangeContains(ranges, message)) add(message.groupId, message.id, 'summaryRange');
   }
   return { reasons, warnings, summaryRanges };
@@ -214,26 +217,34 @@ function previewMessageCleanup(state, input, { onProgress } = {}) {
   const group = state.groups.find(group => group.id === selection.groupId);
   if (!group) throw new Error('所选群聊不存在，请刷新后重新选择。');
   const { start, end } = parseChinaMinuteRange(selection.startMinute, selection.endMinute);
-  const { reasons, warnings, summaryRanges } = protection(state, selection);
+  const { reasons, warnings, summaryRanges } = protection(state, selection, selection.markUnreadAsRead);
+  const unread = new Set(state.readStates?.[selection.groupId]?.unreadIds || []);
   const matched = state.messages.filter(message => message.groupId === selection.groupId && message.time >= start && message.time < end)
     .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
   const existing = matched.filter(message => message.localDeletion), active = visibleMessages(matched);
   const candidates = active.filter(message => !reasons.get(keyOf(message))?.size);
   const retained = active.filter(message => reasons.get(keyOf(message))?.size);
+  const unreadCount = active.filter(message => unread.has(message.id)).length;
+  const markedReadCount = selection.markUnreadAsRead ? candidates.filter(message => unread.has(message.id)).length : 0;
+  const retainedUnreadCount = retained.filter(message => unread.has(message.id)).length;
   const reasonCounts = {};
   for (const message of retained) for (const reason of reasons.get(keyOf(message))) reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
   const rows = active.slice(0, 100).map(message => ({ id: message.id, groupId: message.groupId, time: message.time, senderId: message.senderId,
+    unread: unread.has(message.id), markAsRead: selection.markUnreadAsRead && unread.has(message.id) && !reasons.get(keyOf(message))?.size,
     senderName: message.senderName, text: require('./edition-policy.cjs').projectMessage(message).text.slice(0, 240), action: reasons.get(keyOf(message))?.size ? 'retain' : selection.mode,
     reasons: [...(reasons.get(keyOf(message)) || [])] }));
-  const fingerprint = createHash('sha256').update(JSON.stringify({ accountId: state.account.id, groupName: group.name, selection, matched,
+  const boundaryPlan=selection.mode==='permanent'?historyBoundary.boundaryPlan(state,selection.groupId,{start,end}):{previousStart:null,newStart:null,advances:false};
+  const fingerprint = createHash('sha256').update(JSON.stringify({ accountId: state.account.id, groupName: group.name, selection, matched,boundaryPlan,historyRevision:group.historyRevision||0,
+    unreadSnapshot: [...unread].sort(),
     decisions: active.map(message => [message.id, [...(reasons.get(keyOf(message)) || [])]]), warnings,
     summaryRanges: summaryRanges.filter(range => range.groupId === selection.groupId) })).digest('hex');
   progress(onProgress, 'planning', state.messages.length, state.messages.length);
-  return { accountId: state.account.id, groupId: selection.groupId, groupName: group.name, mode: selection.mode, selection, range: { start, end }, fingerprint,
+  return { accountId: state.account.id, groupId: selection.groupId, groupName: group.name, mode: selection.mode, selection, range: { start, end }, fingerprint,boundaryPlan,
+    unreadCount, markedReadCount, retainedUnreadCount,
     matchedCount: active.length, deleteCount: candidates.length, retainedCount: retained.length, alreadyDeletedCount: existing.length,
     reasonCounts, reasonLabels: REASONS, warnings, summaryRanges: summaryRanges.filter(range => range.groupId === selection.groupId),
     sample: rows, sampleTruncated: active.length > rows.length,
-    retentionNote: '收藏、摘要引用、导出关联、未读消息、阅读位置和同步续扫起点始终保留。保留原因可能重叠。',
+    retentionNote: selection.markUnreadAsRead ? '收藏、摘要引用和导出关联仍保留；仅将实际删除的未读消息标为已读，阅读位置与续扫起点自动调整。' : '收藏、摘要引用、导出关联和未读消息保留；阅读位置与续扫起点自动调整。',
     recycleNote: selection.mode === 'permanent'
       ? '永久删除会从当前账号数据中移除所选消息正文、成员和媒体记录，不能从本地回收区恢复；仅保留群 ID、消息 ID 和原始时间，防止同步或导入立即补回。不删除微博服务端消息，也不会清理既有备份或媒体缓存。'
       : '仅移入本账号的本地回收区，可按批次恢复；不会删除微博服务端消息或立即释放磁盘空间。同步和导入不会自动恢复已回收消息。',
@@ -244,27 +255,39 @@ function applyMessageCleanup(state, input, expectedFingerprint, { now = Date.now
   if (typeof expectedFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(expectedFingerprint)) throw new Error('请先预览本地清理结果，再明确确认。');
   const preview = previewMessageCleanup(state, input, { onProgress });
   if (preview.fingerprint !== expectedFingerprint) throw new Error('消息或保留条件已变化，请重新预览后确认；尚未清理任何消息。');
-  if (!preview.deleteCount) return { deleted: false, deletedCount: 0, batchId: null, groupId: preview.groupId, mode: preview.mode, preview };
+  if (!preview.deleteCount&&!preview.boundaryPlan.advances) return { deleted: false, deletedCount: 0, markedReadCount: 0, batchId: null, groupId: preview.groupId, mode: preview.mode, preview };
   if (preview.mode === 'recycle' && (state.messageTrash || []).length >= MAX_BATCHES) throw new Error('本地回收批次数已达上限，请保留数据并联系维护者。');
-  const { reasons } = protection(state, preview.selection), createdAt = now();
+  const { reasons } = protection(state, preview.selection, preview.selection.markUnreadAsRead), createdAt = now();
   if (!validTime(createdAt)) throw new Error('无法建立有效的本地清理时间。');
   const messages = state.messages.filter(message => !message.localDeletion && message.groupId === preview.groupId && message.time >= preview.range.start && message.time < preview.range.end && !reasons.get(keyOf(message))?.size);
+  // Stage exact unread removals; anchors and high-water never advance.
+  const readState = state.readStates?.[preview.groupId];
+  const deletedIds = new Set(messages.map(message => message.id));
+  const nextReadState = preview.markedReadCount ? { ...readState,
+    unreadIds: readState.unreadIds.filter(id => !deletedIds.has(id)), updatedAt: createdAt } : null;
   if (preview.mode === 'permanent') {
+    const staged={schemaVersion:state.schemaVersion,messages:state.messages,groups:state.groups.map(g=>g.id===preview.groupId?structuredClone(g):g),readStates:{...state.readStates},readPositions:{...state.readPositions}};
+    if(staged.readStates[preview.groupId])staged.readStates[preview.groupId]=structuredClone(staged.readStates[preview.groupId]);
+    historyBoundary.relocateRead(staged,preview.groupId,deletedIds,createdAt);
+    historyBoundary.applyDeletionBoundary(staged,preview.groupId,preview.range,preview.boundaryPlan,createdAt);
     removePermanently(state, messages, onProgress);
-    return { deleted: true, deletedCount: messages.length, batchId: null, mode: 'permanent', groupId: preview.groupId, createdAt };
+    state.groups=staged.groups;state.readStates=staged.readStates;state.readPositions=staged.readPositions;state.schemaVersion=staged.schemaVersion;
+    return { deleted: true, deletedCount: messages.length, markedReadCount: preview.markedReadCount, batchId: null, mode: 'permanent', groupId: preview.groupId, createdAt,boundaryPlan:preview.boundaryPlan };
   }
   const batchId = uuid();
   if (!validId(batchId) || (state.messageTrash || []).some(batch => batch.id === batchId)) throw new Error('无法建立有效的本地回收批次。');
   progress(onProgress, 'processing', 0, messages.length);
   let processed = 0;
   for (const message of messages) {
-    message.localDeletion = { batchId, deletedAt: createdAt };
+    // Stage progress before mutation so a callback failure cannot half-apply.
     if (++processed % 2048 === 0 || processed === messages.length) progress(onProgress, 'processing', processed, messages.length);
   }
   const batch = { id: batchId, groupId: preview.groupId, createdAt, restoredAt: null, selection: preview.selection, messageIds: messages.map(message => message.id) };
+  for (const message of messages) message.localDeletion = { batchId, deletedAt: createdAt };
   state.messageTrash = [...(state.messageTrash || []), batch];
+  if (nextReadState) state.readStates[preview.groupId] = nextReadState;
   state.schemaVersion = Math.max(2, state.schemaVersion || 1);
-  return { deleted: true, deletedCount: messages.length, batchId, mode: 'recycle', groupId: preview.groupId, createdAt };
+  return { deleted: true, deletedCount: messages.length, markedReadCount: preview.markedReadCount, batchId, mode: 'recycle', groupId: preview.groupId, createdAt };
 }
 
 // Keep only identities needed to suppress re-import and maintain synchronization

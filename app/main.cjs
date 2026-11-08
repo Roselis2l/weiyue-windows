@@ -1,4 +1,5 @@
 'use strict';
+const {saveOfflineMessages,normalizeOfflineMessages}=require('./core/offline-messages.cjs');
 const {app,BrowserWindow,ipcMain,session,dialog,safeStorage,shell,protocol,net,Menu,screen}=require('electron');
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {pathToFileURL}=require('node:url');
@@ -32,6 +33,7 @@ const {AccountSessionRegistry}=require('./core/account-session.cjs');
 const {AutoSync}=require('./core/auto-sync.cjs');
 const {AccountAutoSync}=require('./core/account-auto-sync.cjs');
 const {createLayoutPreferences}=require('./core/layout-preferences.cjs');
+const {createStartupSettings}=require('./core/startup-settings.cjs');
 const {validateBuildIdentity}=require('./core/build-identity.cjs');
 const {BoundedMediaCache}=require('./core/bounded-media-cache.cjs');
 const buildIdentity=validateBuildIdentity(require('./edition.json'),require('../package.json').version);
@@ -45,6 +47,7 @@ const argData=process.argv.find(x=>x.startsWith('--data-dir='));
 const dataRoot=argData?path.resolve(argData.slice(11)):app.isPackaged?path.join(path.dirname(process.execPath),'data'):path.resolve(__dirname,'../.local-data');
 fs.mkdirSync(dataRoot,{recursive:true});
 const layoutPreferences=createLayoutPreferences(path.join(dataRoot,'preferences.json'));
+const startupSettings=createStartupSettings({app,dataRoot});
 app.setPath('userData',path.join(dataRoot,'browser'));
 app.setName('微阅 Windows');
 protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
@@ -89,7 +92,7 @@ function publicReadStats(id=activeId,groupId){const all=store.getReadStats(id,gr
 function snapshot(){
   const s=account(); let sec={};let credentialError='';try{sec=secrets();}catch(e){credentialError=e.message;}
   const readStates=publicReadStats();
-  return {accounts:store.accounts(),account:s.account,groups:s.groups.map(g=>{const {avatarUrl,...rest}=g;return {...rest,...readStates[g.id],avatarSrc:avatars.source('group',g.id)};}),readPositions:s.readPositions,readStates,importantMembers:s.importantMembers,settings:{...s.settings,appearance:normalizeAppearance(s.settings.appearance)},stats:{messages:visibleMessages(s.messages).length,recycledMessages:s.messages.filter(m=>m.localDeletion).length,bookmarks:s.bookmarks.length,summaries:s.summaries.length},sessionReady:!!sec.cookies?.length,credentials:{ai:!!sec.aiKey,notion:!!sec.notionToken},credentialError,dataRoot,revision};
+  return {accounts:store.accounts(),account:s.account,groups:s.groups.map(g=>{const {avatarUrl,...rest}=g;return {...rest,...readStates[g.id],avatarSrc:avatars.source('group',g.id)};}),readPositions:s.readPositions,readStates,importantMembers:s.importantMembers,settings:{...s.settings,offlineMessages:normalizeOfflineMessages(s.settings.offlineMessages),appearance:normalizeAppearance(s.settings.appearance)},stats:{messages:visibleMessages(s.messages).length,recycledMessages:s.messages.filter(m=>m.localDeletion).length,bookmarks:s.bookmarks.length,summaries:s.summaries.length},sessionReady:!!sec.cookies?.length,credentials:{ai:!!sec.aiKey,notion:!!sec.notionToken},credentialError,dataRoot,revision};
 }
 function syncStatus(){observeContent();return {...(autoSync?.status()||{enabled:false,intervalMs:AUTOMATIC_INTERVAL_MS,running:false}),backgroundIntervalMs:BACKGROUND_HEAD_INTERVAL_MS,running:!!activeSync||!!autoSync?.status().running,accountId:activeId,revision,contentRevision};}
 function captureRefreshContext(p){
@@ -127,7 +130,7 @@ async function runSync(p={},automatic=false){
   const id=activeId,state=account();if(state.account.kind!=='weibo')throw new Error('演示与导入账号不连接微博。请先登录官方账号。');
   if(!state.groups.some(g=>g.selected&&(!p.groupId||g.id===p.groupId)))throw new Error('请先选择允许同步的群聊。');
   const preferred=automatic?preferredRefreshGroup:null;
-  const plan=automatic?refreshPlan(id).plan(state.groups,preferred):null;
+  const plan=automatic?refreshPlan(id).plan(state.groups,preferred,state.settings.offlineMessages):null;
   if(automatic&&!plan.hasWork)return {count:0,pages:0,state:snapshot()};
   busy=true;const controller=new AbortController();activeSync={controller,automatic};const check=()=>{if(controller.signal.aborted){const e=new Error('同步已取消，已保存的页面仍保留。');e.code='ABORTED';throw e;}};
   const timer=setTimeout(()=>controller.abort(),automatic?AUTOMATIC_DEADLINE_MS:120000);
@@ -344,6 +347,8 @@ async function handle(action,p){
   if(cleanupBusy()&&['demo','login.open','login.complete','logout','settings.save','settings.ai.save','settings.appearance.save','import','groups.select','read.set','important.set','bookmark.add','bookmark.remove','summary.local','summary.ai.prepare','summary.ai','summary.delete','sync.configure','notion.export'].includes(action))throw new Error('本地数据操作正在进行，完成后可继续保存或同步。');
   switch(action){
     case 'state':return {...snapshot(),application:buildIdentity};
+    case 'startup.get':return startupSettings.get();
+    case 'startup.save':return startupSettings.save(p);
     case 'layout.get':return layoutPreferences.getLayout();
     case 'layout.save':return layoutPreferences.saveLayout(p);
     case 'ai.providers':return listAiProviders();
@@ -355,6 +360,8 @@ async function handle(action,p){
     case 'image.open':attachmentViewer?.closeAll();return imageViewer.open({source:p.source,title:p.title,caption:p.caption});
     case 'attachment.open':{const {attachment}=attachmentRecord(p.source);imageViewer?.closeAll();return attachmentViewer.open({source:p.source,title:attachment.name,kind:attachment.kind});}
     case 'attachment.download':return attachmentDownload.download({source:p.source});
+    case 'messages.historyRecovery.preview':return messageCleanup.recoveryPreview(p);
+    case 'messages.historyRecovery.apply':return messageCleanup.recoveryApply(p);
     case 'messages.cleanup.info':return messageCleanup.info(p);
     case 'messages.cleanup.preview':return messageCleanup.preview(p);
     case 'messages.cleanup.apply':return messageCleanup.apply(p);
@@ -437,6 +444,9 @@ async function handle(action,p){
     case 'login.status':return loginFlow.status();
     case 'login.cancel':return loginFlow.cancel();
     case 'sync.status':captureRefreshContext(p);return syncStatus();
+    case 'sync.offline.configure':{
+      saveOfflineMessages({store,payload:p,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||!!activeSync||cleanupBusy()||enrichmentJobs.size>0,closing:closing()})});revision++;return snapshot();
+    }
     case 'sync.configure':{if(typeof p.enabled!=='boolean')throw new Error('请指定自动更新开关。');store.update(id,s=>{s.settings.autoSyncEnabled=p.enabled;});if(!p.enabled&&activeSync?.automatic)activeSync.controller.abort();autoSync.configure({enabled:p.enabled,intervalMs:AUTOMATIC_INTERVAL_MS});return syncStatus();}
     case 'window.closeReady':if(closing())await finishClose();return true;
     case 'login.complete':{
@@ -489,7 +499,7 @@ async function handle(action,p){
 }
 async function start(){
   store=new Store(path.join(dataRoot,'accounts'));vault=new Vault(path.join(dataRoot,'credentials'),safeStorage);
-  messageCleanup=createMessageCleanupController({store,asyncOperations:true,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||enrichmentJobs.size>0,closing:closing()}),onChange:()=>{
+  messageCleanup=createMessageCleanupController({store,asyncOperations:true,waitForIdle:true,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||!!activeSync||enrichmentJobs.size>0,closing:closing()}),onChange:()=>{
     revision++;contentRevision++;mediaEpoch++;
     for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();
     imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();

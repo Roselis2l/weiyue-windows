@@ -2,7 +2,7 @@
 // Short HEVC clips are converted locally in a fresh sandbox and terminable
 // Worker. The decoder receives bytes only, never paths, accounts or URLs.
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),{types}=require('node:util');
-const MAX_BYTES=20*1024*1024,MAX_OUTPUT_BYTES=64*1024*1024,MAX_SECONDS=30,MAX_EDGE=4096,MAX_PIXELS=12000000,MAX_FRAMES=1800;
+const MAX_BYTES=100*1024*1024,MAX_OUTPUT_BYTES=64*1024*1024,MAX_SECONDS=60,MAX_EDGE=4096,MAX_PIXELS=12000000,MAX_FRAMES=3600;
 const TIMEOUT_MS=120000,QUEUE_LIMIT=1,PAGE='app://video-decoder/video.html';
 const CSP="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'none'; style-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
 const ASSETS=Object.freeze({
@@ -17,7 +17,7 @@ const typed=Object.getPrototypeOf(Uint8Array.prototype),lengthGet=Object.getOwnP
 const sessions=new WeakMap();
 class VideoDecodeError extends Error{
  constructor(code){super(code==='VIDEO_TIMEOUT'?'本机视频转换超时。':code==='VIDEO_ABORT'?'本机视频转换已取消。':
-  code==='VIDEO_LIMIT'?'本机转换仅支持 20 MB、30 秒以内，尺寸不超过 4096 像素的短片。':
+  code==='VIDEO_LIMIT'?'本机转换仅支持 100 MB、60 秒以内，尺寸不超过 4096 像素的短片。':
   code==='VIDEO_BUSY'?'本机视频转换正在进行，请稍后重试。':'此视频暂时无法在本机转换。可另存原文件后查看。');this.name='VideoDecodeError';this.code=CODES.has(code)?code:'VIDEO_DECODE';}
 }
 function exactBytes(value,max=MAX_BYTES){

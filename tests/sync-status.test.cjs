@@ -46,3 +46,36 @@ test('manual outcomes do not claim complete while pending or unresolved remains'
   assert.match(manualResult({added:0,group:{syncProgress:{phase:'joined'}}}),/本次离线消息已与本机记录衔接/);
   const history=manualResult({history:true,added:20,group:{latestPending:pending}});assert.match(history,/20 条更早历史记录/);assert.match(history,/只向本机最早记录之前读取/);assert.doesNotMatch(history,/同步完成/);
 });
+
+
+test('offline mode validation and default are strict',()=>{
+  const {offlinePolicy,validOfflineDate}=require('../app/renderer/sync-status.js');
+  for(const value of [undefined,{}, {mode:'invalid'},{mode:'date',date:'2026-02-30'}])assert.deepEqual(offlinePolicy(value),{mode:'auto'});
+  assert.deepEqual(offlinePolicy({mode:'none',date:'2026-01-01'}),{mode:'none'});
+  for(const value of ['2024-02-29','2026-11-07'])assert.equal(validOfflineDate(value),true);
+  for(const value of ['2026-02-29','2026-13-01','0000-01-01','2026-1-1','',null])assert.equal(validOfflineDate(value),false);
+});
+test('none does not promise completion or conceal existing gaps',()=>{
+  const group={latestPending:pending,syncProgress:{phase:'unresolved'}};
+  const result=groupStatus(group,{offlineMessages:{mode:'none'}});
+  assert.match(result.text,/不补齐.*未衔接/);assert.equal(result.needsBackfill,true);assert.equal(result.actionLabel,'同步最新');
+  assert.doesNotMatch(result.text,/继续补扫|已与本机/);
+  assert.match(manualResult({added:3,group,offlineMessages:{mode:'none'}}),/不补齐/);
+});
+test('date cutoff is not global completeness and platform exhaustion is not cutoff success',()=>{
+  const policy={mode:'date',date:'2026-11-01'};
+  const group={latestPending:pending,offlineDateScan:{date:policy.date,complete:true,reachedDate:true}};
+  assert.match(groupStatus(group,{offlineMessages:policy}).text,/已到选定日期.*北京时间.*保留 1 段/);
+  group.offlineDateScan.reachedDate=false;group.offlineDateScan.complete=false;group.offlineDateScan.unresolved=true;
+  assert.match(groupStatus(group,{offlineMessages:policy}).text,/无法确认/);
+  assert.doesNotMatch(groupStatus(group,{offlineMessages:policy}).text,/已到选定日期|已与本机/);
+  group.offlineDateScan.date='2026-10-01';
+  assert.doesNotMatch(groupStatus(group,{offlineMessages:policy}).text,/已到选定日期/);
+});
+
+test('date newer pending blocks completion and stale date state cannot taint auto',()=>{
+  const group={syncProgress:{phase:'joined'},offlineDateScan:{date:'2026-10-01',complete:true,reachedDate:true,headPending:{status:'unresolved'}}};
+  const date=groupStatus(group,{offlineMessages:{mode:'date',date:'2026-10-01'}});
+  assert.match(date.text,/较新的离线时段仍待补齐.*无法确认/);assert.doesNotMatch(date.text,/已到选定日期/);assert.equal(date.unresolved,true);
+  const auto=groupStatus(group,{offlineMessages:{mode:'auto'}});assert.equal(auto.unresolved,false);assert.match(auto.text,/已与本机记录衔接/);
+});

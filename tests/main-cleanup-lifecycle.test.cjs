@@ -71,3 +71,11 @@ test('settled cleanup releases normal write behavior',async()=>{
   finish();assert.equal(await context.handle('bookmark.add',{groupId:'g',messageIds:['1']}),'saved');
   assert.equal(writes.length,1);assert.equal(writes[0].id,'synthetic-a');
 });
+
+test('queued cleanup reservation blocks new manual and automatic sync before network work',async()=>{
+  const source=main.slice(main.indexOf('async function runSync('),main.indexOf('\nconst mediaToken='));
+  const context=vm.createContext({busy:false,cleanupBusy:()=>true,enrichmentJobs:new Map()});
+  vm.runInContext(source,context);
+  for(const automatic of [false,true])await assert.rejects(context.runSync({},automatic),error=>error.code==='SYNC_BUSY');
+  assert.match(main,/createMessageCleanupController\(\{store,asyncOperations:true,waitForIdle:true/);
+});

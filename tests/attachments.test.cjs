@@ -156,3 +156,19 @@ test('timeout cancels hanging body and does not expose errors or response conten
  await assert.rejects(a.fetchAttachmentMetadata({fid:FID,fetch:async()=>{throw Error('Cookie private-secret');}}),
  e=>e.code==='ATTACHMENT_NETWORK'&&!e.message.includes('private-secret'));
 });
+
+
+test('MSS MP4 metadata with verified QuickTime bytes uses actual movie MIME',async()=>{
+ const bytes=mp4();bytes.write('qt  ',8);
+ for(const mime of ['video/mp4','video/mpeg4','application/octet-stream']){
+  const result=await a.fetchAttachment({attachment:ready('video'),fetch:async()=>response(bytes,mime)});
+  assert.equal(result.mime,'video/quicktime');assert.equal(result.kind,'video');assert.deepEqual(result.bytes,bytes);
+ }
+ for(const mime of ['text/html','text/plain','application/pdf'])
+  await assert.rejects(a.fetchAttachment({attachment:ready('video'),fetch:async()=>response(bytes,mime)}),{code:'ATTACHMENT_TYPE'});
+ for(const brand of ['heic','avif','mif1']){
+  const image=mp4();image.write('qt  ',8);image.write(brand,16);
+  await assert.rejects(a.fetchAttachment({attachment:ready('video'),fetch:async()=>response(image,'video/mp4')}),{code:'ATTACHMENT_TYPE'});
+ }
+ await assert.rejects(a.fetchAttachment({attachment:ready(),fetch:async()=>response(bytes,'application/pdf')}),{code:'ATTACHMENT_TYPE'});
+});

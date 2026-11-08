@@ -6,11 +6,16 @@
 .app-shell>.inspector{grid-column:3;grid-row:1;display:block}
 .app-shell.left-collapsed{--sidebar-width:0px}
 .app-shell.right-collapsed{--inspector-width:0px}
-.layout-toolbar{display:flex;align-items:center;gap:8px;padding:3px 12px;min-height:30px;flex:none;border-bottom:1px solid var(--line);background:var(--ui-surface,var(--paper));color:var(--ui-text,var(--text));min-width:0}
-.layout-toggle{font-size:11px;line-height:20px;min-height:24px;padding:1px 7px;flex:none;border:1px solid transparent;border-radius:5px;color:var(--ui-accent,var(--green));white-space:nowrap}
+.layout-toolbar{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;align-items:start;gap:8px;padding:3px 12px;min-height:30px;flex:none;border-bottom:1px solid var(--line);background:var(--ui-surface,var(--paper));color:var(--ui-text,var(--text));min-width:0}
+.layout-toggle{font-size:17px;line-height:22px;min-width:28px;min-height:28px;padding:1px 7px;flex:none;border:1px solid transparent;border-radius:5px;color:var(--ui-accent,var(--green));white-space:nowrap}
 .layout-toggle:hover{background:var(--ui-hover,var(--green-light));border-color:var(--line)}
 .layout-toggle:focus-visible{outline:2px solid var(--ui-accent,var(--green));outline-offset:1px}
-.layout-edition{margin:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--ui-muted,var(--muted))}
+.layout-sync-controls{min-width:0;text-align:center}
+.toolbar-sync-actions{display:flex;align-items:center;justify-content:center;gap:5px;flex-wrap:wrap;min-width:0}
+.toolbar-sync-actions .button{font-size:11px;padding:4px 7px;min-height:26px}
+.header-sync-controls .sync-gap-line{height:32px;line-height:16px;white-space:normal;overflow:hidden;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;text-align:center;margin-top:2px}
+.header-sync-controls .sync-gap-line[hidden]{display:none}
+.layout-toolbar>.layout-toggle{margin-top:1px}
 .layout-toolbar #toggle-right-panel{margin-left:auto}
 @media(min-width:1600px){.app-shell{--sidebar-width:238px;--inspector-width:308px}}
 @media(max-width:1130px){.app-shell{--sidebar-width:182px;--inspector-width:246px}}
@@ -20,3 +25,30 @@
 .app-shell.left-collapsed{--sidebar-width:0px}
 .app-shell.right-collapsed{--inspector-width:0px}
 .app-shell>.sidebar[hidden],.app-shell>.inspector[hidden]{display:none!important}
+
+/* Status stays between the fixed panel arrows; controls occupy the lower strip. */
+.layout-sync-controls{align-self:center;text-align:left}
+.layout-sync-controls .header-status-area{align-items:center}
+.header-sync-controls{min-width:0}
+.header-sync-controls .toolbar-sync-actions{gap:5px 12px}
+.toolbar-sync-buttons{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:5px}
+.offline-inline-settings{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:4px 9px;min-width:0;font-size:11px}
+.offline-inline-label,.offline-inline-option{white-space:nowrap}
+.offline-inline-option{display:inline-flex;align-items:center;gap:3px;min-height:26px}
+.offline-inline-option input{width:13px;height:13px;padding:0;margin:0;accent-color:var(--ui-accent,var(--green))}
+.offline-inline-date-option{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.offline-inline-settings input[type=date]{width:132px;min-height:26px;padding:3px 5px;font-size:11px}
+.offline-inline-note{font-size:10px;color:var(--danger);flex-basis:100%;text-align:center}
+.offline-inline-note:empty{display:none}
+.offline-inline-settings input:disabled{opacity:.55;cursor:default}
+.workspace-header:has(.header-sync-controls[hidden]){display:none}
+
+/* Compact lower strip: offline options/status stay left; sync actions stay right.
+   Narrow windows wrap the whole action group while keeping its right edge. */
+.workspace-header{padding-top:3px;padding-bottom:3px}
+.header-sync-controls .toolbar-sync-actions{justify-content:space-between;gap:3px 10px}
+.toolbar-sync-buttons{justify-content:flex-end;margin-left:auto}
+.offline-inline-settings{justify-content:flex-start}
+.offline-inline-note{text-align:left}
+.header-sync-controls .sync-gap-line{height:16px;line-height:16px;display:block;white-space:nowrap;text-overflow:ellipsis;text-align:left;margin-top:1px}
+.sidebar-bottom{padding-top:8px}

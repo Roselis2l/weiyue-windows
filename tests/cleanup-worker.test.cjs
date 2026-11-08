@@ -46,7 +46,7 @@ test('worker permanent commit removes content, persists minimum markers and supp
   const { store, controller, root, file, events } = setup(t);
   const result = await apply(controller, selection({ mode: 'permanent', endMinute: '2026-10-21T09:02' }));
   assert.equal(result.deletedCount, 3); assert.equal(result.mode, 'permanent'); assert.equal(result.commitState, 'committed');
-  const persisted = new Store(root).get('alice'); assert.equal(persisted.schemaVersion, 3);
+  const persisted = new Store(root).get('alice'); assert.equal(persisted.schemaVersion, 5);
   assert.deepEqual(persisted.messageTombstones, [0, 1, 2].map(id => ({ groupId: 'g', id: String(id), time: START + id * 60000 })));
   assert.equal(persisted.messages.length, 8); assert(!persisted.messages.some(m => ['0', '1', '2'].includes(m.id)));
   assert(!fs.readFileSync(file, 'utf8').includes('合成正文 0'));

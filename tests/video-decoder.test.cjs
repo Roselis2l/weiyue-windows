@@ -34,8 +34,8 @@ test('HEVC admission uses structural video codec/dimensions/duration/frame count
  for(const value of [Buffer.from('hvc1 mp42 private'),mp4({codec:'avc1'}),mp4({codec:'encv'}),mp4({codec:'av01'}),Buffer.concat([mp4(),box('moof')])])assert.equal(inspectHevcMp4(value),null);
 });
 test('conversion declines oversized, long, high-frame-count or invalid dimensions before any process is created',async()=>{
- for(const options of [{width:4097},{height:4097},{width:4096,height:4096},{width:0},{seconds:30.001},{seconds:0},{frames:1801},{frames:0},{seconds:.1,frames:48}])assert.equal(inspectHevcMp4(mp4(options)),null);
- assert.ok(inspectHevcMp4(mp4({seconds:30,frames:1800,width:4096,height:2160})));
+ for(const options of [{width:4097},{height:4097},{width:4096,height:4096},{width:0},{seconds:60.001},{seconds:0},{frames:3601},{frames:0},{seconds:.1,frames:48}])assert.equal(inspectHevcMp4(mp4(options)),null);
+ assert.ok(inspectHevcMp4(mp4({seconds:60,frames:3600,width:4096,height:2160})));
  const h=harness();for(const value of [{bytes:mp4(),mime:'image/jpeg'},{bytes:mp4({codec:'avc1'}),mime:'video/mp4'},{bytes:Buffer.alloc(MAX_BYTES+1),mime:'video/mp4'}])await assert.rejects(h.service.decode(value));
  assert.equal(h.windows.length,0);h.service.dispose();
 });
@@ -79,7 +79,7 @@ test('video handler counts unknown codecs, and sample timing cannot contradict t
 });
 test('decoder command enforces decode pixels, allocation, duration, output frames and an independent execution timeout',()=>{
  const source=fs.readFileSync(path.resolve('app/decoder/video-worker.js'),'utf8');
- for(const flag of ["'-max_pixels','12000000'","'-max_alloc','67108864'","'-frames:v','720'","'-t','30'",'core.setTimeout(110000)',"'-c:a','libvorbis'"])assert.ok(source.includes(flag));
+ for(const flag of ["'-max_pixels','12000000'","'-max_alloc','67108864'","'-frames:v','1440'","'-t','60'",'core.setTimeout(110000)',"'-c:a','libvorbis'"])assert.ok(source.includes(flag));
  assert.ok(!source.includes("'-c:a','libopus'"));
 });
 test('fixed decoder-only resource routes allow WASM but deny general script eval and every remote route',()=>{
@@ -128,3 +128,14 @@ test('decoder assets require manifest size and SHA256 match before being served'
  assert.ok(path.resolve(temp).startsWith(path.resolve(os.tmpdir())+path.sep));fs.rmSync(temp,{recursive:true,force:true});
 });
 module.exports={mp4};
+
+
+test('larger HEVC clips are admitted consistently up to the bounded 100 MB and 60 second envelope',()=>{
+ const metadata=mp4({width:1320,height:1766,seconds:35,frames:2100});metadata.write('qt  ',8);
+ const bytes=Buffer.concat([metadata,box('mdat',Buffer.alloc(21*1024*1024))]);
+ assert.equal(inspectHevcMp4(bytes)?.duration,35);
+ for(const file of ['app/decoder/video.js','app/decoder/video-worker.js']){
+  const source=fs.readFileSync(path.resolve(file),'utf8');assert.ok(source.includes('100*1024*1024'));assert.ok(!source.includes('20*1024*1024'));
+ }
+ assert.equal(MAX_BYTES,100*1024*1024);
+});

@@ -163,7 +163,7 @@ test('unbound old summary protects account instead of guessing a group from titl
   assert.equal(store.previewMessageCleanup('alice', selection({ groupId: 'g2' })).deleteCount, 0);
 });
 
-test('existing Notion summary/bookmark sources keep associations, and unknown old export blocks conservatively', t => {
+test('existing Notion sources remain protected while unknown old exports add no retention', t => {
   const { store } = setup(t);
   const summary = saveSummary(store);
   const bookmark = store.bookmark('alice', { groupId: 'g', messageIds: ['0'] });
@@ -176,7 +176,7 @@ test('existing Notion summary/bookmark sources keep associations, and unknown ol
   apply(store); assert.deepEqual(store.get('alice').exports, before.exports);
   store.update('alice', state => { state.exports.c = { summaryId: 'already-deleted', status: 'completed' }; });
   const unknown = store.previewMessageCleanup('alice', selection());
-  assert.equal(unknown.deleteCount, 0); assert.match(unknown.warnings.join(''), /来源已删除或无法追溯/);
+  assert.equal(unknown.retainedCount, 3); assert.equal(unknown.reasonCounts.uncertainExport, undefined); assert.match(unknown.warnings.join(''), /来源已删除或无法追溯/);
 });
 
 test('stale previews reject after new matching arrivals, newly bookmarked rows or summary coverage changes', t => {
@@ -402,4 +402,40 @@ test('unreleased schema-1 recycled fixture normalizes in memory without write an
   assert.deepEqual(fs.readFileSync(file), before);
   reopened.setImportant('alice', 'u1', true);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).schemaVersion, 2);
+});
+
+for (const mode of ['recycle', 'permanent']) test(`${mode}: orphan exports do not block selected messages or override unread safeguards`, t => {
+  const { store } = setup(t, [msg('0'), msg('1'), msg('2'), msg('3'), msg('4'), msg('5'), msg('99', { groupId: 'g2' })]);
+  store.bookmark('alice', { groupId: 'g', messageIds: ['1'] });
+  store.update('alice', state => {
+    state.exports.orphan = { sourceType: 'summary', sourceIds: ['deleted-summary'], status: 'completed' };
+    state.readStates.g = { ...(state.readStates.g || {}), unreadIds: ['2'] };
+  });
+  const before = store.get('alice');
+  const input = selection({ mode, startMinute: '2026-10-21T09:00', endMinute: '2026-10-21T09:03' });
+  const protectedPreview = store.previewMessageCleanup('alice', input);
+  assert.equal(protectedPreview.deleteCount, 2);
+  assert.equal(protectedPreview.reasonCounts.unread, 1);
+  assert.equal(protectedPreview.reasonCounts.bookmark, 1);
+  const optedIn = store.previewMessageCleanup('alice', { ...input, markUnreadAsRead: true });
+  assert.equal(optedIn.deleteCount, 3); assert.equal(optedIn.markedReadCount, 1);
+  assert.equal(store.applyMessageCleanup('alice', optedIn.selection, optedIn.fingerprint).deletedCount, 3);
+  const after = store.get('alice');
+  assert.deepEqual(after.exports, before.exports);
+  assert.deepEqual(visibleMessages(after.messages).map(m => m.id), ['1', '4', '5', '99']);
+  assert.ok(!after.readStates.g.unreadIds.includes('2'));
+});
+
+test('malformed and mixed legacy export metadata add no global retention', t => {
+  const { store } = setup(t);
+  const bookmark = store.bookmark('alice', { groupId: 'g', messageIds: ['1'] });
+  for (const entry of [null, {}, { sourceType: 'other' }, { sourceType: 'summary', sourceIds: [3] },
+    { sourceType: 'summary', sourceIds: ['missing'] }, { sourceType: 'bookmarks', sourceIds: [bookmark.id, 'missing'] }]) {
+    const state = store.get('alice'); state.exports = { legacy: entry };
+    const preview = cleanup.previewMessageCleanup(state, selection());
+    assert.equal(preview.deleteCount, 10);
+    assert.equal(preview.reasonCounts.bookmark, 1);
+    assert.equal(preview.reasonCounts.uncertainExport, undefined);
+    assert.equal(preview.warnings.length, 1);
+  }
 });

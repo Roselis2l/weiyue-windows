@@ -42,13 +42,13 @@ test('permanent deletion removes body sender and media, retains only minimal sta
   const removed = clone(s.messages[0]);
   const result = apply(s, selection({ mode: 'permanent', endMinute: '2026-10-21T09:00' }));
   assert.equal(result.deletedCount, 1); assert.equal(result.mode, 'permanent'); assert.equal(result.batchId, null);
-  assert.equal(s.messages.length, 10); assert(!s.messages.some(m => m.id === '0')); assert.equal(s.schemaVersion, 3);
+  assert.equal(s.messages.length, 10); assert(!s.messages.some(m => m.id === '0')); assert.equal(s.schemaVersion, 5);
   assert.deepEqual(s.messageTombstones, [{ groupId: 'g', id: '0', time: removed.time }]);
   assert.equal(s.messageTrash.length, 0);
   assert(!JSON.stringify(s).includes(removed.text)); assert(!JSON.stringify(s).includes('synthetic.png'));
 });
 
-test('permanent mode retains all protected references, stable members, unread and sync anchors', () => {
+test('permanent mode retains content references and unread while relocating navigation', () => {
   const s = state();
   s.bookmarks = [{ id: 'saved', groupId: 'g', messageIds: ['0'] }];
   s.summaries = [{ id: 'summary', groupId: 'g', start: START + 60000, end: START + 2 * 60000, refs: [{ id: '1', groupId: 'g', time: START + 60000 }] }];
@@ -56,19 +56,25 @@ test('permanent mode retains all protected references, stable members, unread an
   s.readPositions = { g: '2' }; s.readStates = { g: { anchorId: '3', readThroughId: '4', unreadIds: ['5'] } };
   s.groups[0].latestPendingRanges = [{ arrivalAfterId: '6' }]; s.messages[7].senderId = 'keep';
   const before = clone(s); const plan = cleanup.previewMessageCleanup(s, selection({ mode: 'permanent', retainSenderIds: ['keep'] }));
-  assert.equal(plan.deleteCount, 3);
+  assert.equal(plan.deleteCount, 7);
   cleanup.applyMessageCleanup(s, plan.selection, plan.fingerprint);
-  assert.deepEqual(s.messages.map(m => m.id), ['0', '1', '2', '3', '4', '5', '6', '7']);
-  for (const key of ['bookmarks', 'summaries', 'exports', 'readPositions', 'readStates', 'groups']) assert.deepEqual(s[key], before[key]);
+  assert.deepEqual(s.messages.map(m => m.id), ['0', '1', '5', '7']);
+  for (const key of ['bookmarks', 'summaries', 'exports']) assert.deepEqual(s[key], before[key]);
+  assert.equal(s.readPositions.g,'5');assert.equal(s.readStates.g.anchorId,'5');assert.equal(s.readStates.g.readThroughId,'1');assert.deepEqual(s.readStates.g.unreadIds,['5']);assert.deepEqual(s.groups[0].latestPendingRanges,[]);
 });
 
-test('missing summary/export provenance conservatively prevents permanent content loss', () => {
+test('unknown summaries remain protected but orphan exports allow selected permanent deletion', () => {
   const s = state(); s.summaries = [{ id: 'legacy', groupId: 'g', refs: [] }];
   const before = clone(s), plan = cleanup.previewMessageCleanup(s, selection({ mode: 'permanent' }));
   assert.equal(plan.deleteCount, 0); assert.equal(plan.reasonCounts.uncertainSummary, 11);
-  assert.equal(cleanup.applyMessageCleanup(s, plan.selection, plan.fingerprint).deleted, false); assert.deepEqual(s, before);
+  assert.equal(cleanup.applyMessageCleanup(s, plan.selection, plan.fingerprint).deleted, true); assert.deepEqual(s.messages, before.messages);assert(plan.boundaryPlan.advances);
   s.summaries = []; s.exports = { old: { sourceType: 'summary', sourceIds: ['missing'] } };
-  assert.equal(cleanup.previewMessageCleanup(s, selection({ mode: 'permanent' })).deleteCount, 0);
+  const orphanPlan = cleanup.previewMessageCleanup(s, selection({ mode: 'permanent' }));
+  assert.equal(orphanPlan.deleteCount, 11);
+  const journal = clone(s.exports);
+  assert.equal(cleanup.applyMessageCleanup(s, orphanPlan.selection, orphanPlan.fingerprint).deletedCount, 11);
+  assert.equal(s.messages.length, 0);
+  assert.deepEqual(s.exports, journal);
 });
 
 test('purge exact selected batch leaves other batch/group untouched and removes target content', () => {
@@ -129,13 +135,13 @@ test('permanent deletion trims restored historical batch references without harm
   cleanup.validateMessageTrash(s.messageTrash, s.messages, s.groups);
 });
 
-test('schema3 survives later recycle and restore, and zero-op does not migrate schema', () => {
+test('schema5 survives legacy recycle and retained-only prefix updates the boundary', () => {
   const s = state(); apply(s, selection({ mode: 'permanent', endMinute: '2026-10-21T09:00' }));
   const batch = apply(s, selection({ startMinute: '2026-10-21T09:01', endMinute: '2026-10-21T09:01' }));
-  assert.equal(s.schemaVersion, 3); cleanup.restoreMessageTrash(s, batch.batchId); assert.equal(s.schemaVersion, 3);
+  assert.equal(s.schemaVersion, 5); cleanup.restoreMessageTrash(s, batch.batchId); assert.equal(s.schemaVersion, 5);
   const untouched = state(), before = clone(untouched);
   const plan = cleanup.previewMessageCleanup(untouched, selection({ mode: 'permanent', retainSenderIds: ['member'] }));
-  assert.equal(cleanup.applyMessageCleanup(untouched, plan.selection, plan.fingerprint).deleted, false); assert.deepEqual(untouched, before);
+  assert.equal(cleanup.applyMessageCleanup(untouched, plan.selection, plan.fingerprint).deleted, true); assert.deepEqual(untouched.messages, before.messages);assert.equal(untouched.schemaVersion,5);
 });
 
 test('minimal markers reject duplicate/overlap/invalid fields/unsafe IDs and preserve long string identity', () => {

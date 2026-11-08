@@ -193,19 +193,26 @@
 .header-status-area:has(.sync-status-stack:not([hidden])) .header-status{max-width:74px;overflow:hidden}
 .header-utility-row .header-actions{flex-wrap:wrap}
 
-/* Pagination now sits between both independent navigation actions. The footer
-   remains outside the scrolling viewport and reflows by its own available width. */
-.reading-footer{display:block;padding-top:7px;padding-bottom:7px;container-type:inline-size}
-.reading-navigation{display:grid;grid-template-columns:max-content minmax(220px,1fr) max-content;align-items:center;gap:10px}
-.reading-navigation .new-messages-notice{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;margin:0;min-width:0}
-.reading-navigation .pagination{margin:0;min-width:0;gap:6px}
+/* Keep unread status immediately beside the forward-page action. Reflow the
+   two independent jumps above pagination only when the middle pane is narrow. */
+.reading-footer{display:block;padding-top:3px;padding-bottom:3px;container-type:inline-size}
+.reading-navigation{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;align-items:center;gap:8px}
+.reading-navigation .new-messages-notice{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:0;margin:0;min-width:0;flex:none;white-space:nowrap}
+.reading-navigation .pagination{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content;align-items:center;margin:0;min-width:0;gap:6px}
+.reading-navigation .next-page-group{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;white-space:nowrap}
+.reading-navigation #page-position{text-align:center;white-space:nowrap}
+.reading-navigation #jump-latest{justify-self:start}
 .reading-navigation #jump-latest-read{justify-self:end;min-height:28px}
 #new-messages-count{text-align:left}
-@container (max-width:440px){
-  .reading-navigation{grid-template-columns:minmax(0,1fr);gap:7px}
-  .reading-navigation .new-messages-notice{grid-column:1;grid-row:1;flex-direction:row;align-items:center;flex-wrap:wrap}
-  .reading-navigation .pagination{grid-column:1;grid-row:2;flex-wrap:wrap}
-  .reading-navigation #jump-latest-read{grid-column:1;grid-row:3}
+@container (max-width:480px){
+  .reading-navigation{grid-template-columns:minmax(0,1fr) max-content;gap:3px 8px}
+  .reading-navigation #jump-latest{grid-column:1;grid-row:1}
+  .reading-navigation .pagination{grid-column:1 / -1;grid-row:2}
+  .reading-navigation #jump-latest-read{grid-column:2;grid-row:1}
+}
+@container (max-width:310px){
+  .reading-navigation .pagination{grid-template-columns:max-content minmax(0,1fr);row-gap:2px}
+  .reading-navigation #page-position{grid-column:1 / -1;grid-row:2}
 }
 @media(max-width:1130px){.header-status-area{gap:7px}.header-status-area:has(.sync-status-stack:not([hidden])){flex-direction:column;align-items:stretch;gap:2px}.header-status-area:has(.sync-status-stack:not([hidden])) .header-status{max-width:none}.header-utility-row .header-actions{max-width:52%}}
 

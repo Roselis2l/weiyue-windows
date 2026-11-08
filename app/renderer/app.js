@@ -173,7 +173,7 @@ async function refreshState({background=false}={}) {
   const epoch=model.accountEpoch,state=await api('state');if(epoch!==model.accountEpoch)return;
   model.state = state;
   const application=state.application;
-  if(application){$('edition-label').textContent=application.label+' '+application.version;document.title='微阅 · '+application.label+' '+application.version;}
+  if(application)document.title='微阅 · '+application.label+' '+application.version;
   model.state.groups ||= []; model.state.accounts ||= []; model.state.settings ||= {}; model.state.stats ||= {}; model.state.readPositions ||= {}; model.state.readStates ||= {}; model.state.importantMembers ||= []; model.state.credentials ||= {};
   applyAppearance(model.state.settings.appearance);
   window.WeiyueInterfaceTheme.apply(document.body,model.state.settings.interfaceTheme);
@@ -217,24 +217,86 @@ function renderGroupList(groups) {
   if(!children.length)children.push(node('p',{class:'empty-sidebar'},'选择你关心的群聊，\n把消息读回自己的节奏。'));
   host.dataset.avatarOwner=owner;reconcileChildren(host,children);
 }
+function createInlineOfflineSettings() {
+  const accountId=model.state.account?.id,epoch=model.accountEpoch;
+  let expected=syncDisplay.offlinePolicy(model.state.settings.offlineMessages);
+  let draft={...expected},editing=false;
+  const current=()=>accountId===model.state.account?.id&&epoch===model.accountEpoch&&!model.switching&&!model.closing;
+  const busy=()=>model.manualSync||!!model.syncStatus?.running||cleanupWorkActive();
+  const date=node('input',{id:'offline-inline-date',type:'date',max:new Date(Date.now()+8*3600000).toISOString().slice(0,10),value:expected.date||'','aria-label':'补至日期（北京时间）',title:'向前补至所选日期 00:00（北京时间，含当天）'});
+  const note=node('span',{id:'offline-inline-note',class:'offline-inline-note',role:'status','aria-live':'polite'});
+  const radios=['auto','none','date'].map((value,i)=>node('input',{id:'offline-inline-mode-'+value,type:'radio',name:'offline-inline-mode',value,checked:expected.mode===value,'aria-label':['自动补至衔接','不补','补至'][i]}));
+  const option=(i,label)=>node('label',{class:'offline-inline-option'},radios[i],node('span',{},label));
+  const host=node('div',{id:'offline-inline-settings',class:'offline-inline-settings',role:'group','aria-label':'离线消息补齐方式'},
+    node('span',{class:'offline-inline-label'},'离线消息：'),option(0,'自动补至衔接'),option(1,'不补'),
+    node('span',{class:'offline-inline-date-option'},option(2,'补至'),date),note);
+  function valid(){return draft.mode!=='date'||syncDisplay.validOfflineDate(date.value)&&date.value<=date.max;}
+  function update(){
+    if(!current())return;
+    const saved=syncDisplay.offlinePolicy(model.state.settings.offlineMessages);
+    if(!model.offlineSaving&&JSON.stringify(saved)!==JSON.stringify(expected)){
+      expected=saved;draft={...saved};editing=false;date.value=saved.date||'';
+    }
+    radios.forEach(radio=>{radio.checked=radio.value===draft.mode;radio.disabled=model.offlineSaving||busy();});
+    date.disabled=model.offlineSaving||busy()||draft.mode!=='date';
+    host.setAttribute('aria-busy',String(!!model.offlineSaving));
+    note.textContent=model.offlineSaving?'正在保存…':editing&&!valid()?'请选择有效日期（不晚于北京时间今天）':'';
+    host.title=busy()?'同步或本地数据操作正在进行，结束后可修改。':'选择后自动保存，仅影响当前账号，不删除消息或改变自动更新开关。';
+  }
+  async function save(){
+    if(!current()||model.offlineSaving||busy()||!valid())return;
+    const policy=syncDisplay.offlinePolicy({mode:draft.mode,date:date.value});
+    if(JSON.stringify(policy)===JSON.stringify(expected)){editing=false;update();return;}
+    const previous={...expected};model.offlineSaving=true;update();
+    try{
+      const snapshot=await api('sync.offline.configure',{accountId,offlineMessages:policy,expectedOfflineMessages:previous});
+      if(!current())return;
+      model.state=snapshot;model.syncRevision=null;expected=policy;draft={...policy};editing=false;
+      toast('离线消息设置已保存。');
+    }catch(error){
+      if(current()){
+        draft={...expected};date.value=expected.date||'';editing=false;
+        await refreshState({background:true}).catch(()=>{});
+        reportError(error);
+      }
+    }finally{model.offlineSaving=false;model.offlineInlineRefresh?.();renderSyncStatus();}
+  }
+  radios.forEach(radio=>radio.addEventListener('change',()=>{
+    if(!current()||model.offlineSaving||busy()){update();return;}
+    draft={mode:radio.value,date:date.value};editing=true;update();void save();
+  }));
+  date.addEventListener('input',()=>{editing=true;update();});
+  date.addEventListener('change',()=>{editing=true;update();void save();});
+  date.addEventListener('keydown',event=>{if(event.key==='Escape'){draft={...expected};date.value=expected.date||'';editing=false;update();}});
+  model.offlineInlineRefresh=update;update();return host;
+}
 function renderHeader() {
   const isRead = model.view === 'read';
-  const actions = [];
-  if (isRead && model.groupId && accountKind() === 'weibo') {
-    actions.push(button(model.syncStatus?.enabled===false?'恢复自动更新':'暂停自动更新',toggleAutoSync,'text small',{id:'auto-sync-toggle'}));
-    actions.push(button('同步最新',()=>sync(false),'soft',{id:'sync-latest',title:'检查新消息，并从已保存的位置继续补齐离线消息；不跳转阅读位置。'}));
-    actions.push(button('更早历史',()=>sync(true),'',{id:'sync-history',title:'读取本机最早记录之前的历史；中间的离线缺口由“补齐离线消息”继续读取。'}));
+  const headerKey=JSON.stringify([model.accountEpoch,model.state.account?.id,isRead,model.groupId]);
+  // Keep the inline date input alive during background refreshes and native picker use.
+  if($('workspace-header').dataset.context!==headerKey){
+    model.offlineInlineRefresh=null;
+    const actions=[];
+    if(isRead&&model.groupId&&accountKind()==='weibo'){
+      actions.push(button(model.syncStatus?.enabled===false?'恢复自动更新':'暂停自动更新',toggleAutoSync,'text small',{id:'auto-sync-toggle'}));
+      actions.push(button('同步最新',()=>sync(false),'soft',{id:'sync-latest',title:'检查新消息，并按离线消息设置补齐；不跳转阅读位置。'}));
+      actions.push(button('更早历史',()=>sync(true),'',{id:'sync-history',title:'读取本机最早记录之前的历史；中间的离线缺口按“离线消息”设置处理。'}));
+    }
+    $('layout-sync-controls').replaceChildren(node('div',{class:'header-status-area'},node('span',{id:'header-status',class:'header-status'}),node('div',{class:'sync-status-stack',hidden:accountKind()!=='weibo'},node('p',{id:'sync-status-line',class:'sync-status-line'}))));
+    $('workspace-header').replaceChildren(node('div',{class:'header-sync-controls',hidden:accountKind()!=='weibo'},
+      node('div',{class:'toolbar-sync-actions',role:'group','aria-label':'离线消息与同步操作'},
+        accountKind()==='weibo'?createInlineOfflineSettings():null,
+        node('div',{class:'toolbar-sync-buttons'},actions)),
+      node('p',{id:'sync-gap-line',class:'sync-gap-line',hidden:accountKind()!=='weibo'})));
+    $('workspace-header').dataset.context=headerKey;
   }
-  // Navigation already identifies the view and group. Keep the actual controls
-  // and task status without spending a second row on the same title.
-  $('workspace-header').replaceChildren(node('div',{class:'header-utility-row'},node('div',{class:'header-status-area'},node('span',{id:'header-status',class:'header-status'}),node('div',{class:'sync-status-stack',hidden:accountKind()!=='weibo'},node('p',{id:'sync-status-line',class:'sync-status-line'}),node('p',{id:'sync-gap-line',class:'sync-gap-line'}))),node('div',{class:'header-actions',role:'group','aria-label':'工作区操作'},actions)));
   updateBusy();
   renderSyncStatus();renderAiRequestStatus();renderCleanupProgress();
 }
 async function switchAccount(id) {
   await activateAccount('account.switch',{id});
 }
-function clearContext() { if(model.summaryDeletion){model.summaryDeletion=null;if($('modal').dataset.context==='summary-delete')closeModal();}disposeSearchEditor();invalidateReadingIntent();model.accountEpoch++; model.queryVersion++;model.selected.clear(); model.inspected=null; model.preview=null; model.summary=null; model.summaries=[]; model.bookmarks=[];model.bookmarkSelected.clear();model.bookmarkQuery='';model.targets=[]; model.targetId=''; model.groupId=null; model.filters=emptyFilters(); model.offset=0; model.saveNote='';model.saveTags='';model.viewport=null;model.lastReadPayload='';model.syncRevision=null;model.syncStatus=null;model.messageObserver?.disconnect();clearTimeout(model.readTimer); }
+function clearContext() { cleanupAutoDismiss.cancel(); if(model.summaryDeletion){model.summaryDeletion=null;if($('modal').dataset.context==='summary-delete')closeModal();}disposeSearchEditor();invalidateReadingIntent();model.accountEpoch++; model.queryVersion++;model.selected.clear(); model.inspected=null; model.preview=null; model.summary=null; model.summaries=[]; model.bookmarks=[];model.bookmarkSelected.clear();model.bookmarkQuery='';model.targets=[]; model.targetId=''; model.groupId=null; model.filters=emptyFilters(); model.offset=0; model.saveNote='';model.saveTags='';model.viewport=null;model.lastReadPayload='';model.syncRevision=null;model.syncStatus=null;model.messageObserver?.disconnect();clearTimeout(model.readTimer); }
 async function activateAccount(action,payload={}) {
   if(model.switching)throw new Error('另一个工作区切换正在进行，请稍候。');
   cancelSearchWork();await flushReading(false);stashReadingDraft();
@@ -620,9 +682,10 @@ function renderReading() {
   model.messageSignatures.clear();let day='';model.messages.forEach(m=>{const next=new Date(m.time).toDateString();if(next!==day){scroll.append(node('div',{class:'day-divider','data-day':next},dateLabel(m.time)));day=next;}scroll.append(messageCard(m));model.messageSignatures.set(String(m.id),messageSignature(m));});
   if(!model.messages.length)scroll.append(emptyState('这个范围暂时没有消息','试试调整日期、成员或关键词；新登录的群聊需要手动同步记录。',[button('清除筛选',clearReadingFilters,'soft')]));
   scroll.append(node('div',{id:'reading-end-space','aria-hidden':'true'}));
-  const pagination=node('div',{class:'pagination'},button('↑ 更早一页',async()=>{await flushReading(false);model.offset=Math.max(0,model.offset-model.limit);await loadReading();},'',{id:'previous-page',disabled:model.offset===0}),node('span',{id:'page-position'},model.total?`${model.offset+1}–${Math.min(model.offset+model.messages.length,model.total)} / ${model.total}`:'暂无记录'),button('更多消息 ↓',async()=>{await flushReading(false);model.offset+=model.messages.length || model.limit;await loadReading();},'',{id:'next-page',disabled:model.offset+model.messages.length>=model.total}));
-  const unread=node('div',{id:'new-messages-notice',class:'new-messages-notice','aria-live':'polite'},node('span',{id:'new-messages-count'}),button('加载到最新',jumpToLatest,'primary small',{id:'jump-latest'}));
-  const navigation=node('div',{class:'reading-navigation'},unread,pagination,button('最新已读位置',jumpToLatestRead,'soft small',{id:'jump-latest-read',title:'回到本群最新读到的消息；不会将后面的未读消息标为已读'}));
+  const unread=node('div',{id:'new-messages-notice',class:'new-messages-notice','aria-live':'polite'},node('span',{id:'new-messages-count'}));
+  const nextPage=node('div',{class:'next-page-group'},unread,button('更多消息 ↓',async()=>{await flushReading(false);model.offset+=model.messages.length || model.limit;await loadReading();},'',{id:'next-page',disabled:model.offset+model.messages.length>=model.total}));
+  const pagination=node('div',{class:'pagination'},button('↑ 更早一页',async()=>{await flushReading(false);model.offset=Math.max(0,model.offset-model.limit);await loadReading();},'',{id:'previous-page',disabled:model.offset===0}),node('span',{id:'page-position'},model.total?`${model.offset+1}–${Math.min(model.offset+model.messages.length,model.total)} / ${model.total}`:'暂无记录'),nextPage);
+  const navigation=node('div',{class:'reading-navigation'},button('加载到最新',jumpToLatest,'primary small',{id:'jump-latest'}),pagination,button('最新已读位置',jumpToLatestRead,'soft small',{id:'jump-latest-read',title:'回到本群最新读到的消息；不会将后面的未读消息标为已读'}));
   reconcileChildren(host,[filter,meta,scroll,selectionBar(),node('footer',{class:'reading-footer','aria-label':'翻页与阅读位置'},navigation)]);
   model.renderedReading={accountId:model.state.account.id,epoch:model.accountEpoch,groupId:model.groupId,version:model.queryVersion,filtered:hasFilters()};
   updateReadingSpace();updateReadChrome();
@@ -1116,7 +1179,7 @@ async function sync(history) {
   try {
     const result=await api('sync',{groupId,history});
     await refreshState({background:true});await refreshReadingIncrementally(true);model.preview=null;
-    toast(syncDisplay.manualResult({history,added:result?.count,group:model.state.groups.find(g=>String(g.id)===String(groupId))}));
+    toast(syncDisplay.manualResult({history,added:result?.count,offlineMessages:model.state.settings.offlineMessages,group:model.state.groups.find(g=>String(g.id)===String(groupId))}));
   } catch(error) {
     // A failed later page can still have saved progress. Display that state,
     // but preserve the original failure rather than announcing success.
@@ -1127,12 +1190,13 @@ async function sync(history) {
 }
 function renderSyncStatus() {
   const line=$('sync-status-line');if(!line || accountKind()!=='weibo')return;
-  const status=model.syncStatus,automatic=syncDisplay.automaticStatus(status,{formatTime:time=>fmt(time)}),group=syncDisplay.groupStatus(currentGroup());
+  const status=model.syncStatus,automatic=syncDisplay.automaticStatus(status,{formatTime:time=>fmt(time)}),group=syncDisplay.groupStatus(currentGroup(),{offlineMessages:model.state.settings.offlineMessages});
+  model.offlineDialogRefresh?.();model.offlineInlineRefresh?.();
   line.textContent=automatic.text;line.title=automatic.text;line.classList.toggle('has-error',automatic.tone==='warning');
   const gap=$('sync-gap-line');if(gap){gap.textContent=group.text;gap.title=group.text;gap.classList.toggle('has-error',group.tone==='warning');}
   const toggle=$('auto-sync-toggle');if(toggle)toggle.textContent=automatic.toggleLabel;
   const rateWait=status?.errorCode==='RATE_LIMIT'&&Number.isFinite(status?.nextRunAt)&&status.nextRunAt>Date.now();
-  const latest=$('sync-latest');if(latest){latest.textContent=group.actionLabel;latest.disabled=cleanupWorkActive()||model.manualSync||!!status?.running||rateWait;}
+  const latest=$('sync-latest');if(latest){latest.textContent=group.actionLabel;latest.title='检查新消息，并按离线消息设置补齐；不跳转阅读位置。';latest.disabled=cleanupWorkActive()||model.manualSync||!!status?.running||rateWait;}
   const history=$('sync-history');if(history)history.disabled=cleanupWorkActive()||model.manualSync||!!status?.running||rateWait;
 }
 async function toggleAutoSync() {model.syncStatus=await api('sync.configure',{enabled:model.syncStatus?.enabled===false||!!model.syncStatus?.blocked});renderSyncStatus();}
@@ -1520,6 +1584,42 @@ function aiEndpointIdentity(value) {
     return url.href;
   }catch{return '';}
 }
+function showOfflineSettings() {
+  const accountId=model.state.account?.id,epoch=model.accountEpoch;
+  const expectedOfflineMessages=syncDisplay.offlinePolicy(model.state.settings.offlineMessages);
+  let saving=false;
+  const mode=node('select',{id:'offline-mode','aria-label':'离线消息补齐方式'},
+    ...[['none','不补齐'],['date','补齐至选定日期'],['auto','自动补齐至与本地衔接（默认）']].map(([value,label])=>node('option',{value,selected:expectedOfflineMessages.mode===value},label)));
+  const date=node('input',{id:'offline-date',type:'date',max:new Date(Date.now()+8*3600000).toISOString().slice(0,10),value:expectedOfflineMessages.date||'','aria-label':'补齐起始日期（北京时间）'});
+  const dateField=field('选定日期（北京时间）',date,'向前回溯至该日 00:00（含），不读取更早的离线消息。');
+  const note=node('p',{id:'offline-save-note',class:'form-description',role:'status','aria-live':'polite'});
+  const current=()=>accountId===model.state.account?.id&&epoch===model.accountEpoch&&!model.switching&&!model.closing;
+  const busy=()=>model.offlineSaving||model.manualSync||!!model.syncStatus?.running||cleanupWorkActive();
+  const save=button('保存',async()=>{
+    if(saving||!current()||busy())return;
+    const policy=syncDisplay.offlinePolicy({mode:mode.value,date:date.value});
+    if(policy.mode!==mode.value||policy.mode==='date'&&(!syncDisplay.validOfflineDate(date.value)||date.value>date.max))return;
+    saving=true;update();
+    try {
+      const snapshot=await api('sync.offline.configure',{accountId,offlineMessages:policy,expectedOfflineMessages});
+      if(!current())return;
+      model.state=snapshot;model.syncRevision=null;saving=false;close();renderSyncStatus();toast('离线消息设置已保存；已保存的消息与阅读位置保持不变。');
+    } finally {saving=false;if(dialog.open&&dialog.dataset.context==='offline-settings')update();}
+  },'primary',{id:'offline-save'});
+  function update(){
+    const valid=['auto','none'].includes(mode.value)||mode.value==='date'&&syncDisplay.validOfflineDate(date.value)&&date.value<=date.max;
+    dateField.hidden=mode.value!=='date';date.disabled=saving||mode.value!=='date';mode.disabled=saving;
+    save.disabled=saving||!current()||busy()||!valid;
+    save.textContent=saving?'正在保存…':'保存';
+    note.textContent=!current()?'账号已变化，请关闭后重新打开设置。':saving?'正在保存，请稍候。':busy()?'同步或本地数据操作正在进行，结束后可保存。':!valid?'请选择有效日期，不能晚于北京时间今天。':'仅影响当前账号；自动更新开关保持不变，不删除已保存的消息。更早历史仍可手动读取。';
+    $('modal-close').disabled=saving;dialog.querySelector('.modal-head button').disabled=saving;
+  }
+  function close(){if(saving)return;model.offlineDialogRefresh=null;closeModal();}
+  const dialog=modal('离线消息',node('div',{},field('补齐方式',mode),dateField,note),[save],{onClose:close});
+  dialog.dataset.context='offline-settings';model.offlineDialogRefresh=()=>{if(dialog.open&&dialog.dataset.context==='offline-settings')update();else model.offlineDialogRefresh=null;};
+  mode.addEventListener('change',update);date.addEventListener('input',update);date.addEventListener('change',update);update();
+}
+
 function showSettings(restoredDraft) {
   const settings=model.state.settings,creds=model.state.credentials,accountId=model.state.account?.id;
   // Draft credentials stay in this dialog closure and never enter the shared model.
@@ -1530,17 +1630,40 @@ function showSettings(restoredDraft) {
     settings.endpoint?node('p',{id:'ai-current-endpoint',class:'ai-settings-address'},settings.endpoint):null,
     button(settings.endpoint || settings.model?'编辑自定义模型':'添加自定义模型',()=>showAiConfiguration(draft),'full',{id:'configure-ai'}));
   const body=node('div',{},node('p',{class:'form-description'},'凭据由 Windows 保护并绑定当前本地工作区。已保存的 Key 不会回显。AI 模型与 Notion 连接分别保存。'),aiDetails,
+    node('div',{class:'form-section'},node('h3',{},'启动设置'),button('开机自启动',()=>showStartupSettings(draft),'full',{id:'configure-startup'})),
     node('div',{class:'form-section'},node('h3',{},'主题与外观颜色'),node('p',{class:'form-description'},'选择界面主题，或独立调整聊天背景、成员昵称与消息框颜色；仅影响当前账号。'),button('编辑主题与颜色',()=>showAppearanceSettings(draft),'full',{id:'configure-appearance',disabled:!accountId})),
     node('div',{class:'form-section'},node('h3',{},'Notion 连接'),node('p',{class:'form-description'},'使用你自己的 Notion integration，并在 Notion 页面中授予它访问权限。保存设置不会写入任何页面。'),field('Integration token',notionToken,creds.notion?'已保存的 Token 留空保持不变。':null)),
     node('div',{class:'form-section'},check('清除当前账号保存的 AI 与 Notion 凭据',draft.deleteSecrets,value=>draft.deleteSecrets=value,{id:'delete-secrets'})),
     node('div',{class:'source-note'},'没有后台定时发送。只有点击并确认 AI 总结或 Notion 导出后，选定内容才会发送到对应服务。'),
-    node('div',{class:'form-section'},node('h3',{},'本地数据'),node('p',{class:'caption'},'按群和北京时间筛选，先预览保留规则，再将消息移入可恢复的本地回收区。'),button('管理本地消息与回收区',()=>{draft.notionToken='';notionToken.value='';return showMessageCleanup();},'full',{id:'manage-local-data'})),
+    node('div',{class:'form-section'},node('h3',{},'本地数据'),node('p',{class:'caption'},'按群和北京时间预览删除范围，或重新获取主动删除的时段。'),button('本地数据管理',()=>{draft.notionToken='';notionToken.value='';return showMessageCleanup();},'full',{id:'manage-local-data'})),
     accountKind()==='weibo'?node('div',{class:'form-section'},button('退出微博网页登录',async()=>{await api('logout');draft.notionToken='';notionToken.value='';closeModal();await refreshState();renderInspector();toast('已退出微博会话。本机保存的记录仍然保留。');},'danger')):null);
   if(model.state.credentialError)body.append(node('div',{class:'warning'},model.state.credentialError),check('重新初始化无法解密的旧凭据（需要重新登录微博）',draft.resetUnreadable,value=>draft.resetUnreadable=value));
   modal('设置与连接',body,[button('保存设置',async()=>{
     model.state=await api('settings.save',{notionToken:notionToken.value,deleteSecrets:draft.deleteSecrets,resetUnreadable:draft.resetUnreadable});
     draft.notionToken='';notionToken.value='';closeModal();renderSidebar();renderHeader();renderInspector();toast('设置已保存在本机。');
   },'primary',{id:'save-settings'})],{onClose:()=>{draft.notionToken='';notionToken.value='';closeModal();}});
+}
+async function showStartupSettings(settingsDraft) {
+  const epoch=model.accountEpoch,accountId=model.state.account?.id;
+  const origin=$('modal').querySelector('#configure-startup');
+  const state=await api('startup.get');
+  if(epoch!==model.accountEpoch||accountId!==model.state.account?.id||!$('modal').open||$('modal').querySelector('#configure-startup')!==origin)return;
+  let enabled=state.enabled,saving=false;
+  const note=node('p',{id:'startup-note',class:'caption'},!state.supported?'开机启动仅支持 Windows 安装版。':state.blocked?'已登记，但 Windows 已禁用此启动项。可在系统的启动应用中开启。':'登录 Windows 后自动打开当前安装的微阅。');
+  const input=node('input',{id:'startup-enabled',type:'checkbox',checked:enabled,disabled:!state.supported,onchange:event=>enabled=event.target.checked});
+  const back=()=>{if(saving)return;if(epoch===model.accountEpoch&&accountId===model.state.account?.id)showSettings(settingsDraft);else closeModal();};
+  const save=button('保存',async()=>{
+    if(saving||!state.supported)return;
+    saving=true;input.disabled=true;save.disabled=true;setClosing(true);
+    try {
+      const result=await api('startup.save',{enabled});
+      enabled=result.enabled;input.checked=enabled;
+      note.textContent=result.blocked?'已登记，但 Windows 已禁用此启动项。可在系统的启动应用中开启。':enabled?'已开启开机自启动。':'已关闭开机自启动。';
+    } catch(error){note.textContent=error.message||'保存失败，请重试。';}
+    finally {saving=false;input.disabled=!state.supported;save.disabled=!state.supported;setClosing(false);}
+  },'primary',{id:'save-startup',disabled:!state.supported});
+  const dialog=modal('开机自启动',node('div',{},node('label',{class:'check-row'},input,node('span',{},'登录 Windows 后自动启动')),note),[save],{closeLabel:'返回设置',onClose:back});
+  function setClosing(value){const head=dialog.querySelector('.modal-head button');if(head)head.disabled=value;$('modal-close').disabled=value;}
 }
 function showAppearanceSettings(settingsDraft) {
   const accountId=model.state.account?.id,epoch=model.accountEpoch;
@@ -1550,17 +1673,28 @@ function showAppearanceSettings(settingsDraft) {
     onSaved:state=>{if(state.account?.id!==accountId)throw new Error('账号已切换，外观结果未应用。');model.state.settings.appearance=appearance.normalizeAppearance(state.settings?.appearance);model.state.settings.interfaceTheme=window.WeiyueInterfaceTheme.normalizeTheme(state.settings?.interfaceTheme);applyAppearance(model.state.settings.appearance);window.WeiyueInterfaceTheme.apply(document.body,model.state.settings.interfaceTheme);}
   });
 }
+const cleanupAutoDismiss=window.WeiyueCleanupProgress.createCompletionAutoDismiss({
+  getCurrent:()=>({operation:model.cleanupOperation,context:{accountId:model.state.account?.id,epoch:model.accountEpoch,closing:model.closing,switching:model.switching,
+    interacting:model.view==='read'&&!!(model.messageDrag?.isDragging()||model.pointerScrolling||model.pagingPointer||model.pagingKeyboard||model.pagingWheel||model.touchY!==null||model.readingActivity)}}),
+  onDismiss:dismissCleanupProgress
+});
+function dismissCleanupProgress(operation){
+  if(model.cleanupOperation!==operation||operation.running)return;
+  cleanupAutoDismiss.cancel();
+  model.cleanupOperation=null;renderCleanupProgress();
+}
 function cleanupWorkActive(){return model.cleanupOperation?.running===true;}
 function renderCleanupProgress(){
   const host=$('cleanup-progress'),operation=model.cleanupOperation;
-  if(!host)return;
-  if(!operation||operation.accountId!==model.state.account?.id){host.hidden=true;return;}
+  if(!host){cleanupAutoDismiss.cancel();return;}
+  cleanupAutoDismiss.update();
+  if(!operation||!window.WeiyueCleanupProgress.matchesContext(operation,{accountId:model.state.account?.id,epoch:model.accountEpoch,closing:model.closing})){host.hidden=true;return;}
   const text=window.WeiyueCleanupProgress.describe(operation.status);
   host.hidden=false;host.dataset.phase=operation.status.phase;host.dataset.running=String(operation.running);
   host.dataset.kind=operation.kind;host.dataset.groupId=operation.groupId;
   const actions=[];
   if(operation.refreshError)actions.push(button('重试刷新',()=>refreshCleanupOutcome(operation),'small',{id:'cleanup-progress-retry'}));
-  if(!operation.running)actions.push(button('收起',()=>{if(model.cleanupOperation===operation){model.cleanupOperation=null;renderCleanupProgress();}},'text small',{id:'cleanup-progress-dismiss'}));
+  if(!operation.running)actions.push(button('收起',()=>dismissCleanupProgress(operation),'text small',{id:'cleanup-progress-dismiss'}));
   host.replaceChildren(node('div',{class:'cleanup-progress-copy'},node('span',{id:'cleanup-progress-label'},`${groupName(operation.groupId)} · ${text.label}`),node('span',{id:'cleanup-progress-detail'},text.detail)),node('div',{class:'cleanup-progress-actions'},actions));
 }
 async function refreshCleanupOutcome(operation){
@@ -1616,7 +1750,8 @@ async function performCleanupOperation(spec){
   model.cleanupStarting=true;
   try{await flushReading(false);if(spec.accountId!==model.state.account?.id||model.closing)throw new Error('账号已变化，尚未提交清理。');}
   catch(error){model.cleanupStarting=false;throw error;}
-  const operation={...spec,epoch:model.accountEpoch,running:true,polling:false,refreshError:false,
+  const requestId='cleanup-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+  const operation={...spec,requestId,epoch:model.accountEpoch,running:true,polling:false,refreshError:false,
     status:{kind:spec.kind,phase:'submitting',processed:null,total:null,running:true,detail:'正在提交；确认成功后才更新消息列表。'}};
   model.cleanupOperation=operation;model.cleanupStarting=false;invalidateReadingIntent();autoPage.reset();
   const rendered=model.renderedReading,currentRendered=rendered&&rendered.accountId===model.state.account?.id&&rendered.epoch===model.accountEpoch&&rendered.groupId===model.groupId&&rendered.version===model.queryVersion;
@@ -1626,8 +1761,8 @@ async function performCleanupOperation(spec){
     if(!operation.running||operation.polling||model.closing||operation.accountId!==model.state.account?.id)return;
     operation.polling=true;
     try{
-      const status=await window.api.call('messages.cleanup.status',{accountId:operation.accountId});
-      if(operation.running&&status?.accountId===operation.accountId&&status.groupId===operation.groupId&&status.kind===operation.kind&&status.jobId){
+      const status=await window.api.call('messages.cleanup.status',{accountId:operation.accountId,requestId:operation.requestId});
+      if(operation.running&&status?.requestId===operation.requestId&&status?.accountId===operation.accountId&&status.groupId===operation.groupId&&status.kind===operation.kind&&status.jobId){
         operation.status={...status};if(model.cleanupOperation===operation)renderCleanupProgress();
       }
     }catch{/* The final apply Promise is authoritative; polling cannot invent failure. */}
@@ -1637,20 +1772,23 @@ async function performCleanupOperation(spec){
   try{
     // Fixed account payload and raw bridge keep an old job's final result from
     // being mistaken for a failure merely because the visible account changed.
-    const result=await window.api.call(spec.action,spec.payload);
+    const result=await window.api.call(spec.action,{...spec.payload,requestId:operation.requestId});
     const count=spec.kind==='restore'?result?.restoredCount:spec.kind==='purge'?result?.purgedCount:result?.deletedCount;
     const applied=spec.kind==='restore'?result?.restored===true:spec.kind==='purge'?result?.purged===true:result?.deleted===true;
-    if(result?.accountId!==spec.accountId||result.groupId!==spec.groupId||!applied||count!==spec.total){
+    if(result?.accountId!==spec.accountId||result.groupId!==spec.groupId||!applied||count!==spec.total||(spec.expectedMarkedReadCount!==undefined&&result.markedReadCount!==spec.expectedMarkedReadCount)){
       operation.status={kind:spec.kind,phase:'uncertain',running:false,detail:'返回结果无法核对，操作结果待核实。请重新打开本地数据管理检查，勿重复提交。'};
       operation.uncertain=true;return;
     }
-    operation.result=result;operation.running=false;operation.status={kind:spec.kind,phase:'completed',processed:count,total:count,running:false,detail:spec.success};
+    if(spec.successResult)operation.success=spec.successResult(result);
+    operation.result=result;operation.running=false;operation.status={kind:spec.kind,phase:'completed',processed:count,total:count,running:false,detail:operation.success};
     await refreshCleanupOutcome(operation);
   }catch(error){
     let status=null;
-    try{if(operation.accountId===model.state.account?.id)status=await window.api.call('messages.cleanup.status',{accountId:operation.accountId});}catch{}
-    const confirmedFailure=status?.accountId===operation.accountId&&status.groupId===operation.groupId&&status.kind===operation.kind&&status.phase==='failed'&&status.commitState==='not-committed';
-    operation.status={kind:spec.kind,phase:confirmedFailure?'failed':'uncertain',running:false,detail:confirmedFailure?`${status.error||error.message} 当前操作未提交，原数据保持。`:`${error.message} 结果尚待核实，请检查本地数据管理，勿重复提交。`};
+    try{if(operation.accountId===model.state.account?.id)status=await window.api.call('messages.cleanup.status',{accountId:operation.accountId,requestId:operation.requestId});}catch{}
+    const matched=status?.requestId===operation.requestId&&status?.accountId===operation.accountId&&status.groupId===operation.groupId;
+    const notStarted=matched&&status.phase==='not-started'&&status.commitState==='not-committed';
+    const confirmedFailure=notStarted||(matched&&status.kind===operation.kind&&status.phase==='failed'&&status.commitState==='not-committed');
+    operation.status={kind:spec.kind,phase:notStarted?'not-started':confirmedFailure?'failed':'uncertain',running:false,detail:confirmedFailure?`${status.error||error.message} 当前操作未提交，原数据保持。`:`${error.message} 结果尚待核实，请检查本地数据管理，勿重复提交。`};
   }finally{
     clearInterval(timer);operation.running=false;renderCleanupProgress();renderSyncStatus();
     model.syncRevision=null;scheduleReadingRefresh();
@@ -1661,7 +1799,7 @@ async function showMessageCleanup(){
   const accountId=model.state.account?.id,epoch=model.accountEpoch;
   await flushReading(false);
   return window.WeiyueCleanup.open({api,node,button,field,check,modal,closeModal,toast,filters,accountId,groups:model.state.groups,groupId:model.groupId,
-    isCurrent:()=>accountId===model.state.account?.id&&epoch===model.accountEpoch&&!model.closing,performOperation:performCleanupOperation});
+    isCurrent:()=>accountId===model.state.account?.id&&epoch===model.accountEpoch&&!model.closing,onRecoveryApplied:()=>refreshState({background:true}),performOperation:performCleanupOperation});
 }
 async function showAiConfiguration(settingsDraft) {
   const dialog=$('modal'),owner=dialog.firstChild,epoch=model.accountEpoch,accountId=model.state.account?.id;
@@ -1875,8 +2013,9 @@ window.addEventListener('pointercancel',()=>invalidateReadingIntent());
 window.addEventListener('blur',()=>{invalidateReadingIntent();void flushReading(false).catch(()=>{});});
 window.addEventListener('focus',()=>{scheduleRead();void pollUpdates();});
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')void flushReading(false).catch(()=>{});else scheduleRead();});
+window.addEventListener('beforeunload',()=>cleanupAutoDismiss.dispose());
 window.api?.onBeforeClose?.(()=>{
-  if(model.closing)return;model.closing=true;clearInterval(model.pollTimer);
+  if(model.closing)return;model.closing=true;cleanupAutoDismiss.dispose();clearInterval(model.pollTimer);
   void (async()=>{try{await flushReading(false);await model.readWrite.catch(()=>{});}catch(error){reportError(error);}finally{await api('window.closeReady').catch(()=>{});}})();
 });
 document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key==='f'&&!$('modal').open){event.preventDefault();($('message-search') || $('bookmark-search'))?.focus();}});

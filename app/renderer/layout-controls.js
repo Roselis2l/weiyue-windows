@@ -10,7 +10,7 @@
       leftPanel.hidden=state.leftCollapsed;rightPanel.hidden=state.rightCollapsed;
       for(const [side,button] of [['left',leftButton],['right',rightButton]]){
         const collapsed=state[side+'Collapsed'],text=(collapsed?'展开':'收起')+(side==='left'?'左栏':'右栏');
-        button.textContent=text;button.title=text;button.setAttribute('aria-label',text);button.setAttribute('aria-expanded',String(!collapsed));
+        button.textContent=side==='left'?(collapsed?'>':'<'):(collapsed?'<':'>');button.title=text;button.setAttribute('aria-label',text);button.setAttribute('aria-expanded',String(!collapsed));
       }
       afterChange(context);
     }

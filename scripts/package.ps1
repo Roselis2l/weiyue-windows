@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
@@ -18,7 +18,7 @@ $SourceZip = Join-Path $DistributionRoot 'WeiYue-Source.zip'
 $ArchiveName = 'electron-v' + $ElectronVersion + '-win32-x64.zip'
 $ArchivePath = Join-Path $ProjectRoot ('vendor\' + $ArchiveName)
 $ChecksumsPath = Join-Path $ProjectRoot 'vendor\SHASUMS256.txt'
-$SourceWhitelist = @('app', 'tests', 'scripts', 'docs', 'package.json', 'README.md', 'LICENSE', 'CONTRACT.md')
+$SourceWhitelist = @('app', 'tests', 'scripts', 'docs', 'package.json', 'README.md', 'LICENSE', 'CONTRACT.md', 'CHANGELOG.md', 'runtime-lock.json', '.gitignore', '.gitattributes')
 
 function Assert-SafeSourceTree([string]$Path) {
     $Item = Get-Item -LiteralPath $Path -Force

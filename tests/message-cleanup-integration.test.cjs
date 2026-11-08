@@ -91,15 +91,16 @@ test('recycle/restart/continuous sync preserve the raw frontier, unread/anchors 
   assert.deepEqual(fs.readFileSync(synced._file('synthetic-b')), otherBytes);
 });
 
-test('removing a saved export source makes recycling conservative across reload without touching the journal', t => {
+test('removed export source no longer blocks recycling across reload; journal and other protections survive', t => {
   const f = fixture(t), initialJournal = f.store.get('synthetic-a').exports;
   assert.equal(f.store.removeSummary('synthetic-a', f.summary.id, 'g').deleted, true);
   const store = new Store(f.root), before = fs.readFileSync(store._file('synthetic-a'));
   const preview = store.previewMessageCleanup('synthetic-a', { ...payload, retainSummaryRanges: false });
-  assert.equal(preview.deleteCount, 0); assert.equal(preview.reasonCounts.uncertainExport, 7);
+  assert.equal(preview.deleteCount, 4); assert.equal(preview.reasonCounts.uncertainExport, undefined);
   assert.equal(preview.warnings.length, 1);
   const result = store.applyMessageCleanup('synthetic-a', preview.selection, preview.fingerprint);
-  assert.equal(result.deleted, false);
+  assert.equal(result.deletedCount, 4);
   assert.deepEqual(store.get('synthetic-a').exports, initialJournal);
-  assert.deepEqual(fs.readFileSync(store._file('synthetic-a')), before);
+  assert.notDeepEqual(fs.readFileSync(store._file('synthetic-a')), before);
+  assert.deepEqual(store.get('synthetic-a').messages.filter(m => m.localDeletion).map(m => m.id), ['102', '103', '105', '106']);
 });

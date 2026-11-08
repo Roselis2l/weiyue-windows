@@ -1,4 +1,5 @@
 'use strict';
+const {normalizeOfflineMessages,validateOfflineMessages}=require('./offline-messages.cjs');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -8,6 +9,7 @@ const {normalizeAttachment,mergeAttachments,attachmentSearchText}=require('./att
 const {normalizeReferences,mergeReferences,normalizeQuotePreview}=require('./message-references.cjs');
 const {normalizeSystemNotice}=require('./system-notices.cjs');
 const messageCleanup = require('./message-cleanup.cjs');
+const historyBoundary = require('./history-boundary.cjs');
 const recallProtocol = require('./message-recalls.cjs');
 const editionPolicy = require('./edition-policy.cjs');
 
@@ -251,16 +253,28 @@ function normalizeGroup(group) {
   }
   if (group.syncProgress !== undefined) {
     const progress = record(group.syncProgress, '补扫进度');
-    if (!['backfill','joined','unresolved','blocked'].includes(progress.phase)) fail('补扫阶段无效');
+    if (!['backfill','joined','unresolved','blocked','paused','limited'].includes(progress.phase)) fail('补扫阶段无效');
     for (const key of ['added','pages']) if (!Number.isSafeInteger(progress[key]) || progress[key] < 0) fail('补扫计数必须是非负整数');
     normalized.syncProgress = {phase:progress.phase,added:progress.added,pages:progress.pages,
       scannedUntil:progress.scannedUntil === null ? null : timestamp(progress.scannedUntil, '补扫到达时间'),
       updatedAt:timestamp(progress.updatedAt, '补扫更新时间'),reason:stringValue(progress.reason,'补扫提示',1000,'')};
   }
+  if (group.offlineDateScan !== undefined) {
+    const scan=record(group.offlineDateScan,'Offline date scan');
+    const policy=validateOfflineMessages({mode:'date',date:scan.date});
+    if(scan.cursor!==null&&(typeof scan.cursor!=='string'||!/^[1-9][0-9]*$/.test(scan.cursor)||scan.cursor.length>256))fail('Invalid offline date cursor');
+    if(typeof scan.complete!=='boolean')fail('Invalid offline date completion');
+    normalized.offlineDateScan={date:policy.date,cursor:scan.cursor,complete:scan.complete,reachedDate:scan.reachedDate===true,unresolved:scan.unresolved===true,...(scan.cutoff===undefined?{}:{cutoff:timestamp(scan.cutoff,'日期补齐起点')}),arrivalAfterId:scan.arrivalAfterId===null?null:identifier(scan.arrivalAfterId),nextHead:scan.nextHead===true,...(scan.headPending?{headPending:normalizePendingRange(scan.headPending)}:{})};
+  }
+  if(group.offlineInitialPending!==undefined){if(typeof group.offlineInitialPending!=='boolean')fail('Invalid initial continuation');normalized.offlineInitialPending=group.offlineInitialPending;}
   if (group.syncNext !== undefined) {
     if (!['head','gap'].includes(group.syncNext)) fail('补扫调度状态无效');
     normalized.syncNext=group.syncNext;
   }
+  if(group.historyBoundary!==undefined)normalized.historyBoundary=historyBoundary.normalizeBoundary(group.historyBoundary);
+  for(const field of ['historyDeletedRanges','historyRestoreRanges'])if(group[field]!==undefined)normalized[field]=historyBoundary.normalizeRanges(group[field]);
+  if(group.historyRecovery!==undefined)normalized.historyRecovery=historyBoundary.normalizeRecovery(group.historyRecovery);
+  if(group.historyRevision!==undefined){if(!Number.isSafeInteger(group.historyRevision)||group.historyRevision<0)fail('历史边界版本无效。');normalized.historyRevision=group.historyRevision;}
   if (group.coverage !== undefined) {
     const coverage = record(group.coverage, '覆盖范围');
     const oldest = timestamp(coverage.oldest, '最早时间'), newest = timestamp(coverage.newest, '最新时间');
@@ -317,10 +331,11 @@ function validateState(state, expectedId) {
     return group;
   }) };
   assertJson(state);
-  if (![SCHEMA_VERSION,RECYCLE_SCHEMA_VERSION,PURGE_SCHEMA_VERSION,CONTENT_SCHEMA_VERSION].includes(state.schemaVersion)) fail('本地数据版本不受支持，请保留原文件并升级应用');
+  if (![SCHEMA_VERSION,RECYCLE_SCHEMA_VERSION,PURGE_SCHEMA_VERSION,CONTENT_SCHEMA_VERSION,5].includes(state.schemaVersion)) fail('本地数据版本不受支持，请保留原文件并升级应用');
   const account = normalizeAccount(state.account);
   if (account.id !== expectedId) fail('账号数据不匹配');
   const groups = array(state.groups, '群列表', 10000).map(normalizeGroup);
+  if(groups.some(g=>g.historyBoundary||g.historyDeletedRanges||g.historyRestoreRanges||g.historyRecovery)&&state.schemaVersion<5)fail('历史边界需要受支持的数据版本，请升级应用。');
   const groupIds = new Set(groups.map(group => group.id));
   if (groupIds.size !== groups.length) fail('群列表含重复 ID');
   const messages = array(state.messages, '消息').map(message => {
@@ -384,7 +399,7 @@ function validateState(state, expectedId) {
   // batch does not downgrade the account. Normalize early unreleased schema-1
   // recycle fixtures in memory too; reading alone never rewrites their bytes.
   const schemaVersion = state.schemaVersion>=PURGE_SCHEMA_VERSION ? state.schemaVersion : messageTrash.length ? RECYCLE_SCHEMA_VERSION : state.schemaVersion;
-  return { ...state, schemaVersion, account, groups, messages, bookmarks, readPositions, readStates, importantMembers, messageTrash,
+  return { ...state, settings:{...state.settings,...(state.settings.offlineMessages===undefined?{}:{offlineMessages:normalizeOfflineMessages(state.settings.offlineMessages)})}, schemaVersion, account, groups, messages, bookmarks, readPositions, readStates, importantMembers, messageTrash,
     ...(state.messageTombstones !== undefined || schemaVersion>=PURGE_SCHEMA_VERSION ? {messageTombstones} : {}) };
 }
 
@@ -554,7 +569,15 @@ class Store {
     let inserted = 0;
     this.update(accountId, state => {
       const groupMap = new Map(state.groups.map(group => [group.id, group]));
-      for (const group of groups) groupMap.set(group.id, { selected: false, ...groupMap.get(group.id), ...group });
+      for (const group of groups) {
+        const old=groupMap.get(group.id);
+        const merged={selected:false,...old,...group};
+        if(old)for(const field of ['historyBoundary','historyDeletedRanges','historyRestoreRanges','historyRevision']){if(Object.hasOwn(old,field))merged[field]=old[field];else delete merged[field];}
+        if(old&&(old.historyRevision||0)!==(group.historyRevision||0)){
+          for(const field of ['latestPendingRanges','latestPending','nextCursor','historyExhausted','offlineDateScan','offlineInitialPending','syncNext','syncProgress','coverage','historyRecovery']){if(Object.hasOwn(old,field))merged[field]=old[field];else delete merged[field];}
+        }
+        groupMap.set(group.id,merged);
+      }
       const messageMap = new Map(state.messages.map(message => [messageKey(message), message]));
       const tombstones=new Set((state.messageTombstones||[]).map(messageKey));
       const tombstoneMap=new Map((state.messageTombstones||[]).map(message=>[messageKey(message),message]));
@@ -578,7 +601,9 @@ class Store {
       for (const message of messages) {
         if (!groupMap.has(message.groupId)) fail('导入消息所属群不存在，请在 groups 中提供群信息');
         const key = messageKey(message);
-        if(tombstones.has(key))continue;
+        const explicitRecovery=historyBoundary.contains(groupMap.get(message.groupId).historyRestoreRanges,message.time);
+        if((tombstones.has(key)&&!explicitRecovery)||(!messageMap.has(key)&&historyBoundary.suppress(groupMap.get(message.groupId),message)))continue;
+        if(tombstones.has(key))tombstones.delete(key);
         if (!messageMap.has(key)) {
           inserted++;
           const readState = state.readStates[message.groupId], floor = arrivalFloors.get(message.groupId);
@@ -590,6 +615,7 @@ class Store {
         messageMap.set(key, mergeRichMessage(messageMap.get(key), message));
       }
       state.groups = [...groupMap.values()]; state.messages = [...messageMap.values()].sort(compareMessages);
+      if(state.messageTombstones)state.messageTombstones=state.messageTombstones.filter(m=>tombstones.has(messageKey(m)));
     });
     return inserted;
   }
@@ -615,6 +641,7 @@ class Store {
     }
     return { messages: clone(found.slice(offset, end)), total: found.length, ...(hasStart || hasAfter || hasBefore ? {offset} : {}) };
   }
+  applyHistoryRecovery(accountId,selection,fingerprint){const state=this.get(accountId);const result=historyBoundary.recoveryApply(state,selection,fingerprint);this._write(identifier(accountId),state);return result;}
   previewMessageCleanup(accountId, selection) {
     return messageCleanup.previewMessageCleanup(this.getSnapshot(accountId), selection);
   }

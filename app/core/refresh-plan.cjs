@@ -1,4 +1,5 @@
 'use strict';
+const {normalizeOfflineMessages,effectiveOfflineMessages,matchesOfflineScan}=require('./offline-messages.cjs');
 
 // These are local scheduling bounds, not a claim about Weibo's service limits.
 // Failure backoff and server cooldowns remain owned by AutoSync separately.
@@ -68,7 +69,8 @@ class RefreshPlan {
     return completedAt;
   }
 
-  plan(groups, preferredGroupId) {
+  plan(groups, preferredGroupId, offlineMessages) {
+    const offline=normalizeOfflineMessages(offlineMessages);
     if (!Array.isArray(groups)) throw new TypeError('自动刷新群列表无效。');
     const time = this.time(), selected = [], seen = new Set();
     for (const group of groups) {
@@ -86,14 +88,15 @@ class RefreshPlan {
     // Previously unresolved ranges must not be probed every foreground tick.
     // This separate completion clock only records retries of those ranges:
     // neither frequent heads nor ordinary pending pages postpone their turn.
-    const unresolvedDue = selected.filter(group => pendingRanges(group).some(range => range.status === 'unresolved') &&
+    const needsRetry=group=>{const policy=effectiveOfflineMessages(group,offline);return (!group.historyRecovery?.complete&&group.historyRecovery?.unresolved)||(policy.mode==='date'?matchesOfflineScan(group.offlineDateScan,policy)&&(group.offlineDateScan.unresolved||group.offlineDateScan.headPending?.status==='unresolved'):policy.mode==='auto'&&pendingRanges(group).some(range => range.status==='unresolved'));};
+    const unresolvedDue = selected.filter(group => needsRetry(group) &&
       (!this.lastUnresolvedAt.has(group.id) || time - this.lastUnresolvedAt.get(group.id) >= UNRESOLVED_RETRY_INTERVAL_MS));
     unresolvedDue.sort((a, b) => (this.lastUnresolvedAt.get(a.id) ?? -1) - (this.lastUnresolvedAt.get(b.id) ?? -1));
     const retryUnresolvedGroupIds = unresolvedDue.map(group => group.id);
     // nextCursor alone only permits explicitly requested older history; it is
     // not evidence of an automatic latest-message gap or initial continuation.
     return {headGroupIds, retryUnresolvedGroupIds, hasWork: headGroupIds.length > 0 ||
-      retryUnresolvedGroupIds.length > 0 || selected.some(group => pendingRanges(group).some(range => range.status !== 'unresolved'))};
+      retryUnresolvedGroupIds.length > 0 || selected.some(group=>{const policy=effectiveOfflineMessages(group,offline);return (group.historyRecovery&&!group.historyRecovery.complete&&!group.historyRecovery.unresolved)||(policy.mode==='date'?(!matchesOfflineScan(group.offlineDateScan,policy)||(!group.offlineDateScan.complete&&!group.offlineDateScan.unresolved)||group.offlineDateScan.headPending?.status==='pending'):policy.mode==='auto'&&(group.offlineInitialPending||pendingRanges(group).some(range=>range.status!=='unresolved')));})};
   }
 }
 

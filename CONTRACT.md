@@ -1,6 +1,17 @@
 # 模块约定（共同实现）
 
-Version 1.1.27, GitHub edition. CommonJS / Node built-ins in the Electron main process; fixed local libheif-js and PDF.js assets are distributed with the app. No startup package installation or runtime CDN.
+Version 1.1.38, GitHub edition. CommonJS / Node built-ins in the Electron main process; fixed local libheif-js and PDF.js assets are distributed with the app. No startup package installation or runtime CDN.
+
+## Current deletion, history and startup contract (1.1.38)
+
+This section supersedes the older cleanup and HEVC limits below; versioned sections remain as implementation history.
+
+- New cleanup uses permanent deletion after preview/confirmation; the renderer no longer offers recycling. Existing trash batches remain recoverable or purgeable. Unknown export provenance does not protect an entire account, while known associations, bookmarks, summary references and selected members retain their protection. Unread defaults to retained; the explicit option marks only actually deleted unread records read.
+- Prefix deletion advances a per-group history boundary to the selected exclusive end, resets older scan state and revalidates the retained range. Mid-range deletion records a suppressed interval without moving the group boundary. Reading anchors relocate to a kept message. Synchronization and import honor both the boundary and suppressed ranges, including responses that started before a boundary change.
+- Explicit history recovery has a separate preview and single-use confirmation. It opens the selected interval for retrieval, preserves the group boundary, and uses a persisted bounded task. Platform availability still determines which records can be fetched. New boundary or recovery writes use account format 5; opening, previewing and cancelling do not migrate.
+- Offline settings remain auto, none, or a China-date lower limit. Automatic and manual historical work respect the per-group boundary; date mode uses the later lower limit. Status distinguishes retained-range gaps from intentionally deleted history.
+- Supported video declarations are corrected to the verified MP4/QuickTime container when compatible. Local HEVC conversion input is bounded to 100 MiB, 60 seconds, 4096 pixels per edge, 12 million pixels and 3600 source frames. Output stays below 64 MiB at up to 1280×720/24 fps; the outer timeout remains 120 seconds. Original bytes are preserved.
+- Startup settings use an explicit Windows-login startup switch. Defaults do not register a startup item; saving records the current executable and data location, with Windows-disabled state surfaced separately.
 
 Canonical message: `{id:string,groupId:string,senderId:string,senderName:string,text:string,time:number}` (epoch ms).
 Group: `{id:string,name:string,selected?:boolean,coverage?:{oldest:number,newest:number,complete:boolean,note:string}}`.
