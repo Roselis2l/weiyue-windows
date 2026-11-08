@@ -7,7 +7,9 @@ const history=require('./history-boundary.cjs');
 function operate(state,action,payload,{now=Date.now,onProgress=()=>{}}={}){
   if(!state.groups.some(g=>g.id===payload.groupId))throw Error('请选择有效的本地群聊。');
   let result,changed=false;
-  if(action==='info'){
+  if(action==='autoApply')return require('./auto-cleanup.cjs').autoApply(state,payload,{now,onProgress});
+  if(action==='autoPreview'){result=require('./auto-cleanup.cjs').autoPreview(state,payload.groupId,require('./auto-cleanup.cjs').normalizePolicy(payload.policy),now(),{onProgress});}
+  else if(action==='info'){
     let oldest=null,newest=null,activeCount=0,deletedCount=0;const members=new Map();
     for(const m of state.messages){if(m.groupId!==payload.groupId)continue;members.set(m.senderId,m.senderName);if(m.localDeletion){deletedCount++;continue;}activeCount++;oldest=oldest===null?m.time:Math.min(oldest,m.time);newest=newest===null?m.time:Math.max(newest,m.time);}
     const g=state.groups.find(g=>g.id===payload.groupId);

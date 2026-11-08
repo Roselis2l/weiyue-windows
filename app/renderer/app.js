@@ -1629,41 +1629,23 @@ function showSettings(restoredDraft) {
     node('p',{id:'ai-current-model'},settings.model?aiProviderName(settings.aiProviderId || 'custom')+' · '+settings.model:'添加你自己的模型配置'),
     settings.endpoint?node('p',{id:'ai-current-endpoint',class:'ai-settings-address'},settings.endpoint):null,
     button(settings.endpoint || settings.model?'编辑自定义模型':'添加自定义模型',()=>showAiConfiguration(draft),'full',{id:'configure-ai'}));
+  const startupInput=node('input',{id:'startup-enabled',type:'checkbox',disabled:true});
+  const startupNote=node('p',{id:'startup-note',class:'caption',role:'status','aria-live':'polite'});
   const body=node('div',{},node('p',{class:'form-description'},'凭据由 Windows 保护并绑定当前本地工作区。已保存的 Key 不会回显。AI 模型与 Notion 连接分别保存。'),aiDetails,
-    node('div',{class:'form-section'},node('h3',{},'启动设置'),button('开机自启动',()=>showStartupSettings(draft),'full',{id:'configure-startup'})),
+    node('div',{class:'form-section'},node('label',{class:'check-row'},startupInput,node('span',{},'开机自启动')),startupNote),
     node('div',{class:'form-section'},node('h3',{},'主题与外观颜色'),node('p',{class:'form-description'},'选择界面主题，或独立调整聊天背景、成员昵称与消息框颜色；仅影响当前账号。'),button('编辑主题与颜色',()=>showAppearanceSettings(draft),'full',{id:'configure-appearance',disabled:!accountId})),
     node('div',{class:'form-section'},node('h3',{},'Notion 连接'),node('p',{class:'form-description'},'使用你自己的 Notion integration，并在 Notion 页面中授予它访问权限。保存设置不会写入任何页面。'),field('Integration token',notionToken,creds.notion?'已保存的 Token 留空保持不变。':null)),
     node('div',{class:'form-section'},check('清除当前账号保存的 AI 与 Notion 凭据',draft.deleteSecrets,value=>draft.deleteSecrets=value,{id:'delete-secrets'})),
     node('div',{class:'source-note'},'没有后台定时发送。只有点击并确认 AI 总结或 Notion 导出后，选定内容才会发送到对应服务。'),
-    node('div',{class:'form-section'},node('h3',{},'本地数据'),node('p',{class:'caption'},'按群和北京时间预览删除范围，或重新获取主动删除的时段。'),button('本地数据管理',()=>{draft.notionToken='';notionToken.value='';return showMessageCleanup();},'full',{id:'manage-local-data'})),
+    node('div',{class:'form-section'},node('h3',{},'本地数据'),node('p',{class:'caption'},'按群和北京时间筛选，预览后删除本地消息。'),button('管理本地消息',()=>{draft.notionToken='';notionToken.value='';return showMessageCleanup();},'full',{id:'manage-local-data'})),
     accountKind()==='weibo'?node('div',{class:'form-section'},button('退出微博网页登录',async()=>{await api('logout');draft.notionToken='';notionToken.value='';closeModal();await refreshState();renderInspector();toast('已退出微博会话。本机保存的记录仍然保留。');},'danger')):null);
   if(model.state.credentialError)body.append(node('div',{class:'warning'},model.state.credentialError),check('重新初始化无法解密的旧凭据（需要重新登录微博）',draft.resetUnreadable,value=>draft.resetUnreadable=value));
   modal('设置与连接',body,[button('保存设置',async()=>{
     model.state=await api('settings.save',{notionToken:notionToken.value,deleteSecrets:draft.deleteSecrets,resetUnreadable:draft.resetUnreadable});
     draft.notionToken='';notionToken.value='';closeModal();renderSidebar();renderHeader();renderInspector();toast('设置已保存在本机。');
   },'primary',{id:'save-settings'})],{onClose:()=>{draft.notionToken='';notionToken.value='';closeModal();}});
-}
-async function showStartupSettings(settingsDraft) {
-  const epoch=model.accountEpoch,accountId=model.state.account?.id;
-  const origin=$('modal').querySelector('#configure-startup');
-  const state=await api('startup.get');
-  if(epoch!==model.accountEpoch||accountId!==model.state.account?.id||!$('modal').open||$('modal').querySelector('#configure-startup')!==origin)return;
-  let enabled=state.enabled,saving=false;
-  const note=node('p',{id:'startup-note',class:'caption'},!state.supported?'开机启动仅支持 Windows 安装版。':state.blocked?'已登记，但 Windows 已禁用此启动项。可在系统的启动应用中开启。':'登录 Windows 后自动打开当前安装的微阅。');
-  const input=node('input',{id:'startup-enabled',type:'checkbox',checked:enabled,disabled:!state.supported,onchange:event=>enabled=event.target.checked});
-  const back=()=>{if(saving)return;if(epoch===model.accountEpoch&&accountId===model.state.account?.id)showSettings(settingsDraft);else closeModal();};
-  const save=button('保存',async()=>{
-    if(saving||!state.supported)return;
-    saving=true;input.disabled=true;save.disabled=true;setClosing(true);
-    try {
-      const result=await api('startup.save',{enabled});
-      enabled=result.enabled;input.checked=enabled;
-      note.textContent=result.blocked?'已登记，但 Windows 已禁用此启动项。可在系统的启动应用中开启。':enabled?'已开启开机自启动。':'已关闭开机自启动。';
-    } catch(error){note.textContent=error.message||'保存失败，请重试。';}
-    finally {saving=false;input.disabled=!state.supported;save.disabled=!state.supported;setClosing(false);}
-  },'primary',{id:'save-startup',disabled:!state.supported});
-  const dialog=modal('开机自启动',node('div',{},node('label',{class:'check-row'},input,node('span',{},'登录 Windows 后自动启动')),note),[save],{closeLabel:'返回设置',onClose:back});
-  function setClosing(value){const head=dialog.querySelector('.modal-head button');if(head)head.disabled=value;$('modal-close').disabled=value;}
+  const epoch=model.accountEpoch;
+  window.WeiyueStartupToggle.bind({api,input:startupInput,note:startupNote,isCurrent:()=>epoch===model.accountEpoch&&accountId===model.state.account?.id&&$('modal').open&&$('modal').querySelector('#startup-enabled')===startupInput});
 }
 function showAppearanceSettings(settingsDraft) {
   const accountId=model.state.account?.id,epoch=model.accountEpoch;

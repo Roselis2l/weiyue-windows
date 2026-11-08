@@ -33,6 +33,7 @@ const {AccountSessionRegistry}=require('./core/account-session.cjs');
 const {AutoSync}=require('./core/auto-sync.cjs');
 const {AccountAutoSync}=require('./core/account-auto-sync.cjs');
 const {createLayoutPreferences}=require('./core/layout-preferences.cjs');
+const {createAutoCleanup}=require('./core/auto-cleanup.cjs');
 const {createStartupSettings}=require('./core/startup-settings.cjs');
 const {validateBuildIdentity}=require('./core/build-identity.cjs');
 const {BoundedMediaCache}=require('./core/bounded-media-cache.cjs');
@@ -56,7 +57,7 @@ let win,loginWindow,pendingLogin,store,vault,activeId,busy=false;
 let autoSync,revision=0,activeSync,accountEpoch=0,closeReady=false,closeTimer,closeFinishing=false;
 let mediaEpoch=0,contentRevision=0;const observedContent=new Map();
 const attachmentCache=new BoundedMediaCache(64*1024*1024);
-let imageViewer,activeAi,heifDecoder,videoDecoder,audioDecoder,attachmentViewer,attachmentDownload,messageCleanup;
+let imageViewer,activeAi,heifDecoder,videoDecoder,audioDecoder,attachmentViewer,attachmentDownload,messageCleanup,autoCleanup;
 const aiPreviews=new AiPreviewStore();
 const summaryDeletePreviews=new SummaryDeletePreviewStore();
 const automaticAccounts=new AccountAutoSync();
@@ -68,7 +69,7 @@ const sessions=new Map();
 const sessionRegistry=new AccountSessionRegistry({sessions,createSession:()=>{const s=session.fromPartition('weiyue-account-'+crypto.randomUUID());hardenSession(s);return s;},readCookies:id=>secrets(id).cookies||[],officialUrl});
 const avatars=new AvatarService({getContext:()=>({owner:activeId,epoch:accountEpoch,revision,closing:closing()}),getState:id=>store.getSnapshot(id),restoreSession:accountSession,defaultSession:()=>session.defaultSession,request:imageRequest});
 function preferences(){try{return JSON.parse(fs.readFileSync(path.join(dataRoot,'preferences.json'),'utf8'));}catch{return {};}}
-function clearMedia(){accountEpoch++;mediaEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;audioDecoder?.dispose();audioDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
+function clearMedia(){accountEpoch++;mediaEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();autoCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;audioDecoder?.dispose();audioDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
 function observeContent(id=activeId){
   if(!id||!store)return;
   const next=store.contentEpoch(id),previous=observedContent.get(id);observedContent.set(id,next);
@@ -86,7 +87,7 @@ function observeContent(id=activeId){
 function setActive(id){const changed=activeId!==id;layoutPreferences.setActiveId(id);activeId=id;if(changed){preferredRefreshGroup=null;clearMedia();revision++;configureAutomatic();}}
 // Validated immutable snapshots are read-only. Mutations always go through Store.
 function account(){observeContent();return store.getVisibleSnapshot(activeId);}
-function cleanupBusy(){return !!messageCleanup?.isBusy();}
+function cleanupBusy(){return !!messageCleanup?.isBusy()||!!autoCleanup?.isBusy();}
 function secrets(id=activeId){return vault.read(id);}
 function publicReadStats(id=activeId,groupId){const all=store.getReadStats(id,groupId);const clean=s=>{const {unreadIds,...rest}=s;return rest;};return groupId===undefined?Object.fromEntries(Object.entries(all).map(([key,value])=>[key,clean(value)])):clean(all);}
 function snapshot(){
@@ -118,6 +119,7 @@ async function finishClose(){
     // A confirmed local transaction must settle before the process exits. The
     // renderer's close acknowledgement cannot bypass an in-flight atomic commit.
     await messageCleanup?.whenIdle();
+    await autoCleanup?.whenIdle();
     closeReady=true;closeFinishing=false;if(win&&!win.isDestroyed())win.close();
   }catch{
     closeFinishing=false;
@@ -360,6 +362,9 @@ async function handle(action,p){
     case 'image.open':attachmentViewer?.closeAll();return imageViewer.open({source:p.source,title:p.title,caption:p.caption});
     case 'attachment.open':{const {attachment}=attachmentRecord(p.source);imageViewer?.closeAll();return attachmentViewer.open({source:p.source,title:attachment.name,kind:attachment.kind});}
     case 'attachment.download':return attachmentDownload.download({source:p.source});
+    case 'messages.autoCleanup.get':return autoCleanup.get(p);
+    case 'messages.autoCleanup.preview':return autoCleanup.preview(p);
+    case 'messages.autoCleanup.save':return autoCleanup.save(p);
     case 'messages.historyRecovery.preview':return messageCleanup.recoveryPreview(p);
     case 'messages.historyRecovery.apply':return messageCleanup.recoveryApply(p);
     case 'messages.cleanup.info':return messageCleanup.info(p);
@@ -499,10 +504,18 @@ async function handle(action,p){
 }
 async function start(){
   store=new Store(path.join(dataRoot,'accounts'));vault=new Vault(path.join(dataRoot,'credentials'),safeStorage);
-  messageCleanup=createMessageCleanupController({store,asyncOperations:true,waitForIdle:true,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||!!activeSync||enrichmentJobs.size>0,closing:closing()}),onChange:()=>{
+  messageCleanup=createMessageCleanupController({store,asyncOperations:true,waitForIdle:true,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||!!activeSync||enrichmentJobs.size>0||!!autoCleanup?.isBusy(),closing:closing()}),onChange:()=>{
     revision++;contentRevision++;mediaEpoch++;
     for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();
     imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();
+  }});
+  autoCleanup=createAutoCleanup({store,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||!!activeSync||enrichmentJobs.size>0||!!messageCleanup?.isBusy()||!!activeAi,closing:closing()}),onChange:result=>{
+    if(result.accountId!==activeId)return;
+    if(result.settingsChanged){revision++;return;}
+    if(!result.deleted&&!result.boundaryPlan?.advances)return;
+    revision++;contentRevision++;mediaEpoch++;
+    for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();
+    imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();aiPreviews.clear();summaryDeletePreviews.clear();
   }});
   const all=store.accounts();if(!all.length)store.seedDemo();const saved=preferences().activeId;setActive(store.accounts().some(a=>a.id===saved)?saved:store.accounts()[0].id);
    protocol.handle('app',request=>{
@@ -512,7 +525,7 @@ async function start(){
     if(request.method!=='GET'||u.host!=='local')return new Response('Not found',{status:404});
     if(u.pathname.startsWith('/emoticons/'))return emoticonAssets.serve(request,u);
     if(pdfAssets.has(u.pathname))return net.fetch(pathToFileURL(path.join(__dirname,'pdfjs',u.pathname.slice('/pdfjs/'.length))).href);
-    if(!['/layout-controls.js','/layout-controls.css','/auto-page.js','/appearance.js','/appearance-settings.js','/interface-theme.js','/interface-theme.css','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
+    if(!['/startup-toggle.js','/layout-controls.js','/layout-controls.css','/auto-page.js','/appearance.js','/appearance-settings.js','/interface-theme.js','/interface-theme.css','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
     return net.fetch(pathToFileURL(path.join(__dirname,'renderer',u.pathname.slice(1))).href);
   });
   hardenSession(session.defaultSession);Menu.setApplicationMenu(null);
@@ -523,14 +536,15 @@ async function start(){
   attachmentViewer=createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment,decodeVideo:(value,options)=>{videoDecoder ||= createVideoDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return videoDecoder.decode(value,options);},decodeAudio:(value,options)=>{audioDecoder ||= createAudioDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return audioDecoder.decode(value,options);}});
   attachmentDownload=createAttachmentDownload({dialog,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));win.webContents.on('will-navigate',e=>e.preventDefault());win.webContents.on('will-attach-webview',e=>e.preventDefault());
-  win.on('close',event=>{if(closeReady)return;event.preventDefault();if(closing())return;autoSync?.stop();activeSync?.controller.abort();clearMedia();closeTimer=setTimeout(()=>void finishClose(),2000);win.webContents.send('weiyue:before-close');});
+  win.on('close',event=>{if(closeReady)return;event.preventDefault();if(closing())return;autoSync?.stop();autoCleanup?.stop();activeSync?.controller.abort();clearMedia();closeTimer=setTimeout(()=>void finishClose(),2000);win.webContents.send('weiyue:before-close');});
   ipcMain.handle('weiyue:call',async(e,action,payload)=>{
     if(e.sender!==win.webContents||e.senderFrame!==win.webContents.mainFrame||e.senderFrame.url!=='app://local/index.html')return {ok:false,error:'来源不受信任'};
     if(typeof action!=='string'||!payload||typeof payload!=='object'||Array.isArray(payload)||JSON.stringify(payload).length>(['notion.preview','notion.export'].includes(action)?1250000:100000))return {ok:false,error:'请求格式无效'};
     try{return {ok:true,value:await handle(action,payload)};}catch(error){let secretValues=[];try{const sec=secrets();secretValues=[sec.aiKey,sec.notionToken,...(sec.cookies||[]).map(c=>c.value)];}catch{}return {ok:false,error:redact(error.message,secretValues)};}
   });
   await win.loadURL('app://local/index.html');
+  autoCleanup.start();
 }
 app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.focus();}});
-app.on('window-all-closed',()=>{autoSync?.stop();app.quit();});
+app.on('window-all-closed',()=>{autoSync?.stop();autoCleanup?.stop();app.quit();});
 if(lock)app.whenReady().then(start).catch(()=>{dialog.showErrorBox('微阅启动失败','本地数据无法读取或目录不可写。请保留 data 目录备份并查阅中文使用说明，不要覆盖原文件。');app.quit();});

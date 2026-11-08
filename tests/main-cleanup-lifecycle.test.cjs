@@ -11,7 +11,7 @@ const functions=main.slice(main.indexOf('function closing(){'),main.indexOf('asy
 function fixture(whenIdle){
   const calls={close:0,error:0,cleared:0};
   const context=vm.createContext({closeReady:false,closeTimer:123,closeFinishing:false,
-    clearTimeout:()=>calls.cleared++,messageCleanup:{whenIdle},
+    clearTimeout:()=>calls.cleared++,messageCleanup:{whenIdle},autoCleanup:undefined,
     win:{isDestroyed:()=>false,close:()=>calls.close++},
     dialog:{showErrorBox:()=>calls.error++}});
   vm.runInContext(functions,context);
@@ -78,4 +78,8 @@ test('queued cleanup reservation blocks new manual and automatic sync before net
   vm.runInContext(source,context);
   for(const automatic of [false,true])await assert.rejects(context.runSync({},automatic),error=>error.code==='SYNC_BUSY');
   assert.match(main,/createMessageCleanupController\(\{store,asyncOperations:true,waitForIdle:true/);
+});
+
+test('normal close also waits for an automatic deletion transaction',async()=>{
+ let resolve;const {context,calls}=fixture(async()=>{});context.autoCleanup={whenIdle:()=>new Promise(r=>resolve=r)};const pending=context.finishClose();await new Promise(r=>setImmediate(r));assert.equal(calls.close,0);resolve();await pending;assert.equal(calls.close,1);
 });

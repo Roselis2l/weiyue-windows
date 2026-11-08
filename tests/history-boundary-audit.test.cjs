@@ -16,7 +16,7 @@ test('audit: completed scan then none-mode head then auto must recover the misse
 });
 test('audit: middle-deletion history and recovery have status even without a retained floor',()=>{
  const status=groupStatus({id:'g',historyDeletedRanges:[{start:floor,end:floor+1000}],historyRecovery:{start:floor,end:floor+1000,cursor:null,complete:false,unresolved:false}}, {offlineMessages:{mode:'none'}});
- assert.match(status.text,/主动删除/);assert.match(status.text,/重新获取/);assert.equal(status.needsBackfill,true);
+ assert.doesNotMatch(status.text,/主动删除|不自动补回/);assert.match(status.text,/重新获取/);assert.equal(status.needsBackfill,true);
 });
 
 

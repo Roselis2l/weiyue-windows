@@ -40,8 +40,6 @@
       else if(unresolved)parts.push('范围内仍有待核实缺口');
       else parts.push('范围内待补齐');
       if(cutoff>boundary.start)parts.push('本次补至 '+formatTime(cutoff));
-      const deleted=(group.historyDeletedRanges||[]).filter(r=>finiteTime(r.start)&&finiteTime(r.end)&&r.start<r.end);
-      parts.push(deleted.length?'主动删除 '+deleted.length+' 段历史，不自动补回':'主动删除的历史不自动补回');
       if(recovering)parts.push(recovery.unresolved?'所选历史时段尚未取回':'正在重新获取所选历史时段');
       if(blocked)parts.push(group.syncProgress.reason||'本轮读取已暂停');
       return {needsBackfill:policy.mode!=='none'&&!complete||!!recovering,unresolved:!!unresolved||!!recovery?.unresolved,tone:unresolved||recovery?.unresolved||blocked?'warning':'normal',actionLabel:'同步最新',text:parts.join(' · ')};
@@ -77,9 +75,7 @@
   function groupStatus(group, options={}) {
     const result=baseGroupStatus(group,options);
     if(finiteTime(group?.historyBoundary?.start))return result;
-    const deleted=(group?.historyDeletedRanges||[]).filter(r=>finiteTime(r.start)&&finiteTime(r.end)&&r.start<r.end);
     const recovery=group?.historyRecovery,parts=[result.text];
-    if(deleted.length)parts.push('主动删除 '+deleted.length+' 段历史，不自动补回');
     if(recovery&&recovery.complete!==true)parts.push(recovery.unresolved?'所选历史时段尚未取回':'正在重新获取所选历史时段');
     return {...result,needsBackfill:result.needsBackfill||!!(recovery&&recovery.complete!==true),unresolved:result.unresolved||!!recovery?.unresolved,tone:recovery?.unresolved?'warning':result.tone,text:parts.join(' · ')};
   }

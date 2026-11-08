@@ -43,7 +43,7 @@
         node('p',{class:'source-note'},'收藏、摘要引用、已知导出关联及所选成员继续保留。删除范围内的阅读位置自动移到下一条保留消息，旧续扫标记随删除边界调整。'),
         node('p',{class:'caption'},'从最旧消息开始删除，会同时更新本群保留起点；删除中间时段不会移动起点。已删除消息不会自动补回。'));
       const legacyTrash=button('旧回收记录',trash,'',{id:'cleanup-trash',hidden:true});
-      const dialog=show('本地数据管理',body,[legacyTrash,button('重新获取已删除时段',recoveryForm,'',{id:'cleanup-recover-history'}),preview]);
+      const dialog=show('本地数据管理',body,[legacyTrash,button('自动删除设置',automaticForm,'',{id:'cleanup-auto-settings'}),button('重新获取已删除时段',recoveryForm,'',{id:'cleanup-recover-history'}),preview]);
       memberPicker=filters.createMemberPicker({container:members,members:[],emptyLabel:'不额外保留成员',selectionLabel:'保留成员',selectedIds:retainSenderIds,onChange:ids=>retainSenderIds=ids});
       members.querySelector('.member-picker-toggle')?.setAttribute('aria-label','选择要保留的成员');
       async function load(){
@@ -87,6 +87,58 @@
         successResult:result=>window.WeiyueCleanupProgress.completionDetail({...plan,markedReadCount:result.markedReadCount},permanent?'permanent':'recycle')
       }),'danger',{id:'cleanup-confirm',disabled:plan.deleteCount===0&&!plan.boundaryPlan?.advances});
       const dialog=show(permanent?'确认永久删除（不可恢复）':'确认本地消息回收',body,[button('返回修改筛选',form,'',{id:'cleanup-back'}),confirm]);
+      dialog.querySelector('#modal-close')?.focus();
+    }
+    async function automaticForm(){
+      guard();generation++;memberPicker?.destroy();const groupId=selectedGroup,ticket=generation;
+      let enabled=false,loaded=false;
+      const enabledInput=node('input',{id:'auto-cleanup-enabled',type:'checkbox',disabled:true,onchange:e=>{enabled=e.target.checked;update();}});
+      const daysInput=node('input',{id:'auto-cleanup-days',type:'number',min:1,max:3650,step:1,value:30,disabled:true,'aria-label':'保留天数'});
+      const unreadInput=node('input',{id:'auto-cleanup-unread',type:'checkbox',disabled:true});
+      const status=node('p',{id:'auto-cleanup-status',class:'caption'},'正在读取设置…');
+      const body=node('div',{},node('p',{},groups.find(g=>g.id===groupId)?.name||'当前群'),
+        node('label',{class:'check-row'},enabledInput,node('span',{},'自动删除旧消息')),
+        field('保留最近多少天',daysInput,'按北京时间自然日计算，今天算第 1 天。'),
+        node('label',{class:'check-row'},unreadInput,node('span',{},'将符合条件的未读消息标为已读并删除')),
+        node('p',{class:'caption'},'仅对此群生效。默认保留未读，以及收藏、摘要和可追溯导出引用的消息。自动清理会同步更新该群的补齐起点。'),status);
+      const save=button('保存',async()=>{
+        guard();if(saving||!loaded)return;
+        const days=Number(daysInput.value);if(!Number.isInteger(days)||days<1||days>3650)throw Error('保留天数须为 1–3650 的整数。');
+        const config={accountId,groupId,enabled,days,markUnreadAsRead:unreadInput.checked===true},request=++generation;
+        busy(dialog,true);
+        try{
+          if(!enabled){await api('messages.autoCleanup.save',config);if(current()&&request===generation){saving=false;toast('自动删除已关闭');form();}}
+          else{const plan=await api('messages.autoCleanup.preview',config);if(current()&&request===generation){saving=false;showAutomaticPreview(plan,config);}}
+        }catch(error){if(current()&&request===generation)status.textContent=error.message;else throw error;}
+        finally{if(current()&&dialog.contains(body)){busy(dialog,false);update();}else saving=false;}
+      },'primary',{id:'auto-cleanup-save',disabled:true});
+      const dialog=show('自动删除旧消息',body,[button('返回',form,'',{id:'auto-cleanup-back'}),save]);
+      function update(){enabledInput.disabled=!loaded;daysInput.disabled=!loaded||!enabled;unreadInput.disabled=!loaded||!enabled;save.disabled=!loaded;save.textContent=enabled?'预览并保存':'关闭自动删除';}
+      try{
+        const config=await api('messages.autoCleanup.get',{accountId,groupId});
+        if(!current()||ticket!==generation||!dialog.contains(body))return;
+        enabled=config.enabled===true;enabledInput.checked=enabled;daysInput.value=config.days||30;unreadInput.checked=config.markUnreadAsRead===true;loaded=true;update();
+        status.textContent=enabled?'已启用，应用运行时在空闲期间检查。':'默认关闭；保存并确认后才会自动删除。';
+      }catch(error){if(current()&&ticket===generation&&dialog.contains(body))status.textContent=error.message;}
+    }
+    function showAutomaticPreview(plan,config){
+      guard();saving=false;
+      const body=node('div',{},node('p',{},groups.find(g=>g.id===config.groupId)?.name||'当前群'),
+        node('p',{},'保留最近 '+config.days+' 天（今天算第 1 天）；当前删除截止点为 '+display(plan.cutoff)+'，不含该时刻。'),
+        node('p',{class:'warning'},'当前符合范围 '+(plan.matchedCount||0)+' 条，保留 '+(plan.retainedCount||0)+' 条，可删除 '+(plan.deleteCount||0)+' 条。'),
+        node('p',{},config.markUnreadAsRead?'包含未读消息，本次预计标为已读并删除 '+(plan.markedReadCount||0)+' 条。':'未读消息保留，不自动标为已读。'),
+        node('p',{class:'caption'},'以后随日期滚动自动清理此群。收藏、摘要和可追溯导出引用继续保留；删除会同步调整补齐起点。'),
+        node('p',{class:'warning'},'确认后将启用自动永久删除。应用运行时在空闲期间检查，可随时关闭。'),
+        node('p',{id:'auto-cleanup-result',class:'caption'},''));
+      const result=body.querySelector('#auto-cleanup-result');
+      const confirm=button('确认启用自动删除',async()=>{
+        guard();if(saving||confirm.dataset.used==='true')return;confirm.dataset.used='true';busy(dialog,true);
+        try{
+          await api('messages.autoCleanup.save',{...config,confirmationToken:plan.confirmationToken,confirmed:true});
+          if(current()){saving=false;toast('已保存本群自动删除设置');form();}
+        }catch(error){if(current()){busy(dialog,false);confirm.disabled=true;result.textContent=error.message;}else throw error;}
+      },'danger',{id:'auto-cleanup-confirm'});
+      const dialog=show('确认自动删除设置',body,[button('返回修改',automaticForm,'',{id:'auto-cleanup-back'}),confirm]);
       dialog.querySelector('#modal-close')?.focus();
     }
     function recoveryForm(){

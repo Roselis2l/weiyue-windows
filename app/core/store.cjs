@@ -392,6 +392,7 @@ function validateState(state, expectedId) {
   }
   const importantMembers = [...new Set(array(state.importantMembers, '重点成员', 100000).map(item => identifier(item, '重点成员 ID')))];
   record(state.settings, '设置'); assertJson(state.settings, '设置', 0, true);
+  const autoCleanup=require('./auto-cleanup.cjs').normalizePolicies(state.settings.autoCleanup,groupIds);
   record(state.exports, '导出记录');
   // Normalize identifiers even when update() callers supply safe numeric IDs.
   // Once recycling is used, older applications must reject this account rather
@@ -399,7 +400,7 @@ function validateState(state, expectedId) {
   // batch does not downgrade the account. Normalize early unreleased schema-1
   // recycle fixtures in memory too; reading alone never rewrites their bytes.
   const schemaVersion = state.schemaVersion>=PURGE_SCHEMA_VERSION ? state.schemaVersion : messageTrash.length ? RECYCLE_SCHEMA_VERSION : state.schemaVersion;
-  return { ...state, settings:{...state.settings,...(state.settings.offlineMessages===undefined?{}:{offlineMessages:normalizeOfflineMessages(state.settings.offlineMessages)})}, schemaVersion, account, groups, messages, bookmarks, readPositions, readStates, importantMembers, messageTrash,
+  return { ...state, settings:{...state.settings,...(autoCleanup===undefined?{}:{autoCleanup}),...(state.settings.offlineMessages===undefined?{}:{offlineMessages:normalizeOfflineMessages(state.settings.offlineMessages)})}, schemaVersion, account, groups, messages, bookmarks, readPositions, readStates, importantMembers, messageTrash,
     ...(state.messageTombstones !== undefined || schemaVersion>=PURGE_SCHEMA_VERSION ? {messageTombstones} : {}) };
 }
 

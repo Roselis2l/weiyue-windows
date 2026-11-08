@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),{createHash,randomBytes}=require('node:crypto'),{Worker}=require('node:worker_threads');
-const mutationActions=new Set(['apply','purgeApply','restore','recoveryApply']);
+const mutationActions=new Set(['apply','purgeApply','restore','recoveryApply','autoApply']);
 async function fileHash(file){const hash=createHash('sha256');for await(const chunk of fs.createReadStream(file))hash.update(chunk);return hash.digest('hex');}
 function stamp(s){return[s.ino,s.size,s.mtimeNs,s.ctimeNs].join(':');}
 async function runCleanupTask(store,accountId,action,payload,{onProgress=()=>{},jobId=randomBytes(16).toString('hex'),workerFactory,rename=fs.promises.rename}={}){
