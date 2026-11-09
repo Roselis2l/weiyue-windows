@@ -85,12 +85,12 @@ test('window boundaries use whole numbers, with bounded page sizes and known-anc
   assert.deepEqual(chooseWindow(), { offset: 0, limit: 160 });
 });
 
-test('unread counts are empty at zero and capped without coercing invalid counts', () => {
+test('unread counts are empty at zero and exact without coercing invalid counts', () => {
   for (const count of [0, -1, null, undefined, NaN, Infinity, 1.2, '12']) assert.equal(unreadLabel(count), '');
   assert.equal(unreadLabel(1), '1');
   assert.equal(unreadLabel(999), '999');
-  assert.equal(unreadLabel(1000), '999+');
-  assert.equal(unreadLabel(12000), '999+');
+  assert.equal(unreadLabel(1000), '1000');
+  assert.equal(unreadLabel(12000), '12000');
 });
 
 test('browser script exposes only the frozen WeiyueReading helper', () => {
@@ -102,11 +102,11 @@ test('browser script exposes only the frozen WeiyueReading helper', () => {
 });
 
 
-test('pending media blocks the high water before placeholders or later cards can become read', () => {
+test('visible pending media blocks reading while older offscreen lazy images cannot deadlock it', () => {
   const items = [{id:'ready',top:90,bottom:180,ready:true},
     {id:'pending',top:190,bottom:240,ready:false},{id:'later',top:250,bottom:350,ready:true}];
   assert.equal(viewport(items).readThroughId,'ready');
-  assert.equal(viewport(items.map(item=>({...item,top:item.top-200,bottom:item.bottom-200}))).readThroughId,null);
+  assert.equal(viewport(items.map(item=>({...item,top:item.top-200,bottom:item.bottom-200}))).readThroughId,'later');
   assert.equal(viewport(items.map(item=>({...item,ready:true}))).readThroughId,'later');
   assert.equal(viewport([{id:'tall',top:-600,bottom:450,ready:true}]).readThroughId,'tall');
 });

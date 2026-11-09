@@ -22,11 +22,11 @@
       item.bottom > viewportTop + 1 && item.top < viewportBottom);
     const anchor = visible[0];
     let readThrough = null;
-    // A pending image can expand after its placeholder looked fully visible.
-    // Stop the high-water candidate before it, including offscreen pending images.
+    // Pending media in the viewport can still expand. An older lazy image
+    // above the viewport must not deadlock progress after anchor restoration.
     for (const item of items) {
       if (!item || !Number.isFinite(item.top) || !Number.isFinite(item.bottom)) continue;
-      if (item.ready === false) break;
+      if (item.ready === false && item.bottom > viewportTop + 1) break;
       if (item.bottom > viewportTop + 1 && item.bottom <= viewportBottom + 1) readThrough = item;
     }
     return {
@@ -110,7 +110,7 @@
 
   function unreadLabel(count) {
     if (!Number.isInteger(count) || count <= 0) return '';
-    return count > 999 ? '999+' : String(count);
+    return String(count);
   }
 
   return Object.freeze({ captureViewport, restoredScrollTop, chooseWindow, mediaReadyForRead, trailingSpaceHeight, createReadIntentGate, recentGroupId, groupUpdateLabel, unreadLabel });

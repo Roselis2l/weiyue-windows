@@ -1052,7 +1052,7 @@ function validReadCandidate(candidate) {
   const scroll=$('message-scroll');if(!scroll)return false;
   const top=scroll.getBoundingClientRect().top,bottom=top+scroll.clientHeight,items=measuredMessages();
   const index=items.findIndex(item=>item.id===candidate.readThroughId),item=items[index];
-  return !!item && item.bottom>top+1 && item.bottom<=bottom+1 && items.slice(0,index+1).every(item=>item.ready);
+  return !!item && item.bottom>top+1 && item.bottom<=bottom+1 && items.slice(0,index+1).every(item=>item.ready || item.bottom<=top+1);
 }
 async function flushReading(candidate=null) {
   clearTimeout(model.readTimer);
