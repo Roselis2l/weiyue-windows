@@ -1,12 +1,12 @@
 # 微阅 Windows
 
-**WeiYue Windows 1.1.39 · GitHub 版**是本地优先的微博群聊阅读应用，用于阅读群聊、收藏有价值的内容，以及按时段生成摘录或 AI 总结。
+**WeiYue Windows 1.1.40 · GitHub 版**是本地优先的微博群聊阅读应用，用于阅读群聊、收藏有价值的内容，以及按时段生成摘录或 AI 总结。
 
 本仓库与公开下载对应 GitHub 版。
 
 ## 功能
 
-新增功能见 [1.1.39 更新说明](docs/1.1.39更新说明.md)。
+本版修复见 [1.1.40 更新说明](docs/1.1.40更新说明.md)。
 
 | 功能 | 操作方法 |
 | --- | --- |
@@ -42,7 +42,7 @@ Windows x64 portable 包包含运行时，不需要安装 Node.js：核对 `SHA2
 
 软件未使用代码签名证书。请核对来源和校验值，遵循设备策略，不要关闭系统安全保护。
 
-详细操作见[中文使用说明](docs/使用说明.md)、[本轮说明](docs/1.1.39更新说明.md)和[安全与限制](docs/安全与限制.md)。
+详细操作见[中文使用说明](docs/使用说明.md)、[本轮说明](docs/1.1.40更新说明.md)和[安全与限制](docs/安全与限制.md)。
 
 ## 数据与联网范围
 
@@ -75,7 +75,7 @@ GitHub 版收到官方明确的群消息撤回通知后显示撤回提示，不�
 将已核验的 Electron 44.9.0 官方 Windows x64 ZIP 与同版 `SHASUMS256.txt` 放入干净源码副本的 `vendor/`，执行：
 
 ```powershell
-./scripts/package.ps1 -ElectronVersion 44.9.0 -OutputDirectory dist-1.1.39
+./scripts/package.ps1 -ElectronVersion 44.9.0 -OutputDirectory dist-1.1.40
 ```
 
 构建不执行启动时依赖安装；图片解码库和 PDF.js 固定版本随包提供。输出目录不得覆盖已有构建。打包成功不等于实际 EXE 验收通过，具体测试和未验证项见同批交付报告及[复验说明](docs/TESTING.md)。

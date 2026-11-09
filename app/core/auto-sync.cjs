@@ -26,7 +26,7 @@ const STOP_MESSAGES = Object.freeze({
   HTTP_ERROR: '微博未接受读取请求，自动更新已暂停。请在官方页面检查状态后手动恢复。',
 });
 const SAFE_ERROR_CODES = new Set([...Object.keys(STOP_MESSAGES),
-  'RATE_LIMIT', 'TIMEOUT', 'SERVER_ERROR', 'ABORTED', 'NETWORK', 'GENERIC']);
+  'RATE_LIMIT', 'TIMEOUT', 'SERVER_ERROR', 'ABORTED', 'NETWORK', 'GENERIC', 'IMAGE_LIMIT']);
 
 function safeErrorCode(code) {
   return code === '' ? '' : typeof code === 'string' && SAFE_ERROR_CODES.has(code) ? code : 'GENERIC';
@@ -76,7 +76,9 @@ function classify(error) {
   if (code === 'TIMEOUT') return { kind: 'retry', code, message: '微博读取超时，将稍后自动重试。' };
   if (code === 'SERVER_ERROR') return { kind: 'retry', code, message: '微博服务暂时不可用，将稍后自动重试。' };
   if (code === 'ABORTED') return { kind: 'retry', code, message: '本次自动更新已取消，将稍后重试。' };
-  return { kind: 'retry', code: code === 'NETWORK' ? code : 'GENERIC', message: '自动更新未完成，请检查网络；程序将稍后重试。' };
+  if (code === 'IMAGE_LIMIT') return { kind: 'retry', code, message: '消息图片数量超过本地保存上限，本页未保存，已保存的消息仍保留；请检查应用。' };
+  if (code === 'NETWORK') return { kind: 'retry', code, message: '微博连接失败，请检查网络；程序将稍后重试。' };
+  return { kind: 'retry', code: 'GENERIC', message: '自动更新未完成，已保存的消息仍保留；可手动同步查看具体原因。' };
 }
 
 class AutoSync {

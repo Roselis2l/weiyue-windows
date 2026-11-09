@@ -5,6 +5,7 @@
 // names, notification wording and surrounding messages are never used to guess
 // that target. This module performs no requests.
 const {normalizeImage, safePostUrl} = require('./media.cjs');
+const {imageIdentity} = require('./image-identity.cjs');
 const {classifySystemNotice} = require('./system-notices.cjs');
 const MAX_REFERENCES = 20;
 const MAX_REFERENCE_DEPTH = 4;
@@ -29,17 +30,18 @@ function postPermalink(status) {
 function referenceKey(value) {
   if (value.id) return 'id:' + value.id;
   if (value.url) return 'url:' + value.url;
-  return 'snapshot:' + JSON.stringify([value.text, value.author || '', value.images.map(image => image.originalUrl || image.url)]);
+  return 'snapshot:' + JSON.stringify([value.text, value.author || '', value.images.map(imageIdentity)]);
 }
 function normalizeReference(value) {
   if (!object(value) || value.kind !== 'post' || !['shared', 'repost'].includes(value.relation) || !['ready', 'unavailable'].includes(value.state)) fail();
   if (!Array.isArray(value.images) || value.images.length > 100) fail();
-  const images = [], seen = new Set();
+  const imageMap = new Map();
   for (const source of value.images) {
     const image = normalizeImage(source); if (!image) fail();
-    const key = image.originalUrl || image.url;
-    if (!seen.has(key)) { seen.add(key); images.push(image); }
+    const key = imageIdentity(image);
+    imageMap.set(key, {...imageMap.get(key), ...image});
   }
+  const images = [...imageMap.values()];
   const result = {kind:'post', relation:value.relation, text:text(value.text,1000000), images, state:value.state};
   if (value.id !== undefined) { result.id = postId(value.id); if (!result.id) fail(); }
   if (value.url !== undefined) { result.url = safePostUrl(value.url); if (!result.url) fail(); }
@@ -62,8 +64,12 @@ function mergeReferences(previous = [], incoming = []) {
   for (const value of normalizeReferences(incoming)) {
     const key = referenceKey(value), old = records.get(key);
     if (!old) { if(records.size < MAX_REFERENCES) records.set(key,value); continue; }
-    const images = new Map(old.images.map(image => [image.originalUrl || image.url,image]));
-    for (const image of value.images) if (images.size < 100 || images.has(image.originalUrl || image.url)) images.set(image.originalUrl || image.url,image);
+    const images = new Map(old.images.map(image => [imageIdentity(image),image]));
+    for (const image of value.images) {
+      const imageKey = imageIdentity(image);
+      images.set(imageKey, {...images.get(imageKey), ...image});
+    }
+    if (images.size > 100) throw Object.assign(new Error('单条引用的图片数量超过本地保存上限'), {code:'IMAGE_LIMIT'});
     const merged = {...old,...value,images:[...images.values()]};
     for (const field of ['id','url','author']) if (!value[field] && old[field]) merged[field] = old[field];
     if (old.text && (!value.text.trim() || value.text.length < old.text.length || value.state === 'unavailable' || value.truncated && !old.truncated)) {

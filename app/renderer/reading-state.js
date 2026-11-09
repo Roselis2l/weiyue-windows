@@ -100,10 +100,18 @@
     return chosen?.id ?? null;
   }
 
+  // Sidebar freshness describes available messages, not reading progress or
+  // synchronization coverage (which may be absent after a retention reset).
+  function groupUpdateLabel(group, formatTime) {
+    const time = group?.latestMessageTime;
+    return Number.isSafeInteger(time) && time >= 0 && time <= 8640000000000000
+      ? formatTime(time, true) + ' 更新' : '暂无消息';
+  }
+
   function unreadLabel(count) {
     if (!Number.isInteger(count) || count <= 0) return '';
     return count > 999 ? '999+' : String(count);
   }
 
-  return Object.freeze({ captureViewport, restoredScrollTop, chooseWindow, mediaReadyForRead, trailingSpaceHeight, createReadIntentGate, recentGroupId, unreadLabel });
+  return Object.freeze({ captureViewport, restoredScrollTop, chooseWindow, mediaReadyForRead, trailingSpaceHeight, createReadIntentGate, recentGroupId, groupUpdateLabel, unreadLabel });
 });

@@ -208,7 +208,7 @@ function renderGroupList(groups) {
     item.className='group-item'+(active?' active':'');
     updateAvatar(item.querySelector('.group-avatar'),{kind:'group',id,name:group.name,source:group.avatarSrc});
     item.querySelector('.group-name').textContent=group.name;
-    item.querySelector('.group-meta').textContent=group.coverage?.newest?fmt(group.coverage.newest,true)+' 更新':'等待阅读';
+    item.querySelector('.group-meta').textContent=reading.groupUpdateLabel(group,fmt);
     const badge=item.querySelector('.unread-badge'),count=Number(group.unreadCount)||0;
     badge.hidden=count===0;badge.textContent=reading.unreadLabel(count);badge.setAttribute('aria-label',count+' 条未读');
     item.querySelector('.group-selected-dot').hidden=!active;
@@ -1084,7 +1084,7 @@ async function flushReading(candidate=null) {
       if(result && typeof result==='object'){
         const stats=result.readState || result;
         model.state.readStates[groupId]={...local,...stats};
-        const g=model.state.groups.find(item=>item.id===groupId);if(g && Number.isFinite(stats.unreadCount)){g.unreadCount=stats.unreadCount;g.firstUnreadId=stats.firstUnreadId;}
+        const g=model.state.groups.find(item=>item.id===groupId);if(g && Number.isFinite(stats.unreadCount)){g.unreadCount=stats.unreadCount;g.firstUnreadId=stats.firstUnreadId;g.latestMessageTime=stats.latestMessageTime;}
         updateUnreadBadges();updateReadChrome();
       }
     }catch(error){if(model.lastReadPayload===key)model.lastReadPayload='';throw error;}
@@ -1099,6 +1099,7 @@ async function flushReading(candidate=null) {
 function updateUnreadBadges() {
   for(const element of document.querySelectorAll('#group-list [data-group-id]')){
     const group=model.state.groups.find(g=>g.id===element.dataset.groupId),badge=element.querySelector('.unread-badge');if(!badge)continue;
+    const meta=element.querySelector('.group-meta');if(meta)meta.textContent=reading.groupUpdateLabel(group,fmt);
     const count=Number(group?.unreadCount)||0;badge.hidden=count===0;badge.textContent=reading.unreadLabel(count);badge.setAttribute('aria-label',`${count} 条未读`);
   }
 }

@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { safeAvatarUrl } = require('./avatar.cjs');
+const {imageIdentity} = require('./image-identity.cjs');
 const {normalizeAttachment,mergeAttachments,attachmentSearchText}=require('./attachments.cjs');
 const {normalizeReferences,mergeReferences,normalizeQuotePreview}=require('./message-references.cjs');
 const {normalizeSystemNotice}=require('./system-notices.cjs');
@@ -160,12 +161,12 @@ function normalizeSharedPost(post) {
   return result;
 }
 function mergeImages(previous = [], incoming = []) {
-  const images = new Map(previous.map(image => [image.originalUrl || image.url, image]));
-  for (const image of incoming) {
-    const key = image.originalUrl || image.url;
+  const images = new Map();
+  for (const image of [...previous, ...incoming]) {
+    const key = imageIdentity(image);
     images.set(key, { ...images.get(key), ...image });
   }
-  if (images.size > 100) fail('单条消息的图片数量超过本地保存上限');
+  if (images.size > 100) throw Object.assign(new Error('单条消息的图片数量超过本地保存上限'), {code:'IMAGE_LIMIT'});
   return [...images.values()];
 }
 function mergeSharedPost(previous, incoming) {
@@ -750,7 +751,7 @@ class Store {
     for (const [id, messages] of byGroup) {
       messages.sort(compareMessages);
       const current = state.readStates[id], unread = new Set(current.unreadIds);
-      setProperty(stats, id, { ...current, unreadIds:[...current.unreadIds],unreadCount: unread.size, firstUnreadId: messages.find(message => unread.has(message.id))?.id || null, latestMessageId: messages.at(-1)?.id || null, messageCount: messages.length });
+      setProperty(stats, id, { ...current, unreadIds:[...current.unreadIds],unreadCount: unread.size, firstUnreadId: messages.find(message => unread.has(message.id))?.id || null, latestMessageId: messages.at(-1)?.id || null, latestMessageTime: messages.at(-1)?.time ?? null, messageCount: messages.length });
     }
     if (groupId === undefined) return stats;
     groupId = identifier(groupId, '群 ID');

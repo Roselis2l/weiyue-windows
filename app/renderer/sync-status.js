@@ -90,7 +90,7 @@
       text = `微博暂时限流，已暂停本轮读取${status.enabled === false ? '；自动更新也已暂停。' : next || '，等待服务允许后续补。'}`;
       tone = 'warning';
     } else if (status.enabled === false) text = '自动更新已暂停；已保存的补扫进度保留，仍可手动同步。';
-    else if (status.error) { text = `更新暂缓：${status.error}${next}`; tone = 'warning'; }
+    else if (status.error) { text = `更新暂缓：${next ? status.error.replace(/[。；]+$/u, '') : status.error}${next}`; tone = 'warning'; }
     else if (status.pausedReason) text = `自动更新等待中：${status.pausedReason}`;
     else if (status.running) text = '正在后台分批更新群聊，阅读位置保持不变。';
     else text = `本轮完成后 ${Math.round((status.intervalMs || 5000) / 1000)} 秒再检查，当前群优先；其他群约 ${Math.round((status.backgroundIntervalMs || 60000) / 1000)} 秒轮转${finiteTime(status.lastSuccessAt) ? ` · 上次 ${formatTime(status.lastSuccessAt)}` : ''}`;
