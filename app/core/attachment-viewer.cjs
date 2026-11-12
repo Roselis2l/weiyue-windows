@@ -27,6 +27,7 @@ const ERRORS = Object.freeze({
   action: '不支持的附件操作。',
 });
 const TRANSPORT_ERRORS=Object.freeze({
+  ATTACHMENT_DELETED:'源站已删除该附件，无法播放或下载。',
   ATTACHMENT_AUTH:'微博登录已失效，请在官方页面重新登录。',
   ATTACHMENT_DENIED:'微博拒绝本次附件读取，请在官方页面确认访问权限。',
   ATTACHMENT_RATE_LIMIT:'微博限制了本次读取，请稍后重试。',

@@ -6,6 +6,8 @@ const { normalizeSource } = require('./attachment-viewer.cjs');
 const { detectedAttachmentMime, MAX_ARCHIVE_BYTES, MAX_PDF_BYTES, MAX_VIDEO_BYTES,DOCUMENT_FORMATS,AUDIO_FORMATS,MAX_AUDIO_BYTES } = require('./attachments.cjs');
 
 const FORMATS = Object.freeze({
+  'text/html':Object.freeze({kind:'download',name:'HTML 网页文件（仅保存，不自动打开）',extensions:Object.freeze(['html','htm']),limit:5*1024*1024}),
+  'application/epub+zip':Object.freeze({kind:'download',name:'EPUB 电子书（仅保存）',extensions:Object.freeze(['epub']),limit:50*1024*1024}),
   ...Object.fromEntries(Object.entries(DOCUMENT_FORMATS).map(([extension,value])=>[value.mime,Object.freeze({kind:'document',name:extension.toUpperCase()+' 文件',extensions:Object.freeze([extension]),limit:value.limit})])),
   ...Object.fromEntries(Object.entries(AUDIO_FORMATS).map(([extension,value])=>[value.mime,Object.freeze({kind:'audio',name:extension.toUpperCase()+' 音频',extensions:Object.freeze([extension]),limit:MAX_AUDIO_BYTES})])),
   'application/zip': Object.freeze({kind:'archive',name:'ZIP 压缩文件',extensions:Object.freeze(['zip']),limit:MAX_ARCHIVE_BYTES}),
@@ -26,6 +28,7 @@ const ERRORS = Object.freeze({
   save:'附件保存失败，请检查所选文件夹的写入权限。',
 });
 const TRANSPORT_ERRORS = Object.freeze({
+  ATTACHMENT_DELETED:'源站已删除该附件，无法播放或下载。',
   ATTACHMENT_AUTH:'微博登录已失效，请在官方页面重新登录。',
   ATTACHMENT_DENIED:'微博拒绝本次附件读取，请在官方页面确认访问权限。',
   ATTACHMENT_RATE_LIMIT:'微博限制了本次读取，请稍后再试。',
@@ -35,8 +38,8 @@ const TRANSPORT_ERRORS = Object.freeze({
   ATTACHMENT_NETWORK:'附件网络读取失败，请稍后再试。',
   ATTACHMENT_TIMEOUT:ERRORS.timeout,
   ATTACHMENT_ABORT:'附件下载已取消。',
-  ATTACHMENT_TOO_LARGE:'附件超过读取/下载大小限制（XLSX/音频 20 MB，MD/CSV 5 MB，PDF 50 MB，视频及压缩文件 200 MB）。',
-  ATTACHMENT_TYPE:'附件格式暂不支持。可下载 XLSX、MD、CSV、ZIP/RAR/7z、PDF、MP4/MOV/WebM 及受支持的语音。',
+  ATTACHMENT_TOO_LARGE:'附件超过读取/下载大小限制（HTML/MD/CSV 5 MB；XLSX/音频 20 MB；EPUB/PDF 50 MB；视频及压缩文件 200 MB）。',
+  ATTACHMENT_TYPE:'附件内容或格式不支持下载。支持 HTML/HTM、EPUB、XLSX、MD、CSV、ZIP/RAR/7z、PDF、MP4/MOV/WebM 及受支持音频。HTML 与 EPUB 仅保存，不自动打开。',
 });
 
 function safeDownloadName(value,mime) {

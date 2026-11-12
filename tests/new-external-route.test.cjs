@@ -19,7 +19,7 @@ function fixture(openExternal = async () => {}) {
   const calls = [];
   const route = vm.runInNewContext('(async function(p){' + branch.slice(0, -1) + '})', {
     normalizeHttpUrl,
-    shell: { openExternal: async url => { calls.push(url); return openExternal(url); } },
+    browserSettings: { open: async url => { calls.push(url); return openExternal(url); } },
   });
   return { calls, route };
 }

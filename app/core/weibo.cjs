@@ -5,6 +5,7 @@
 // docs/weibo-protocol.md. This module never reads or returns cookies.
 const ORIGIN = 'https://api.weibo.com';
 const {normalizeImage, safeImageUrl, safePostUrl} = require('./media.cjs');
+const {imageIdentity} = require('./image-identity.cjs');
 const {firstAvatarUrl} = require('./avatar.cjs');
 const {normalizeMessageAttachments}=require('./attachments.cjs');
 const {postPermalink,collectPostReferences,normalizeMessageContext}=require('./message-references.cjs');
@@ -138,8 +139,8 @@ function normalizeImages(message, {allowFids = true} = {}) {
   const add = picture => {
     if (images.length >= 50) return;
     const image = imageMetadata(picture);
-    if (!image || seen.has(image.originalUrl || image.url)) return;
-    seen.add(image.originalUrl || image.url); images.push(image);
+    if (!image || seen.has(imageIdentity(image))) return;
+    seen.add(imageIdentity(image)); images.push(image);
   };
   // The official web client calls the first pic_infos item pic_gifs when it
   // builds a display record. Preserve its explicit original resource, never
@@ -237,8 +238,8 @@ function normalizeSharedPost(message) {
     const repostImages = repostDeleted ? [] : normalizeImages(repost, {allowFids: false});
     const repostAuthor = typeof repost.user?.screen_name === 'string' ? repost.user.screen_name : '';
     if (repostText) text += (text ? '\n\n' : '') + (repostAuthor ? '转发 @' + repostAuthor + '：\n' : '转发原文：\n') + repostText;
-    const seen = new Set(images.map(image => image.originalUrl));
-    for (const image of repostImages) if (images.length < 50 && !seen.has(image.originalUrl)) {images.push(image); seen.add(image.originalUrl);}
+    const seen = new Set(images.map(imageIdentity));
+    for (const image of repostImages) if (images.length < 50 && !seen.has(imageIdentity(image))) {images.push(image); seen.add(imageIdentity(image));}
     if (repostDeleted || (!repostText && !repostImages.length)) incompleteReasons.push('转发原微博已删除或当前返回内容不可读');
     else if (postIncomplete(repost)) incompleteReasons.push('转发原微博正文可能被截断');
   }

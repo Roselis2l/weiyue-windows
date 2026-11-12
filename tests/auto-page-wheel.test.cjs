@@ -17,7 +17,7 @@ function harness({offset=160,top=520}={}){
  let now=0,sequence=0,count=160,current=true,owner='same',barrier=null;const loads=[],timers=new Map();
  const scroll=Object.assign(new Element(),{scrollTop:top,scrollHeight:1000,clientHeight:400,clientWidth:480,offsetWidth:500,getBoundingClientRect:()=>({right:500})});
  const body=new Element(),document=Object.assign(new Surface(),{body,documentElement:new Element(),activeElement:scroll,visibilityState:'visible',hasFocus:()=>true});
- const win=new Surface(),modal={open:false};
+ const win=Object.assign(new Surface(),{WeiyueAutoPage:paging}),modal={open:false};
  const model={scrollTop:top,layoutVersion:0,restoring:false,filters:{},viewport:null,pagingGestureSequence:0};
  const autoPage=paging.createAutoPager({snapshot:()=>({key:owner,enabled:current&&!modal.open,blocked:false,atTop:paging.isAtTop(scroll),atBottom:paging.isAtBottom(scroll),offset,count,total:800}),
   load:async snapshot=>{loads.push(snapshot.direction);if(barrier)await barrier;return snapshot.direction;},apply:direction=>{count+=160;if(direction<0)offset=Math.max(0,offset-160);},now:()=>now});
@@ -79,11 +79,11 @@ test('keyboard leaves controls, modifiers, composition, modal and other-pane foc
  }
  const h=harness({top:600});h.modal.open=true;assert.equal(h.key('PageDown').defaultPrevented,undefined);await h.settle();assert.deepEqual(h.loads,[]);
 });
-test('safe body focus needs pointer context; leave and window blur revoke it',async()=>{
- const h=harness({top:600});h.document.activeElement=h.document.body;assert.equal(h.key('PageDown').defaultPrevented,undefined);
- h.hover();assert.equal(h.key('PageDown').defaultPrevented,true);await h.settle();assert.deepEqual(h.loads,[1]);
- h.up('PageDown');h.scroll.emit('pointerleave',{});assert.equal(h.key('PageDown').defaultPrevented,undefined);
- h.hover();h.win.emit('blur',{});assert.equal(h.key('PageDown').defaultPrevented,undefined);
+test('safe body Arrow focus needs pointer context; leave and window blur revoke it',async()=>{
+ const h=harness({top:600});h.document.activeElement=h.document.body;assert.equal(h.key('ArrowDown').defaultPrevented,undefined);
+ h.hover();assert.equal(h.key('ArrowDown').defaultPrevented,true);await h.settle();assert.deepEqual(h.loads,[1]);
+ h.up('ArrowDown');h.scroll.emit('pointerleave',{});assert.equal(h.key('ArrowDown').defaultPrevented,undefined);
+ h.hover();h.win.emit('blur',{});assert.equal(h.key('ArrowDown').defaultPrevented,undefined);
 });
 test('rebind disposes previous global input listeners; stale owner cannot reuse a held gesture',async()=>{
  const h=harness({top:600});h.run('bindReadingInput(scroll)');assert.equal(h.document.listeners.get('keydown').length,1);assert.equal(h.win.listeners.get('pointerup').length,1);
@@ -95,4 +95,8 @@ test('native scrollbar upward release loads once, geometry changes prevent a fal
   if(resized)h.scroll.scrollHeight+=20;h.move(0,20);await h.settle();assert.deepEqual(h.loads,[]);
   h.win.emit('pointerup',{isTrusted:true});h.win.emit('mouseup',{isTrusted:true});await h.settle();assert.deepEqual(h.loads,resized?[]:[-1]);
  }
+});
+
+test('Page keys route body and document root focus independently of idle pointer',async()=>{
+ for(const key of ['PageDown','PageUp'])for(const root of ['body','documentElement']){const h=harness({top:key==='PageDown'?600:0});h.document.activeElement=h.document[root];assert.equal(h.key(key).defaultPrevented,true);await h.settle();assert.deepEqual(h.loads,[key==='PageDown'?1:-1]);}
 });

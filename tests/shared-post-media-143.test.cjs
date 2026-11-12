@@ -1,0 +1,16 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const {normalizeImages,normalizeSharedPost,WeiboClient,PATHS}=require('../app/core/weibo.cjs');
+const {Store}=require('../app/core/store.cjs');
+const {imageIdentity}=require('../app/core/image-identity.cjs');
+const EVIDENCE=[{images:['https://wx3.sinaimg.cn/large/syntheticimage00000000000001.jpg','https://wx3.sinaimg.cn/large/syntheticimage00000000000002.jpg','https://wx3.sinaimg.cn/large/syntheticimage00000000000003.jpg']},{images:['https://wx3.sinaimg.cn/large/syntheticimage00000000000004.jpg','https://wx3.sinaimg.cn/large/syntheticimage00000000000005.jpg']}];
+const a=require('../app/core/attachments.cjs');
+test('known unsigned photo size and host aliases deduplicate with original URL untouched',()=>{const p=EVIDENCE[0].images[0],q=p.replace('wx3','wx1').replace('/large/','/orj360/'),image={url:q};assert.equal(imageIdentity({url:p}),imageIdentity(image));assert.equal(image.url,q);assert.equal(normalizeImages({pics:[p,q]}).length,1)});
+test('signed, unknown and generic-filename URLs are not merged as aliases',()=>{const p=EVIDENCE[0].images[0],q=p.replace('wx3','wx1').replace('/large/','/orj360/');assert.notEqual(imageIdentity({url:p+'?x=1'}),imageIdentity({url:q+'?x=2'}));assert.notEqual(imageIdentity({url:'https://wx1.sinaimg.cn/large/foo.jpg'}),imageIdentity({url:'https://wx2.sinaimg.cn/large/foo.jpg'}))});
+test('pic IDs alone never synthesize URLs; parser keeps all explicitly returned photos',()=>{assert.deepEqual(normalizeImages({pic_ids:['a','b']}),[]);assert.equal(normalizeImages({pics:EVIDENCE[0].images}).length,3);const p=normalizeSharedPost({status:{text:'share',pics:EVIDENCE[1].images,retweeted_status:{text:'original',pics:EVIDENCE[1].images}}});assert.equal(p.images.length,2)});
+const attachment={kind:'video',fid:'1234567890123456',state:'ready',mime:'video/mp4',name:'test.mp4',url:a.sourceUrl('1234567890123456')};
+const failure=(data,status=400,type='application/json')=>a.fetchAttachment({attachment,fetch:async()=>new Response(typeof data==='string'?data:JSON.stringify(data),{status,headers:{'content-type':type}})});
+test('only explicit source deletion code plus text produces deleted label',async()=>{await assert.rejects(failure({error_code:20367,error:'文件已删除'}),e=>e.code==='ATTACHMENT_DELETED'&&e.message.includes('源站已删除'))});
+test('unknown or unconfirmed failure never claims deletion',async()=>{for(const d of [{error_code:20367,error:'other'},{error_code:1,error:'文件已删除'},'not json','x'.repeat(5000)])await assert.rejects(failure(d),{code:'ATTACHMENT_HTTP'});await assert.rejects(failure({error_code:20367,error:'文件已删除'},403),{code:'ATTACHMENT_DENIED'})});
+test('rejected original Ajax endpoint is absent from shipped request surface',()=>{assert.equal(PATHS.post,undefined);assert.equal(WeiboClient.prototype.sharedPostMedia,undefined);for(const file of ['app/main.cjs','app/core/weibo.cjs'])assert.ok(!fs.readFileSync(path.join(__dirname,'..',file),'utf8').includes('/ajax/statuses/show'))});

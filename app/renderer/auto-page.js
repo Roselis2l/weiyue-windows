@@ -6,6 +6,10 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
   const WHEEL_GAP_MS = 250, INTENT_MS = 1200;
+  function ownsReadingKey({key, listFocused = false, bodyFocused = false, hoveringReading = false} = {}) {
+    if (!['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown'].includes(key)) return false;
+    return listFocused || bodyFocused && (key === 'PageUp' || key === 'PageDown' || hoveringReading);
+  }
   function isAtTop({scrollTop, scrollHeight, clientHeight} = {}, threshold = 2) {
     if (![scrollTop, scrollHeight, clientHeight, threshold].every(Number.isFinite) ||
         scrollTop < 0 || scrollHeight < 0 || clientHeight <= 0 || threshold < 0) return false;
@@ -105,5 +109,5 @@
     if (new Set(messages.map(message => String(message.id))).size !== messages.length) throw changed();
     return {...first, offset, messages};
   }
-  return Object.freeze({createAutoPager, isAtTop, isAtBottom, queryWindow, WHEEL_GAP_MS, INTENT_MS});
+  return Object.freeze({ownsReadingKey, createAutoPager, isAtTop, isAtBottom, queryWindow, WHEEL_GAP_MS, INTENT_MS});
 });

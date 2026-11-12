@@ -35,6 +35,7 @@ const {AccountAutoSync}=require('./core/account-auto-sync.cjs');
 const {createLayoutPreferences}=require('./core/layout-preferences.cjs');
 const {createAutoCleanup}=require('./core/auto-cleanup.cjs');
 const {createStartupSettings}=require('./core/startup-settings.cjs');
+const {createBrowserSettings}=require('./core/browser-settings.cjs');
 const {validateBuildIdentity}=require('./core/build-identity.cjs');
 const {BoundedMediaCache}=require('./core/bounded-media-cache.cjs');
 const buildIdentity=validateBuildIdentity(require('./edition.json'),require('../package.json').version);
@@ -49,6 +50,7 @@ const dataRoot=argData?path.resolve(argData.slice(11)):app.isPackaged?path.join(
 fs.mkdirSync(dataRoot,{recursive:true});
 const layoutPreferences=createLayoutPreferences(path.join(dataRoot,'preferences.json'));
 const startupSettings=createStartupSettings({app,dataRoot});
+const browserSettings=createBrowserSettings({dataRoot,shell});
 app.setPath('userData',path.join(dataRoot,'browser'));
 app.setName('微阅 Windows');
 protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
@@ -349,6 +351,8 @@ async function handle(action,p){
   if(cleanupBusy()&&['demo','login.open','login.complete','logout','settings.save','settings.ai.save','settings.appearance.save','import','groups.select','read.set','important.set','bookmark.add','bookmark.remove','summary.local','summary.ai.prepare','summary.ai','summary.delete','sync.configure','notion.export'].includes(action))throw new Error('本地数据操作正在进行，完成后可继续保存或同步。');
   switch(action){
     case 'state':return {...snapshot(),application:buildIdentity};
+    case 'browser.get':return browserSettings.get();
+    case 'browser.save':return browserSettings.save(p);
     case 'startup.get':return startupSettings.get();
     case 'startup.save':return startupSettings.save(p);
     case 'layout.get':return layoutPreferences.getLayout();
@@ -498,7 +502,7 @@ async function handle(action,p){
         })});
       }finally{busy=false;}
     }
-    case 'external.open':{const url=normalizeHttpUrl(p.url);if(!url)throw new Error('仅允许 HTTP 或 HTTPS 网页地址。');await shell.openExternal(url);return true;}
+    case 'external.open':{const url=normalizeHttpUrl(p.url);if(!url)throw new Error('仅允许 HTTP 或 HTTPS 网页地址。');await browserSettings.open(url);return true;}
     default:throw new Error('不支持的操作');
   }
 }
@@ -525,7 +529,7 @@ async function start(){
     if(request.method!=='GET'||u.host!=='local')return new Response('Not found',{status:404});
     if(u.pathname.startsWith('/emoticons/'))return emoticonAssets.serve(request,u);
     if(pdfAssets.has(u.pathname))return net.fetch(pathToFileURL(path.join(__dirname,'pdfjs',u.pathname.slice('/pdfjs/'.length))).href);
-    if(!['/startup-toggle.js','/layout-controls.js','/layout-controls.css','/auto-page.js','/appearance.js','/appearance-settings.js','/interface-theme.js','/interface-theme.css','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
+    if(!['/browser-settings.js','/startup-toggle.js','/layout-controls.js','/layout-controls.css','/auto-page.js','/appearance.js','/appearance-settings.js','/interface-theme.js','/interface-theme.css','/drag-scroll.js','/message-references.js','/cleanup-progress.js','/message-cleanup.js','/message-cleanup.css','/index.html','/app.js','/style.css','/reading-state.js','/filter-controls.js','/sync-status.js','/linkify.js','/emoticons.js','/emoticon-manifest.js','/image-viewer.html','/image-viewer.js','/image-viewer.css','/attachment-viewer.html','/attachment-viewer.js','/attachment-viewer.css'].includes(u.pathname))return new Response('Not found',{status:404});
     return net.fetch(pathToFileURL(path.join(__dirname,'renderer',u.pathname.slice(1))).href);
   });
   hardenSession(session.defaultSession);Menu.setApplicationMenu(null);

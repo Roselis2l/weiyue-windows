@@ -11,6 +11,12 @@ const DOCUMENT_FORMATS=Object.freeze({
  md:Object.freeze({mime:DOCUMENT_MIME.md,limit:DOCUMENT_LIMITS.textBytes,aliases:Object.freeze(['text/plain','text/x-markdown'])}),
  csv:Object.freeze({mime:DOCUMENT_MIME.csv,limit:DOCUMENT_LIMITS.textBytes,aliases:Object.freeze(['text/plain','application/csv','application/vnd.ms-excel'])}),
 });
+const DOWNLOAD_FORMATS=Object.freeze({
+ html:Object.freeze({mime:'text/html',limit:5*1024*1024,aliases:Object.freeze(['text/plain'])}),
+ htm:Object.freeze({mime:'text/html',limit:5*1024*1024,aliases:Object.freeze(['text/plain'])}),
+ epub:Object.freeze({mime:'application/epub+zip',limit:50*1024*1024,aliases:Object.freeze(['application/zip','application/x-zip-compressed'])}),
+});
+const downloadFormat=mime=>Object.values(DOWNLOAD_FORMATS).find(value=>value.mime===mime);
 const documentFormat=mime=>Object.values(DOCUMENT_FORMATS).find(value=>value.mime===mime);
 const typedPrototype=Object.getPrototypeOf(Uint8Array.prototype);
 const typedBuffer=Object.getOwnPropertyDescriptor(typedPrototype,'buffer').get;
@@ -37,6 +43,7 @@ const MESSAGES = Object.freeze({
   ATTACHMENT_RATE_LIMIT: '微博限制了本次读取，请稍后再试。',
   ATTACHMENT_REJECTED: '微博未允许本次附件读取。',
   ATTACHMENT_HTTP: '附件暂时无法读取。',
+  ATTACHMENT_DELETED: '源站已删除该附件，无法播放或下载。',
   ATTACHMENT_REDIRECT: '附件跳转地址不在允许范围内。',
   ATTACHMENT_NETWORK: '附件网络读取失败，请稍后再试。',
   ATTACHMENT_TIMEOUT: '附件读取超时。',
@@ -83,22 +90,23 @@ function safeAttachmentUrl(value) {
   }catch{return null;}
 }
 function normalizeAttachment(value) {
-  if(!object(value)||!['file','pdf','video','archive','document','audio'].includes(value.kind))return null;
+  if(!object(value)||!['file','pdf','video','archive','document','audio','download'].includes(value.kind))return null;
   const fid=fidValue(value.fid);if(!fid)return null;
   if(value.state==='needs-metadata'){
     if(!['file','video','audio'].includes(value.kind))return null;
     return {kind:value.kind,fid,state:'needs-metadata',name:text(value.name,value.kind==='video'?'分享视频':value.kind==='audio'?'分享语音':'文件消息'),
       ...(value.kind==='video'&&value.livePhoto===true?{livePhoto:true}:{})};
   }
-  if(value.state!=='ready'||!['pdf','video','archive','document','audio'].includes(value.kind))return null;
+  if(value.state!=='ready'||!['pdf','video','archive','document','audio','download'].includes(value.kind))return null;
   const mime=value.kind==='pdf'?'application/pdf':value.mime;
   if(value.kind==='video'&&!['video/mp4','video/webm','video/quicktime'].includes(mime))return null;
   if(value.kind==='archive'&&!archiveFormat(mime))return null;
   if(value.kind==='document'&&!documentFormat(mime))return null;
   if(value.kind==='audio'&&!audioFormat(mime))return null;
+  if(value.kind==='download'&&!downloadFormat(mime))return null;
   const url=safeAttachmentUrl(value.url);
   if(!url||new URL(url).searchParams.get('fid')!==fid)return null;
-  const fallback=value.kind==='pdf'?'文件.pdf':value.kind==='audio'?'语音.'+Object.keys(AUDIO_FORMATS).find(key=>AUDIO_FORMATS[key].mime===mime):value.kind==='document'?'文件.'+Object.keys(DOCUMENT_FORMATS).find(key=>DOCUMENT_FORMATS[key].mime===mime):value.kind==='archive'?'压缩文件.'+Object.keys(ARCHIVE_FORMATS).find(key=>ARCHIVE_FORMATS[key].mime===mime):'视频.mp4';
+  const fallback=value.kind==='download'?'附件.'+Object.keys(DOWNLOAD_FORMATS).find(key=>DOWNLOAD_FORMATS[key].mime===mime):value.kind==='pdf'?'文件.pdf':value.kind==='audio'?'语音.'+Object.keys(AUDIO_FORMATS).find(key=>AUDIO_FORMATS[key].mime===mime):value.kind==='document'?'文件.'+Object.keys(DOCUMENT_FORMATS).find(key=>DOCUMENT_FORMATS[key].mime===mime):value.kind==='archive'?'压缩文件.'+Object.keys(ARCHIVE_FORMATS).find(key=>ARCHIVE_FORMATS[key].mime===mime):'视频.mp4';
   const result={kind:value.kind,fid,state:'ready',name:text(value.name,fallback),mime,url};
   if(value.kind==='video'&&value.livePhoto===true)result.livePhoto=true;
   for(const key of ['size','width','height'])if(Number.isSafeInteger(value[key])&&value[key]>0&&value[key]<=
@@ -169,6 +177,14 @@ async function requestBytes({url,fetch:request,signal,maxBytes,timeoutMs,accept}
     if(response.status===403)fail('ATTACHMENT_DENIED');
     if(response.status===429)fail('ATTACHMENT_RATE_LIMIT');
     if(response.redirected||[301,302,303,307,308].includes(response.status))fail('ATTACHMENT_REDIRECT');
+    if(response.status===400 && (!response.url || response.url===url) && new URL(url).hostname==='upload.api.weibo.com' && /application\/json/i.test(response.headers.get('content-type')||'') && response.body?.getReader){
+      reader=response.body.getReader();const chunks=[];let size=0;
+      for(;;){const part=await wait(()=>reader.read());if(part.done)break;
+        if(!types.isUint8Array(part.value))break;
+        size+=part.value.byteLength;if(size>4096)break;chunks.push(Buffer.from(part.value));}
+      if(size<=4096){let data;try{data=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{}
+        if(String(data?.error_code)==='20367' && /文件已删除/.test(String(data?.error||data?.message||'')))fail('ATTACHMENT_DELETED');}
+    }
     if(response.status<200||response.status>=300)fail('ATTACHMENT_HTTP');
     if(response.url&&response.url!==url)fail('ATTACHMENT_REDIRECT');
     const length=response.headers.get('content-length');
@@ -202,15 +218,16 @@ function normalizeAttachmentMetadata(descriptor,metadata) {
   const archive=Object.prototype.hasOwnProperty.call(ARCHIVE_FORMATS,extension)?ARCHIVE_FORMATS[extension]:null;
   const document=Object.prototype.hasOwnProperty.call(DOCUMENT_FORMATS,extension)?DOCUMENT_FORMATS[extension]:null;
   const audio=Object.prototype.hasOwnProperty.call(AUDIO_FORMATS,extension)?AUDIO_FORMATS[extension]:null;
-  const kind=extension==='pdf'?'pdf':['mp4','webm','mov'].includes(extension)?'video':archive?'archive':document?'document':audio?'audio':null;
+  const download=Object.prototype.hasOwnProperty.call(DOWNLOAD_FORMATS,extension)?DOWNLOAD_FORMATS[extension]:null;
+  const kind=extension==='pdf'?'pdf':['mp4','webm','mov'].includes(extension)?'video':archive?'archive':document?'document':audio?'audio':download?'download':null;
   if(!kind||(pending.kind==='video'&&kind!=='video')||(pending.kind==='audio'&&kind!=='audio'))fail('ATTACHMENT_TYPE');
-  let name=text(metadata.filename,(kind==='pdf'||kind==='document'?'文件':kind==='archive'?'压缩文件':kind==='audio'?'语音':'视频')+'.'+extension);
+  let name=text(metadata.filename,(kind==='pdf'||kind==='document'||kind==='download'?'文件':kind==='archive'?'压缩文件':kind==='audio'?'语音':'视频')+'.'+extension);
   if(/%[a-f0-9]{2}/i.test(name)){try{name=text(decodeURIComponent(name),name);}catch{}}
-  const value={kind,fid:pending.fid,state:'ready',name,mime:kind==='pdf'?'application/pdf':archive?archive.mime:document?document.mime:audio?audio.mime:extension==='mov'?'video/quicktime':'video/'+extension,url:sourceUrl(pending.fid)};
+  const value={kind,fid:pending.fid,state:'ready',name,mime:kind==='pdf'?'application/pdf':archive?archive.mime:document?document.mime:audio?audio.mime:download?download.mime:extension==='mov'?'video/quicktime':'video/'+extension,url:sourceUrl(pending.fid)};
   if(kind==='video'&&pending.livePhoto)value.livePhoto=true;
   const size=Number(metadata.filesize);
   if(Number.isSafeInteger(size)&&size>0){
-    if(size>(kind==='pdf'?MAX_PDF_BYTES:document?document.limit:audio?MAX_AUDIO_BYTES:MAX_VIDEO_BYTES))fail('ATTACHMENT_TOO_LARGE');
+    if(size>(kind==='pdf'?MAX_PDF_BYTES:document?document.limit:audio?MAX_AUDIO_BYTES:download?download.limit:MAX_VIDEO_BYTES))fail('ATTACHMENT_TOO_LARGE');
     value.size=size;
   }
   const dimensions=typeof metadata.videosize==='string'?metadata.videosize.match(/^(\d{1,5})\*(\d{1,5})$/):null;
@@ -226,6 +243,18 @@ async function resolveAttachment(descriptor,{fetch,signal}={}) {
 }
 function detectedAttachmentMime(bytes,expectedMime) {
   if(!Buffer.isBuffer(bytes))return null;
+  if(expectedMime==='text/html'){
+    if(!bytes.length||bytes.length>DOWNLOAD_FORMATS.html.limit||bytes.subarray(0,2).toString('ascii')==='MZ'||bytes.includes(0))return null;
+    // HTML is opaque download data, never parsed into a DOM or rendered.
+    const head=bytes.subarray(0,8192).toString('utf8').replace(/^\uFEFF/,'').trimStart();
+    return /^(?:<!doctype\s+html\b|<html\b|<!--)/i.test(head)&&/<(?:html|head|body|title|!doctype\s+html)\b/i.test(head)?expectedMime:null;
+  }
+  if(expectedMime==='application/epub+zip'){
+    // EPUB requires the first ZIP member to be uncompressed "mimetype".
+    // Inspect its bounded bytes only; never extract files or execute contents.
+    if(bytes.length<58||bytes.length>DOWNLOAD_FORMATS.epub.limit||bytes.readUInt32LE(0)!==0x04034b50||(bytes.readUInt16LE(6)&9)||bytes.readUInt16LE(8)!==0||bytes.readUInt32LE(18)!==20||bytes.readUInt32LE(22)!==20||bytes.readUInt16LE(26)!==8||bytes.readUInt16LE(28)!==0)return null;
+    return bytes.subarray(30,38).toString('ascii')==='mimetype'&&bytes.subarray(38,58).toString('ascii')==='application/epub+zip'?expectedMime:null;
+  }
   if(documentFormat(expectedMime))return isDocumentBytes(bytes,expectedMime)?expectedMime:null;
   if(audioFormat(expectedMime))return detectedAudioMime(bytes,expectedMime);
   // Fixed signatures at byte zero only; never accept executable/SFX prefixes.
@@ -267,7 +296,7 @@ function mergeAttachments(previous=[],incoming=[]) {
 }
 async function fetchAttachment({attachment,fetch,signal,timeoutMs=120000}={}) {
   const value=normalizeAttachment(attachment);if(!value||value.state!=='ready')fail('ATTACHMENT_INVALID');
-  const maxBytes=value.kind==='pdf'?MAX_PDF_BYTES:value.kind==='audio'?MAX_AUDIO_BYTES:value.kind==='document'?documentFormat(value.mime).limit:value.kind==='archive'?MAX_ARCHIVE_BYTES:MAX_VIDEO_BYTES;
+  const maxBytes=value.kind==='download'?downloadFormat(value.mime).limit:value.kind==='pdf'?MAX_PDF_BYTES:value.kind==='audio'?MAX_AUDIO_BYTES:value.kind==='document'?documentFormat(value.mime).limit:value.kind==='archive'?MAX_ARCHIVE_BYTES:MAX_VIDEO_BYTES;
   const result=await requestBytes({url:value.url,fetch,signal,timeoutMs,maxBytes,accept:value.mime+', application/octet-stream'});
   const declared=String(result.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
   // The official MSS endpoint also returns MP4 as video/mpeg4. Keep the alias
@@ -276,7 +305,8 @@ async function fetchAttachment({attachment,fetch,signal,timeoutMs=120000}={}) {
     (value.kind==='video'&&value.mime==='video/mp4'&&declared==='video/mpeg4')||
     (value.kind==='archive'&&archiveFormat(value.mime)?.aliases.includes(declared))||
     (value.kind==='document'&&documentFormat(value.mime)?.aliases.includes(declared))||
-    (value.kind==='audio'&&audioFormat(value.mime)?.aliases.includes(declared));
+    (value.kind==='audio'&&audioFormat(value.mime)?.aliases.includes(declared))||
+    (value.kind==='download'&&downloadFormat(value.mime)?.aliases.includes(declared));
   const detected=detectedAttachmentMime(result.bytes,value.mime);
   // MSS can label an uploaded QuickTime movie as .mp4/video/mp4. Trust the
   // validated container signature only for this observed MP4 -> MOV mismatch.
@@ -288,4 +318,4 @@ module.exports={AttachmentError,normalizeAttachment,normalizeAttachments,attachm
   normalizeMessageAttachments:normalizeAttachments,mergeAttachments,
   normalizeAttachmentMetadata,resolveAttachment,
   fidValue,sourceUrl,metadataUrl,parseMetadata,fetchAttachmentMetadata,fetchAttachment,detectedAttachmentMime,
-  MAX_METADATA_BYTES,MAX_PDF_BYTES,MAX_VIDEO_BYTES,MAX_ARCHIVE_BYTES,MAX_AUDIO_BYTES,ARCHIVE_FORMATS,DOCUMENT_FORMATS,AUDIO_FORMATS,ORIGIN,META_PATH,MEDIA_PATH,CALLBACK};
+  MAX_METADATA_BYTES,MAX_PDF_BYTES,MAX_VIDEO_BYTES,MAX_ARCHIVE_BYTES,MAX_AUDIO_BYTES,ARCHIVE_FORMATS,DOCUMENT_FORMATS,DOWNLOAD_FORMATS,AUDIO_FORMATS,ORIGIN,META_PATH,MEDIA_PATH,CALLBACK};

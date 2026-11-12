@@ -19,6 +19,7 @@ fs.mkdirSync(evidence, { recursive: true });
 fs.mkdirSync(dataDir);
 fs.cpSync(path.join(root, 'vendor', 'runtime'), path.join(harness, 'runtime'), { recursive: true });
 fs.cpSync(path.join(root, 'app'), path.join(harness, 'app'), { recursive: true });
+fs.copyFileSync(path.join(root, 'package.json'), path.join(harness, 'package.json'));
 const executablePath = path.join(harness, 'runtime', 'electron.exe');
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const sourceHashes = Object.fromEntries(fs.readdirSync(path.join(harness, 'app'), { recursive: true })

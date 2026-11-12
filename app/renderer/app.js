@@ -341,7 +341,15 @@ async function loadNextLocalPage(snapshot) {
   // A stable boundary is resolved against the same complete filtered list in
   // the store. Never use an unfiltered locate offset for filtered pagination.
   if(first && (previous?result.offset+result.messages.length!==snapshot.offset:result.offset!==snapshot.offset+snapshot.count)){queueReadingRefresh();throw new Error('分页位置已更新，请重试');}
-  return result;
+  // Prepare detached cards in short frame-sized slices while the pager remains
+  // single-flight. A changed account/group/filter invalidates the entire result.
+  const prepared=new Map();let started=performance.now();
+  for(const message of result.messages || []){
+    if(snapshot.key!==autoPageKey())return result;
+    prepared.set(String(message.id),messageCard(message));
+    if(performance.now()-started>=8){await new Promise(resolve=>requestAnimationFrame(resolve));started=performance.now();}
+  }
+  return {...result,preparedCards:prepared};
 }
 function appendLocalPage(result,snapshot={direction:1}) {
   const scroll=$('message-scroll'),space=$('reading-end-space');if(!scroll || !space)return;
@@ -353,20 +361,47 @@ function appendLocalPage(result,snapshot={direction:1}) {
   model.messageObserver?.disconnect();
   // Inserting only new siblings preserves native selection and selected tools.
   const insertion=previous?scroll.firstChild:space;
+  const fragment=document.createDocumentFragment();
   let day=!previous && model.messages.length?new Date(model.messages.at(-1).time).toDateString():'';
   for(const message of added){
     const next=new Date(message.time).toDateString();
-    if(next!==day){scroll.insertBefore(node('div',{class:'day-divider','data-day':next},dateLabel(message.time)),insertion);day=next;}
-    const element=messageCard(message);scroll.insertBefore(element,insertion);model.messageSignatures.set(String(message.id),messageSignature(message));
+    if(next!==day){fragment.append(node('div',{class:'day-divider','data-day':next},dateLabel(message.time)));day=next;}
+    const element=result.preparedCards?.get(String(message.id)) || messageCard(message);fragment.append(element);model.messageSignatures.set(String(message.id),messageSignature(message));
   }
+  scroll.insertBefore(fragment,insertion);
   if(previous){
     if(added.length && insertion?.classList.contains('day-divider') && insertion.dataset.day===day)insertion.remove();
     model.messages.unshift(...added);model.offset=result.offset;
   }else model.messages.push(...added);
   model.total=result.total;
+  trimReadingWindow(snapshot.direction,anchor);
   // Restoring by the first visible ID and its measured offset also revokes the
   // old gesture's read permission. Newly appended rows require fresh reading.
   restoreViewport(anchor);watchMessageSizes();updateReadChrome();scheduleRead();
+}
+function trimReadingWindow(direction,anchor) {
+  const scroll=$('message-scroll'),maximum=Math.max(model.limit*4,640);
+  if(!scroll || model.messages.length<=maximum || model.selected.size)return;
+  const selection=window.getSelection();
+  if(selection && !selection.isCollapsed){
+    if(scroll.contains(selection.anchorNode) || scroll.contains(selection.focusNode))return;
+    for(let i=0;i<selection.rangeCount;i++)if(selection.getRangeAt(i).intersectsNode(scroll))return;
+  }
+  const index=model.messages.findIndex(message=>String(message.id)===anchor?.anchorId);
+  if(index<0)return;
+  const excess=model.messages.length-maximum;
+  // Only prune the opposite, invisible edge. Retain the entire visible viewport
+  // and a page of context; the stable ID anchor restores exact pixel position.
+  const remove=direction<0?Math.min(excess,Math.max(0,model.messages.length-index-model.limit)):Math.min(excess,Math.max(0,index-model.limit));
+  if(!remove)return;
+  const discarded=direction<0?model.messages.splice(model.messages.length-remove,remove):model.messages.splice(0,remove);
+  if(direction>=0)model.offset+=remove;
+  const discardIds=new Set(discarded.map(message=>String(message.id)));
+  for(const element of scroll.querySelectorAll('[data-message-id]'))if(discardIds.has(element.dataset.messageId))element.remove();
+  for(const id of discardIds)model.messageSignatures.delete(id);
+  for(const divider of scroll.querySelectorAll('[data-day]'))divider.remove();
+  let day='';const elements=new Map([...scroll.querySelectorAll('[data-message-id]')].map(element=>[element.dataset.messageId,element]));
+  for(const message of model.messages){const next=new Date(message.time).toDateString();if(next!==day){scroll.insertBefore(node('div',{class:'day-divider','data-day':next},dateLabel(message.time)),elements.get(String(message.id)));day=next;}}
 }
 function updateAutoPageChrome() {
   const status=autoPage.status(),scroll=$('message-scroll'),next=$('next-page'),previous=$('previous-page');
@@ -429,12 +464,20 @@ function measuredMessages() {
   const throughIndex=elements.findIndex(element=>element.dataset.messageId===state?.readThroughId);
   const boundary=model.readBoundary;
   const throughOffset=boundary?.groupId===model.groupId && boundary.id===state?.readThroughId?boundary.offset:-1;
-  return elements.map((element,index)=>{
-    const box=element.getBoundingClientRect(),id=element.dataset.messageId;
+  const bounds=scroll.getBoundingClientRect(),bottom=bounds.top+scroll.clientHeight;
+  // Cards are ordered vertical siblings. Locate the first visible card without
+  // measuring every off-screen row or inspecting its unloaded lazy images.
+  let low=0,high=elements.length;
+  while(low<high){const mid=(low+high)>>>1;if(elements[mid].getBoundingClientRect().bottom<=bounds.top+1)low=mid+1;else high=mid;}
+  const items=[];
+  for(let index=low;index<elements.length;index++){
+    const element=elements[index],box=element.getBoundingClientRect();if(box.top>=bottom)break;
+    const id=element.dataset.messageId;
     const loaded=[...element.querySelectorAll('img:not(.avatar-image):not(.emoticon-image)')].every(img=>img.complete && (img.naturalWidth>0 || img.hidden));
     const ready=reading.mediaReadyForRead({loaded,alreadyRead:throughIndex>=index || throughOffset>=model.offset+index});
-    return{id,top:box.top,bottom:box.bottom,ready};
-  });
+    items.push({id,top:box.top,bottom:box.bottom,ready});
+  }
+  return items;
 }
 function isCurrentReadingRendered() {
   const rendered=model.renderedReading;
@@ -839,12 +882,12 @@ function renderMessageContent(message) {
   if(message.recalledMediaLocalOnly&&(message.images?.length||message.attachments?.length||message.sharedPost?.images?.length))content.append(node('p',{class:'legacy-share-note'},'撤回媒体仅能打开本次运行已缓存的原件；缓存不存在或重启后无法恢复。'));
   if(message.images?.length)content.append(imageGallery(message.images,message));
   for(const attachment of message.attachments || []){
-    const archive=attachment.kind==='archive';
+    const archive=attachment.kind==='archive',downloadOnly=attachment.kind==='download';
     const type=attachment.livePhoto?'实况照片':attachment.kind==='video'?'视频':attachment.kind==='audio'?'语音':attachment.kind==='pdf'?'PDF 文件':attachment.kind==='document'?'文档':archive?'压缩文件':'文件';
-    const action=attachment.livePhoto?'播放实况照片':attachment.kind==='video'?'播放视频':attachment.kind==='audio'?'播放语音':archive?'下载压缩文件':'预览文件';
+    const action=attachment.livePhoto?'播放实况照片':attachment.kind==='video'?'播放视频':attachment.kind==='audio'?'播放语音':archive?'下载压缩文件':downloadOnly?'保存原文件':'预览文件';
     const info=[type,attachment.size?((attachment.size/1024/1024).toFixed(2)+' MB'):'',attachment.state==='needs-metadata'?'点击读取文件信息':''].filter(Boolean).join(' · ');
     const download=async()=>{const result=await api('attachment.download',{source:attachment.src});if(!result?.canceled)toast('原文件已保存到所选位置。');};
-    content.append(node('section',{class:'attachment-card'},node('div',{class:'attachment-copy'},node('strong',{},attachment.name || type),node('small',{},info)),button(action,archive?download:()=>api('attachment.open',{source:attachment.src}),'small attachment-open',{'aria-label':action+' '+(attachment.name || type)}),['file','document'].includes(attachment.kind)?button('下载原文件',download,'small attachment-download'):null,node('span',{class:'attachment-save-hint'},archive?'选择保存位置，不解压或运行':'预览窗口内可另存原文件')));
+    content.append(node('section',{class:'attachment-card'},node('div',{class:'attachment-copy'},node('strong',{},attachment.name || type),node('small',{},info)),button(action,(archive||downloadOnly)?download:()=>api('attachment.open',{source:attachment.src}),'small attachment-open',{'aria-label':action+' '+(attachment.name || type)}),['file','document'].includes(attachment.kind)?button('下载原文件',download,'small attachment-download'):null,node('span',{class:'attachment-save-hint'},downloadOnly?'仅保存原文件，不自动打开或运行':archive?'选择保存位置，不解压或运行':'预览窗口内可另存原文件')));
   }
   const post=message.sharedPost;
   if(post && !isNotificationOnly(message)){
@@ -949,9 +992,12 @@ function bindReadingInput(scroll) {
     const direction=['PageUp','ArrowUp'].includes(event.key)?-1:['PageDown','ArrowDown'].includes(event.key)?1:0;
     if(!direction || !event.isTrusted || event.defaultPrevented || event.isComposing || event.keyCode===229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !current())return;
     const active=document.activeElement,safeRoot=target=>target===document.body || target===document.documentElement;
-    // A focused control in any pane keeps its keys. Body focus can use the
-    // reading pane only while the pointer is actually over non-interactive chat.
-    if(interactive(event.target) || interactive(active) || !(active===scroll && event.target===scroll || safeRoot(active) && safeRoot(event.target) && hoverTarget && !interactive(hoverTarget)))return;
+    // Focused controls retain their keys. Page keys belong to the active reading
+    // pane when no control is focused, independent of the idle mouse position.
+    // Arrow keys retain the narrower pointer-over-chat fallback.
+    if(interactive(event.target) || interactive(active) || !window.WeiyueAutoPage.ownsReadingKey({key:event.key,
+      listFocused:active===scroll && event.target===scroll,bodyFocused:safeRoot(active) && safeRoot(event.target),
+      hoveringReading:!!hoverTarget && !interactive(hoverTarget)}))return;
     event.preventDefault();
     let gesture=heldKeys.get(event.key);
     if(!gesture){if(event.repeat)return;gesture={id:nextGesture(),owner:readingOwner()};heldKeys.set(event.key,gesture);}
@@ -1630,9 +1676,12 @@ function showSettings(restoredDraft) {
     node('p',{id:'ai-current-model'},settings.model?aiProviderName(settings.aiProviderId || 'custom')+' · '+settings.model:'添加你自己的模型配置'),
     settings.endpoint?node('p',{id:'ai-current-endpoint',class:'ai-settings-address'},settings.endpoint):null,
     button(settings.endpoint || settings.model?'编辑自定义模型':'添加自定义模型',()=>showAiConfiguration(draft),'full',{id:'configure-ai'}));
+  const browserSelect=node('select',{id:'link-browser','aria-label':'打开聊天链接的浏览器',disabled:true});
+  const browserNote=node('p',{id:'link-browser-note',class:'caption',role:'status','aria-live':'polite'});
   const startupInput=node('input',{id:'startup-enabled',type:'checkbox',disabled:true});
   const startupNote=node('p',{id:'startup-note',class:'caption',role:'status','aria-live':'polite'});
   const body=node('div',{},node('p',{class:'form-description'},'凭据由 Windows 保护并绑定当前本地工作区。已保存的 Key 不会回显。AI 模型与 Notion 连接分别保存。'),aiDetails,
+    node('div',{class:'form-section'},node('h3',{},'打开聊天链接的浏览器'),browserSelect,browserNote),
     node('div',{class:'form-section'},node('label',{class:'check-row'},startupInput,node('span',{},'开机自启动')),startupNote),
     node('div',{class:'form-section'},node('h3',{},'主题与外观颜色'),node('p',{class:'form-description'},'选择界面主题，或独立调整聊天背景、成员昵称与消息框颜色；仅影响当前账号。'),button('编辑主题与颜色',()=>showAppearanceSettings(draft),'full',{id:'configure-appearance',disabled:!accountId})),
     node('div',{class:'form-section'},node('h3',{},'Notion 连接'),node('p',{class:'form-description'},'使用你自己的 Notion integration，并在 Notion 页面中授予它访问权限。保存设置不会写入任何页面。'),field('Integration token',notionToken,creds.notion?'已保存的 Token 留空保持不变。':null)),
@@ -1646,6 +1695,7 @@ function showSettings(restoredDraft) {
     draft.notionToken='';notionToken.value='';closeModal();renderSidebar();renderHeader();renderInspector();toast('设置已保存在本机。');
   },'primary',{id:'save-settings'})],{onClose:()=>{draft.notionToken='';notionToken.value='';closeModal();}});
   const epoch=model.accountEpoch;
+  window.WeiyueBrowserSettings.bind({api,select:browserSelect,note:browserNote,isCurrent:()=>epoch===model.accountEpoch&&$('modal').open&&$('modal').querySelector('#link-browser')===browserSelect});
   window.WeiyueStartupToggle.bind({api,input:startupInput,note:startupNote,isCurrent:()=>epoch===model.accountEpoch&&accountId===model.state.account?.id&&$('modal').open&&$('modal').querySelector('#startup-enabled')===startupInput});
 }
 function showAppearanceSettings(settingsDraft) {
