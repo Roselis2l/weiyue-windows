@@ -317,12 +317,15 @@ async function syncContinuous({store,accountId,client,groupId,history=false,maxP
         }
         if(!recoveryJob&&bounded&&!history)setRanges(target,[]);
         const oldProgress=current.syncProgress;
-        const continuing=oldProgress&&pendingRanges(current).length>0;
+        const continuing=oldProgress&&(pendingRanges(current).length>0||
+          (matchesOfflineScan(current.offlineDateScan,scanPolicy)&&(!current.offlineDateScan.complete||current.offlineDateScan.headPending))||
+          (recoveryJob&&current.historyRecovery&&!current.historyRecovery.complete));
+        const progressPage=job.kind==='gap'||job.kind==='date'||recoveryJob;
         const phase=recoveryJob?(target.historyRecovery.complete?'joined':target.historyRecovery.unresolved?'unresolved':'backfill'):!history&&offline.mode==='none'?'paused':!history&&offline.mode==='date'?(target.offlineDateScan?.complete&&!target.offlineDateScan.headPending?'limited':(target.offlineDateScan?.unresolved||target.offlineDateScan?.headPending?.status==='unresolved')?'unresolved':'backfill'):ranges.some(r=>r.status==='pending')?'backfill':ranges.length?'unresolved':'joined';
         const reason=recoveryJob?(target.historyRecovery.complete?'已完成所选时段的重新获取。':target.historyRecovery.unresolved?'平台暂未返回所选时段起点，重新获取进度已保留。':'正在重新获取所选时段。'):phase==='paused'?'已选择不补齐；仍检查最新消息，原有待补区间已保留。':phase==='limited'?'已补齐至所选日期（北京时间）；更早消息未补齐，平台不可见记录仍可能缺失。':phase==='backfill'?'正在补齐离线期间的消息；已保存页可在重启后续传。':phase==='unresolved'?'平台暂未返回衔接记录，待补区间仍保留；可稍后重试。':'已与本地记录衔接；平台不可见或撤回的内容仍可能缺失。';
         const pageTimes=page.messages.map(m=>m.time).filter(Number.isFinite);
-        target.syncProgress={phase,added:(continuing?oldProgress.added:0)+(job.kind==='gap'?inserted:0),pages:(continuing?oldProgress.pages:0)+(job.kind==='gap'?1:0),
-          scannedUntil:job.kind==='gap'&&pageTimes.length?Math.min(...pageTimes):(continuing?oldProgress.scannedUntil:null),updatedAt:now(),reason};
+        target.syncProgress={phase,added:(continuing?oldProgress.added:0)+(progressPage?inserted:0),pages:(continuing?oldProgress.pages:0)+(progressPage?1:0),
+          scannedUntil:progressPage&&!job.dateHead&&pageTimes.length?Math.min(...pageTimes,...(continuing&&Number.isFinite(oldProgress.scannedUntil)?[oldProgress.scannedUntil]:[])):(continuing?oldProgress.scannedUntil:null),updatedAt:now(),reason};
         const combined=mergedCoverage(current.coverage,page.coverage,`${reason} ${GAP_NOTE}`);if(combined)target.coverage=combined;
         checkAbort(signal);
         count+=store.mergeMessages(accountId,[target],page.messages,{history:history||job.kind==='initial'||recoveryJob,arrivalAfter:{[job.id]:job.arrivalAfterId}});

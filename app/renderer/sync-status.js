@@ -39,6 +39,12 @@
       else if(complete)parts.push('本次补齐范围已衔接');
       else if(unresolved)parts.push('范围内仍有待核实缺口');
       else parts.push('范围内待补齐');
+      const progress=group?.syncProgress;
+      if(policy.mode!=='none'&&!complete&&matches){
+        if(count(progress?.pages)>0)parts.push('已检查 '+progress.pages.toLocaleString('zh-CN')+' 页');
+        if(finiteTime(progress?.scannedUntil))parts.push('已回溯至 '+formatTime(progress.scannedUntil)+'（北京时间）');
+        if(count(progress?.added)>0)parts.push('已补入 '+progress.added.toLocaleString('zh-CN')+' 条');
+      }
       if(cutoff>boundary.start)parts.push('本次补至 '+formatTime(cutoff));
       if(recovering)parts.push(recovery.unresolved?'所选历史时段尚未取回':'正在重新获取所选历史时段');
       if(blocked)parts.push(group.syncProgress.reason||'本轮读取已暂停');
