@@ -35,7 +35,7 @@ function fixture(t,options={}){
     observedContent:new Map(),mediaEpoch:0,contentRevision:0,
     imageCache:new Map([['synthetic','cached image']]),cachedImageBytes:12,attachmentCache:new Map([['synthetic','cached attachment']]),
     imageJobs:new Map([['synthetic-in-flight',{controller:{abort:()=>invalidations.image++}}]]),
-    imageViewer:{closeAll:()=>invalidations.imageViewer++},attachmentViewer:{closeAll:()=>invalidations.attachmentViewer++},
+    imageViewer:{closeAll:()=>invalidations.imageViewer++},attachmentViewer:{closeAll:()=>invalidations.attachmentViewer++,closeInvalid:()=>invalidations.attachmentViewer++},
     attachmentDownload:{cancelAll:()=>invalidations.download++},activeAi:{controller:{abort:()=>invalidations.ai++}},
     aiPreviews:{clear:()=>invalidations.aiPreview++},summaryDeletePreviews:{clear:()=>invalidations.summaryPreview++},
     isImageQuoteText:require('../app/core/message-references.cjs').isImageQuoteText,

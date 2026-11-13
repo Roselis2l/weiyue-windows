@@ -27,7 +27,7 @@ function fixture({fetch}={}){
   const requested=[];
   const closed={images:0,attachments:0,downloads:0};
   const scope={crypto,activeId:'synthetic-one',accountEpoch:0,mediaEpoch:0,contentRevision:0,revision:0,observedContent:new Map(),store:{get:id=>{assert.equal(id,scope.activeId);return state;},getSnapshot:id=>{assert.equal(id,scope.activeId);return state;},getVisibleSnapshot:id=>{assert.equal(id,scope.activeId);return editionPolicy.projectAccount(state);},contentEpoch:()=>editionPolicy.contentEpoch(state)},Response,URL,AbortController,
-    imageViewer:{closeAll:()=>closed.images++},attachmentViewer:{closeAll:()=>closed.attachments++},attachmentDownload:{cancelAll:()=>closed.downloads++},activeAi:null,aiPreviews:new Map(),summaryDeletePreviews:new Map(),
+    imageViewer:{closeAll:()=>closed.images++},attachmentViewer:{closeAll:()=>closed.attachments++,closeInvalid:()=>closed.attachments++},attachmentDownload:{cancelAll:()=>closed.downloads++},activeAi:null,aiPreviews:new Map(),summaryDeletePreviews:new Map(),
     safeImageUrl,session:{defaultSession:{}},imageCache:new Map(),imageJobs:new Map(),attachmentCache:new BoundedMediaCache(64*1024*1024),cachedImageBytes:0,activeImages:0,imageWaiters:[],
     fetchImage:async options=>{requested.push(options.url);return fetch?fetch(options):{bytes:png,mime:'image/png'};},accountSession:()=>{throw new Error('No real session');},imageRequest(){throw new Error('No real network');},closing:()=>false,
     heifDecoder:null,createHeifDecoder:()=>{throw new Error('No HEIC fixture');},BrowserWindow:class{},ipcMain:{},__dirname:path.resolve(__dirname,'../app'),avatars:{source:()=>undefined}};

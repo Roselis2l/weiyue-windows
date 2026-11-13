@@ -63,7 +63,7 @@ function validateImage(value) {
   }
   // Keep the downloaded bytes untouched: saving does not re-encode animated or
   // transparent images, alter metadata, or convert a format based on its URL.
-  return { bytes: Buffer.from(value.bytes), mime: value.mime };
+  return { bytes: Buffer.from(value.bytes), mime: value.mime, ...(value.staticGif===true&&value.mime==='image/jpeg'?{staticGif:true}:{}) };
 }
 function text(value, fallback, limit) {
   return typeof value === 'string' && value.trim() ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, limit) : fallback;
@@ -73,7 +73,7 @@ function defaultFilename(mime, date = new Date()) {
   return '微博图片-' + stamp + '.' + FORMATS[mime].extension;
 }
 
-function createImageViewer({ BrowserWindow, ipcMain, dialog, appRoot, getParent, getWorkArea, getOwner, readImage, writeFile = fs.writeFile } = {}) {
+function createImageViewer({ BrowserWindow, ipcMain, dialog, appRoot, getParent, getWorkArea, getOwner, readImage, getGallery, writeFile = fs.writeFile } = {}) {
   if (typeof BrowserWindow !== 'function' || typeof ipcMain?.handle !== 'function' ||
       typeof dialog?.showSaveDialog !== 'function' || typeof readImage !== 'function' ||
       typeof getOwner !== 'function' || typeof appRoot !== 'string') throw new Error('图片查看器配置无效。');
@@ -82,7 +82,18 @@ function createImageViewer({ BrowserWindow, ipcMain, dialog, appRoot, getParent,
   function current(record) {
     return !disposed && !record.window.isDestroyed() && records.get(record.webContents) === record && record.owner === getOwner();
   }
-  function check(record) { if (!current(record)) throw new Error(ERRORS.expired); }
+  function gallery(source) {
+    const value=typeof getGallery==='function'?getGallery(source):{sources:[source],identity:source};
+    if(!value||typeof value.identity!=='string'||!Array.isArray(value.sources)||!value.sources.length||value.sources.length>100||!value.sources.includes(source))throw new Error(ERRORS.expired);
+    const base=new URL(source).pathname.split('/');
+    for(const item of value.sources){if(normalizeSource(item)!==item)throw new Error(ERRORS.expired);const parts=new URL(item).pathname.split('/');if(parts.slice(0,5).join('/')!==base.slice(0,5).join('/'))throw new Error(ERRORS.expired);}
+    return {sources:[...value.sources],identity:value.identity};
+  }
+  function check(record) {
+    if(!current(record))throw new Error(ERRORS.expired);
+    let value;try{value=gallery(record.source);}catch{throw new Error(ERRORS.expired);}
+    if(value.identity!==record.gallery.identity||JSON.stringify(value.sources)!==JSON.stringify(record.gallery.sources))throw new Error(ERRORS.expired);
+  }
   async function load(record, retry) {
     check(record);
     if (record.pending) return record.pending;
@@ -136,16 +147,23 @@ function createImageViewer({ BrowserWindow, ipcMain, dialog, appRoot, getParent,
       return { ok: false, error: ERRORS.sender };
     }
     try {
-      check(record);
-      if (!['load', 'retry', 'save', 'close', 'maximize', 'minimize'].includes(action)) throw new Error(ERRORS.action);
+      if(!current(record))throw new Error(ERRORS.expired);
+      if (!['load', 'retry', 'previous', 'next', 'save', 'close', 'maximize', 'minimize'].includes(action)) throw new Error(ERRORS.action);
       if (action === 'close') { record.window.close(); return { ok: true, value: true }; }
       if (action === 'maximize') { record.window.isMaximized() ? record.window.unmaximize() : record.window.maximize(); return { ok: true, value: true }; }
       if (action === 'minimize') { record.window.minimize(); return { ok: true, value: true }; }
+      check(record);
       if (action === 'save') return { ok: true, value: await save(record) };
       if (record.saving) throw new Error(ERRORS.busy);
+      if(action==='previous'||action==='next'){
+        if(record.pending)throw new Error(ERRORS.busy);
+        const index=record.gallery.sources.indexOf(record.source)+(action==='next'?1:-1);
+        if(index<0||index>=record.gallery.sources.length)throw new Error(ERRORS.action);
+        record.source=record.gallery.sources[index];record.image=null;
+      }
       const image = await load(record, action === 'retry');
       check(record);
-      return { ok: true, value: { title: record.title, caption: record.caption, mime: image.mime,
+      return { ok: true, value: { title: record.title, caption: record.caption, mime: image.mime, index:record.gallery.sources.indexOf(record.source), total:record.gallery.sources.length, staticGif:image.staticGif===true,
         ...(image.original ? { originalMime: image.original.mime } : {}), byteLength: (image.original || image).bytes.length,
         dataUrl: 'data:' + image.mime + ';base64,' + image.bytes.toString('base64') } };
     } catch (error) {
@@ -160,9 +178,10 @@ function createImageViewer({ BrowserWindow, ipcMain, dialog, appRoot, getParent,
     if (disposed) throw new Error(ERRORS.expired);
     const safeSource = normalizeSource(source);
     if (!safeSource) throw new Error(ERRORS.source);
-    const owner = getOwner();
+    const owner = getOwner(), initialGallery=gallery(safeSource);
     for (const record of records.values()) {
       if (current(record) && record.source === safeSource) {
+        try{check(record);}catch{record.window.close();continue;}
         if (record.window.isMinimized()) record.window.restore();
         record.window.focus();
         return { opened: true };
@@ -180,7 +199,7 @@ function createImageViewer({ BrowserWindow, ipcMain, dialog, appRoot, getParent,
         nodeIntegration: false, sandbox: true, webSecurity: true, spellcheck: false },
     });
     const webContents = window.webContents;
-    const record = { window, webContents, owner, source: safeSource, title: text(title, '查看原图', 150), caption: text(caption, '', 300), image: null, pending: null, saving: false };
+    const record = { window, webContents, owner, gallery:initialGallery, source: safeSource, title: text(title, '查看原图', 150), caption: text(caption, '', 300), image: null, pending: null, saving: false };
     records.set(webContents, record);
     webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     webContents.on('will-navigate', e => e.preventDefault());

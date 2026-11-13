@@ -37,8 +37,8 @@ const TRANSPORT_ERRORS=Object.freeze({
   ATTACHMENT_NETWORK:'附件网络读取失败，请稍后重试。',
   ATTACHMENT_TIMEOUT:ERRORS.timeout,
   ATTACHMENT_ABORT:'附件读取已取消。',
-  ATTACHMENT_TOO_LARGE:'附件超过本地读取/下载大小限制（XLSX/音频 20 MB，MD/CSV 5 MB，PDF 50 MB，视频 200 MB）。',
-  ATTACHMENT_TYPE:'附件内容或格式暂不支持。可预览 XLSX、MD、CSV、PDF、MP4/MOV/WebM 及受支持的语音。',
+  ATTACHMENT_TOO_LARGE:'附件超过本地读取/下载大小限制（DOCX/XLSX/音频 20 MB，MD/CSV 5 MB，PDF 50 MB，视频 200 MB）。',
+  ATTACHMENT_TYPE:'附件内容或格式暂不支持。可预览 DOCX、XLSX、MD、CSV、PDF、MP4/MOV/WebM 及受支持的语音。',
 });
 function normalizeSource(value) {
   if (typeof value !== 'string' || value.length > 4096 || /[\s\\\u0000-\u001f\u007f]/.test(value)) return null;
@@ -66,12 +66,13 @@ function validateAttachment(value,expectedKind) {
       actualMime(value.bytes,value.mime)!==value.mime) throw new Error(ERRORS.content);
   return {bytes:Buffer.from(value.bytes),mime:value.mime,kind:format.kind,name:safeName(value.name,value.mime)};
 }
-function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,getOwner,readAttachment,decodeVideo,decodeAudio,writeFile=fs.writeFile,readTimeoutMs=120000}={}) {
+function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,getOwner,getSourceIdentity,readAttachment,decodeVideo,decodeAudio,writeFile=fs.writeFile,readTimeoutMs=120000}={}) {
   if(typeof BrowserWindow!=='function'||typeof ipcMain?.handle!=='function'||typeof dialog?.showSaveDialog!=='function'||
       typeof appRoot!=='string'||typeof getOwner!=='function'||typeof readAttachment!=='function'||
       !Number.isSafeInteger(readTimeoutMs)||readTimeoutMs<1||readTimeoutMs>120000) throw new Error('附件查看器配置无效。');
   const records=new Map();let disposed=false;
-  const current=r=>!disposed&&!r.window.isDestroyed()&&records.get(r.webContents)===r&&r.owner===getOwner();
+  const identity=source=>{try{return getSourceIdentity?getSourceIdentity(source):source;}catch{return null;}};
+  const current=r=>!disposed&&!r.window.isDestroyed()&&records.get(r.webContents)===r&&r.owner===getOwner()&&r.sourceIdentity!==null&&r.sourceIdentity===identity(r.source);
   const check=r=>{if(!current(r))throw new Error(ERRORS.expired);};
   async function load(r,retry) {
     check(r);if(r.conversion)throw new Error(ERRORS.busy);if(r.pending)return r.pending;if(r.attachment&&!retry)return r.attachment;
@@ -152,7 +153,7 @@ function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,
       parent:getParent?.(),title:kind==='video'?'视频播放 — 微阅':kind==='audio'?'语音播放 — 微阅':'文件预览 — 微阅',backgroundColor:'#15191c',autoHideMenuBar:true,
       webPreferences:{preload:path.join(appRoot,'attachment-viewer-preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,spellcheck:false}});
     const wc=window.webContents;
-    const r={window,webContents:wc,owner:getOwner(),source:accepted,kind,title:typeof title==='string'?title.replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,180):'附件预览',attachment:null,displayAttachment:null,pending:null,conversion:null,convertController:null,saving:false,controller:null};
+    const r={window,webContents:wc,owner:getOwner(),source:accepted,sourceIdentity:identity(accepted),kind,title:typeof title==='string'?title.replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,180):'附件预览',attachment:null,displayAttachment:null,pending:null,conversion:null,convertController:null,saving:false,controller:null};
     records.set(wc,r);wc.setWindowOpenHandler(()=>({action:'deny'}));
     wc.on('will-navigate',e=>e.preventDefault());wc.on('will-attach-webview',e=>e.preventDefault());
     wc.on('before-input-event',(event,input)=>{if(input.type==='keyDown'&&input.key==='Escape'){event.preventDefault();window.close();}});
@@ -161,7 +162,8 @@ function createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot,getParent,
     catch{if(!window.isDestroyed())window.close();throw new Error(ERRORS.content);}
   }
   function closeAll(){for(const r of [...records.values()]){records.delete(r.webContents);r.controller?.abort();r.convertController?.abort();r.attachment=null;r.displayAttachment=null;if(!r.window.isDestroyed())r.window.close();}}
+  function closeInvalid(){for(const r of [...records.values()])if(!current(r)){records.delete(r.webContents);r.controller?.abort();r.convertController?.abort();r.attachment=null;r.displayAttachment=null;if(!r.window.isDestroyed())r.window.close();}}
   function dispose(){closeAll();disposed=true;ipcMain.removeHandler?.(CHANNEL);}
-  return {open,closeAll,dispose};
+  return {open,closeAll,closeInvalid,dispose};
 }
 module.exports={createAttachmentViewer,normalizeSource,validateAttachment,actualMime,safeName,VIEWER_URL,CHANNEL,LIMITS,FORMATS,ERRORS};

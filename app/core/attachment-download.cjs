@@ -38,8 +38,8 @@ const TRANSPORT_ERRORS = Object.freeze({
   ATTACHMENT_NETWORK:'附件网络读取失败，请稍后再试。',
   ATTACHMENT_TIMEOUT:ERRORS.timeout,
   ATTACHMENT_ABORT:'附件下载已取消。',
-  ATTACHMENT_TOO_LARGE:'附件超过读取/下载大小限制（HTML/MD/CSV 5 MB；XLSX/音频 20 MB；EPUB/PDF 50 MB；视频及压缩文件 200 MB）。',
-  ATTACHMENT_TYPE:'附件内容或格式不支持下载。支持 HTML/HTM、EPUB、XLSX、MD、CSV、ZIP/RAR/7z、PDF、MP4/MOV/WebM 及受支持音频。HTML 与 EPUB 仅保存，不自动打开。',
+  ATTACHMENT_TOO_LARGE:'附件超过读取/下载大小限制（HTML/MD/CSV 5 MB；DOCX/XLSX/音频 20 MB；EPUB/PDF 50 MB；视频及压缩文件 200 MB）。',
+  ATTACHMENT_TYPE:'附件内容或格式不支持下载。支持 HTML/HTM、EPUB、DOCX、XLSX、MD、CSV、ZIP/RAR/7z、PDF、MP4/MOV/WebM 及受支持音频。HTML 与 EPUB 仅保存，不自动打开。',
 });
 
 function safeDownloadName(value,mime) {

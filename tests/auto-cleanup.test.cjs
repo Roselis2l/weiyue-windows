@@ -35,7 +35,7 @@ test('real worker transaction atomically deletes and keeps configuration',async 
 test('automatic cleanup no-op leaves open media and content revision unchanged',()=>{
  const main=fs.readFileSync(path.join(__dirname,'../app/main.cjs'),'utf8');const block=main.slice(main.indexOf('autoCleanup=createAutoCleanup'),main.indexOf('  const all=store.accounts();'));const body=block.slice(block.indexOf('onChange:result=>{')+'onChange:result=>{'.length,block.lastIndexOf('}});'));
  const vm=require('node:vm');let mediaActions=0;const touch=()=>mediaActions++;
- const context=vm.createContext({activeId:'a',revision:10,contentRevision:20,mediaEpoch:30,imageJobs:new Map([['job',{controller:{abort:touch}}]]),imageCache:{clear:touch},cachedImageBytes:42,attachmentCache:{clear:touch},imageViewer:{closeAll:touch},attachmentViewer:{closeAll:touch},attachmentDownload:{cancelAll:touch},aiPreviews:{clear:touch},summaryDeletePreviews:{clear:touch}});
+ const context=vm.createContext({activeId:'a',revision:10,contentRevision:20,mediaEpoch:30,imageJobs:new Map([['job',{controller:{abort:touch}}]]),imageCache:{clear:touch},cachedImageBytes:42,attachmentCache:{clear:touch},imageViewer:{closeAll:touch},attachmentViewer:{closeAll:touch,closeInvalid:touch},attachmentDownload:{cancelAll:touch},aiPreviews:{clear:touch},summaryDeletePreviews:{clear:touch}});
  vm.runInContext('globalThis.change=result=>{'+body+'};',context);
  context.change({accountId:'b',deleted:true,deletedCount:2});assert.equal(mediaActions,0);assert.equal(context.revision,10);assert.equal(context.contentRevision,20);
  context.change({accountId:'b',settingsChanged:true});assert.equal(context.revision,10);

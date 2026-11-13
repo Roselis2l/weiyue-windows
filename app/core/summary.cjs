@@ -75,7 +75,7 @@ function coverageWarning(group, start, end, count) {
   const coverage = group.coverage;
   if (!count) notes.push('所选时段没有本地消息；这不代表群内无人发言。');
   if (!coverage || !validTime(coverage.oldest) || !validTime(coverage.newest)) {
-    notes.push('同步覆盖范围未知，摘要仅依据本机已保存的记录，可能缺少消息。');
+    notes.push('同步覆盖范围未知，摘要仅依据本机已保存的记录，可能缺少消息。补齐已衔接不等于所选摘要时段已完整覆盖。');
   } else {
     if (!coverage.complete) notes.push('历史同步尚未完整，所选时段可能存在未同步消息。');
     if (start < coverage.oldest) notes.push('起始时间早于本地覆盖范围，前段记录可能缺失。');

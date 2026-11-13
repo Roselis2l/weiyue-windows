@@ -82,11 +82,11 @@ async function showPdf(bytes,currentEpoch){
 }
 function showDocument(value){
  const preview=value.preview;
- if(!preview||!['md','csv','xlsx'].includes(preview.format)){showStatus(value.previewError||'此文档暂时无法预览，可另存原文件。');return;}
+ if(!preview||!['md','csv','xlsx','docx'].includes(preview.format)){showStatus(value.previewError||'此文档暂时无法预览，可另存原文件。');return;}
  $('document-stage').hidden=false;$('notice').hidden=true;
  $('document-notices').replaceChildren(...(preview.notices||[]).map(text=>{const p=document.createElement('p');p.textContent=text;return p;}));
  $('info').textContent=preview.format.toUpperCase()+' · '+(preview.encoding?preview.encoding+' · ':'')+'本机只读预览'+(preview.truncated?' · 已截取':'');
- const plain=preview.format==='md';$('text-preview').hidden=!plain;$('table-scroll').hidden=plain;$('sheet-label').hidden=plain;
+ const plain=['md','docx'].includes(preview.format);$('text-preview').hidden=!plain;$('table-scroll').hidden=plain;$('sheet-label').hidden=plain;
  if(plain){$('text-preview').textContent=preview.text||'（空文件）';return;}
  const sheets=preview.sheets||[];
  for(const[sheetIndex,sheet]of sheets.entries()){const option=document.createElement('option');option.value=String(sheetIndex);option.textContent=sheet.name;$('sheet-select').append(option);}

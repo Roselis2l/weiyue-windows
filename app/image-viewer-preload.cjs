@@ -1,6 +1,6 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
-const allowed = new Set(['load', 'retry', 'save', 'close', 'maximize', 'minimize']);
+const allowed = new Set(['load', 'retry', 'previous', 'next', 'save', 'close', 'maximize', 'minimize']);
 contextBridge.exposeInMainWorld('imageViewer', Object.freeze({
   call: async action => {
     if (!allowed.has(action)) throw new Error('不支持的图片操作。');

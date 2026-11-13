@@ -4,7 +4,7 @@
 // never evaluated. Parse work runs in a terminable worker (document-preview-job).
 const zlib=require('node:zlib'),path=require('node:path');
 const sax=require('../third-party/sax/sax.cjs');
-const MIME=Object.freeze({xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',md:'text/markdown',csv:'text/csv'});
+const MIME=Object.freeze({docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',md:'text/markdown',csv:'text/csv'});
 const LIMITS=Object.freeze({xlsxBytes:20*1024*1024,textBytes:5*1024*1024,entries:2048,entryBytes:16*1024*1024,totalBytes:40*1024*1024,
  xmlNodes:1000000,depth:64,sheets:10,rows:500,columns:50,cells:10000,cellChars:1000,sharedStrings:100000,textChars:200000});
 const fail=()=>{throw new Error('DOCUMENT_FORMAT');};
@@ -23,7 +23,7 @@ function decodeText(bytes){
 }
 const crcTable=Uint32Array.from({length:256},(_,n)=>{for(let j=0;j<8;j++)n=n&1?0xedb88320^(n>>>1):n>>>1;return n>>>0;});
 function crc32(b){let n=0xffffffff;for(const x of b)n=crcTable[(n^x)&255]^(n>>>8);return (n^0xffffffff)>>>0;}
-function zipDirectory(bytes){
+function zipDirectory(bytes,kind='xlsx'){
  if(!Buffer.isBuffer(bytes)||bytes.length<22||bytes.length>LIMITS.xlsxBytes)bounded();
  if(bytes.readUInt32LE(0)!==0x04034b50)fail();
  let end=-1;for(let i=bytes.length-22;i>=Math.max(0,bytes.length-65557);i--){if(bytes.readUInt32LE(i)===0x06054b50&&i+22+bytes.readUInt16LE(i+20)===bytes.length){end=i;break;}}
@@ -45,12 +45,12 @@ function zipDirectory(bytes){
   ranges.push([local,start+compressed]);entries.set(name,{start,compressed,length,method,crc});p+=46+nameLength+extra+comment;
  }
  if(p!==end)fail();ranges.sort((a,b)=>a[0]-b[0]);for(let i=1;i<ranges.length;i++)if(ranges[i][0]<ranges[i-1][1])fail();
- if(!entries.has('[Content_Types].xml')||!entries.has('xl/workbook.xml')||!entries.has('xl/_rels/workbook.xml.rels'))fail();
+ if(!entries.has('[Content_Types].xml')||(kind==='docx'?!entries.has('word/document.xml'):!entries.has('xl/workbook.xml')||!entries.has('xl/_rels/workbook.xml.rels')))fail();
  return {entries,read(name){const e=entries.get(name);if(!e)fail();let b;try{b=e.method===0?bytes.subarray(e.start,e.start+e.compressed):zlib.inflateRawSync(bytes.subarray(e.start,e.start+e.compressed),{maxOutputLength:LIMITS.entryBytes});}catch{fail();}if(b.length!==e.length||crc32(b)!==e.crc)fail();return b;}};
 }
 function isDocumentBytes(bytes,mime){
  if(!Object.values(MIME).includes(mime)||!Buffer.isBuffer(bytes))return false;
- try{if(mime===MIME.xlsx)zipDirectory(bytes);else decodeText(bytes);return true;}catch{return false;}
+ try{if(mime===MIME.docx)docxPackage(bytes);else if(mime===MIME.xlsx)zipDirectory(bytes);else decodeText(bytes);return true;}catch{return false;}
 }
 function parseXml(bytes,handlers){
  if(bytes.length>LIMITS.entryBytes)bounded();
@@ -108,7 +108,25 @@ function parseCsv(text){
  if(quoted)fail();if(i>=text.length&&(value||cells.length||afterQuote))addRow();
  return {format:'csv',sheets:[{name:'CSV',rows}],rows:rows.length,cells:total,truncated:state.truncated,notices:['CSV 内容按逗号及双引号解析；以 =、+、-、@ 开头的单元格仅作为文字显示，不执行公式。',...(state.truncated?['内容已截取：最多 500 行/50 列、10,000 个单元格。请另存原文件查看完整内容。']:[])]};
 }
+const WORD_NS='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+function docxPackage(bytes){
+ const zip=zipDirectory(bytes,'docx');let valid=false;
+ parseXml(zip.read('[Content_Types].xml'),{open:n=>{if(local(n)==='Override'&&attr(n,'PartName')==='/word/document.xml'&&attr(n,'ContentType')==='application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml')valid=true;if(/macroEnabled|vbaProject/i.test(attr(n,'ContentType')))fail();}});
+ if(!valid||[...zip.entries.keys()].some(name=>/vbaProject\.bin$/i.test(name)))fail();return zip;
+}
+function parseDocx(bytes){
+ const zip=docxPackage(bytes);let text='',truncated=false,root=false;
+ const append=value=>{const remaining=LIMITS.textChars-text.length;if(value.length>remaining)truncated=true;text+=value.slice(0,Math.max(0,remaining));};
+ const word=n=>n?.uri===WORD_NS;
+ parseXml(zip.read('word/document.xml'),{
+ open:(n,stack)=>{if(stack.length===1){if(!word(n)||local(n)!=='document')fail();root=true;}if(word(n)&&stack.some(x=>word(x)&&local(x)==='body')){if(['br','cr'].includes(local(n)))append('\n');else if(local(n)==='tab')append('\t');}},
+ text:(value,stack)=>{if(word(stack.at(-1))&&local(stack.at(-1))==='t'&&stack.some(n=>word(n)&&local(n)==='body')&&!stack.some(n=>word(n)&&['del','moveFrom'].includes(local(n))))append(value);},
+ close:n=>{if(word(n)&&local(n)==='p')append('\n');else if(word(n)&&local(n)==='tc')append('\t');}
+ });if(!root)fail();
+ return {format:'docx',text,truncated,notices:['DOCX 正文纯文本预览，不保留完整排版、图片、页眉页脚或批注；表格按文本顺序显示。','不执行宏、嵌入对象或外部链接；请另存原文件查看完整内容。',...(truncated?['正文已截取前 200,000 字符。']:[])]};
+}
 function parseDocument(bytes,mime){
+ if(mime===MIME.docx)return parseDocx(bytes);
  if(mime===MIME.xlsx)return parseXlsx(bytes);
  if(![MIME.md,MIME.csv].includes(mime))fail();const decoded=decodeText(bytes);
  if(mime===MIME.csv)return {...parseCsv(decoded.text),encoding:decoded.encoding};

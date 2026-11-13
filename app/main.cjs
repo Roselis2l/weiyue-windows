@@ -72,6 +72,18 @@ const sessionRegistry=new AccountSessionRegistry({sessions,createSession:()=>{co
 const avatars=new AvatarService({getContext:()=>({owner:activeId,epoch:accountEpoch,revision,closing:closing()}),getState:id=>store.getSnapshot(id),restoreSession:accountSession,defaultSession:()=>session.defaultSession,request:imageRequest});
 function preferences(){try{return JSON.parse(fs.readFileSync(path.join(dataRoot,'preferences.json'),'utf8'));}catch{return {};}}
 function clearMedia(){accountEpoch++;mediaEpoch++;for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();messageCleanup?.clear();autoCleanup?.clear();heifDecoder?.dispose();heifDecoder=null;videoDecoder?.dispose();videoDecoder=null;audioDecoder?.dispose();audioDecoder=null;activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();}
+function attachmentIdentity(source){
+  try{
+    const safe=normalizeAttachmentSource(source);if(!safe||!activeId||!store)return null;
+    const parts=new URL(safe).pathname.slice(1).split('/').map(decodeURIComponent);
+    if(parts[0]!==mediaToken(activeId))return null;
+    const message=store.getVisibleSnapshot(activeId).messages.find(m=>!m.localDeletion&&m.groupId===parts[1]&&m.id===parts[2]);
+    const attachment=message?.attachments?.[Number(parts[3])];
+    // FID is the canonical immutable source identity, including metadata resolution.
+    // The edition projection decides whether recalled originals remain visible.
+    return attachment?.fid?JSON.stringify([safe,attachment.fid]):null;
+  }catch{return null;}
+}
 function observeContent(id=activeId){
   if(!id||!store)return;
   const next=store.contentEpoch(id),previous=observedContent.get(id);observedContent.set(id,next);
@@ -83,7 +95,7 @@ function observeContent(id=activeId){
   }
   // Local bytes remain bounded and account-scoped. The visible record is always
   // checked before any cache access, including after a withdrawal or deletion.
-  imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();
+  imageViewer?.closeAll();attachmentViewer?.closeInvalid();attachmentDownload?.cancelAll();
   activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();
 }
 function setActive(id){const changed=activeId!==id;layoutPreferences.setActiveId(id);activeId=id;if(changed){preferredRefreshGroup=null;clearMedia();revision++;configureAutomatic();}}
@@ -207,8 +219,17 @@ async function serveImage(request,u,returnImage=false){
   observeContent(id);if(epoch!==mediaEpoch||id!==activeId)return new Response('Content changed',{status:403});
   const fresh=store.getVisibleSnapshot(id).messages.find(item=>!item.localDeletion&&item.groupId===m.groupId&&item.id===m.id);
   if(!fresh||JSON.stringify(fresh.recall)!==JSON.stringify(m.recall))return new Response('Content changed',{status:403});
-  if(returnImage)return cached;
+  if(returnImage)return {...cached,staticGif:/\.gif$/i.test(new URL(url).pathname)&&cached.mime==='image/jpeg'};
   return new Response(cached.bytes,{headers:{'Content-Type':cached.mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Access-Control-Allow-Origin':'app://local'}});
+}
+function imageGalleryContext(source){
+  const u=new URL(source),parts=u.pathname.slice(1).split('/').map(decodeURIComponent);
+  if(u.protocol!=='app:'||u.host!=='media'||parts.length!==6||parts[0]!==mediaToken(activeId))throw new Error('Image source changed');
+  const message=store.getVisibleSnapshot(activeId).messages.find(m=>!m.localDeletion&&m.groupId===parts[1]&&m.id===parts[2]);
+  const images=parts[3].startsWith('reference-')?message?.references?.[Number(parts[3].slice(10))]?.images:parts[3]==='post'?message?.sharedPost?.images:parts[3]==='message'?message?.images:null;
+  if(!Array.isArray(images)||!images.length||images.length>100||!images[Number(parts[4])])throw new Error('Image source changed');
+  const sources=images.map((image,index)=>{if(!safeImageUrl(image?.originalUrl||image?.url))throw new Error('Image unavailable');const next=new URL(u);const p=next.pathname.split('/');p[5]=String(index);next.pathname=p.join('/');return next.href;});
+  return {sources,identity:JSON.stringify([activeId,message.recall,images])};
 }
 function attachmentRecord(source){
   const safe=normalizeAttachmentSource(source);if(!safe)throw new Error('附件地址无效。');
@@ -220,10 +241,10 @@ function attachmentRecord(source){
   return {state,message,index,attachment};
 }
 async function readStoredAttachment(source,{signal}={}){
-  observeContent();const id=activeId,epoch=mediaEpoch;
+  observeContent();const id=activeId,epoch=accountEpoch;
   const {state,message,index,attachment}=attachmentRecord(source);
   const cacheKey=JSON.stringify([id,message.groupId,message.id,index,attachment.fid||attachment.url||attachment.name]);
-  const check=()=>{observeContent(id);if(signal?.aborted||id!==activeId||epoch!==mediaEpoch||closing())throw new Error('附件读取已取消。');const fresh=attachmentRecord(source);if(JSON.stringify(fresh.message.recall)!==JSON.stringify(message.recall)||(fresh.attachment.fid||fresh.attachment.url||fresh.attachment.name)!==(attachment.fid||attachment.url||attachment.name))throw new Error('消息内容已变化，请重新打开。');};
+  const check=()=>{observeContent(id);if(signal?.aborted||id!==activeId||epoch!==accountEpoch||closing())throw new Error('附件读取已取消。');let fresh;try{fresh=attachmentRecord(source);}catch{throw new Error('附件读取已取消。');}if(JSON.stringify(fresh.message.recall)!==JSON.stringify(message.recall)||(fresh.attachment.fid||fresh.attachment.url||fresh.attachment.name)!==(attachment.fid||attachment.url||attachment.name))throw new Error('消息内容已变化，请重新打开。');};
   check();const cached=attachmentCache.get(cacheKey);if(cached){check();return cached;}
   if(message.recalledMediaLocalOnly)throw new Error('这份撤回附件没有保存在本次运行的本地缓存中，无法恢复。');
   check();const s=state.account.kind==='weibo'?await accountSession(id,{check}):session.defaultSession;check();
@@ -511,7 +532,7 @@ async function start(){
   messageCleanup=createMessageCleanupController({store,asyncOperations:true,waitForIdle:true,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||!!activeSync||enrichmentJobs.size>0||!!autoCleanup?.isBusy(),closing:closing()}),onChange:()=>{
     revision++;contentRevision++;mediaEpoch++;
     for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();
-    imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();
+    imageViewer?.closeAll();attachmentViewer?.closeInvalid();attachmentDownload?.cancelAll();activeAi?.controller.abort();aiPreviews.clear();summaryDeletePreviews.clear();
   }});
   autoCleanup=createAutoCleanup({store,getContext:()=>({accountId:activeId,epoch:accountEpoch,busy:busy||!!activeSync||enrichmentJobs.size>0||!!messageCleanup?.isBusy()||!!activeAi,closing:closing()}),onChange:result=>{
     if(result.accountId!==activeId)return;
@@ -519,7 +540,7 @@ async function start(){
     if(!result.deleted&&!result.boundaryPlan?.advances)return;
     revision++;contentRevision++;mediaEpoch++;
     for(const job of imageJobs.values())job.controller.abort();imageCache.clear();cachedImageBytes=0;attachmentCache.clear();
-    imageViewer?.closeAll();attachmentViewer?.closeAll();attachmentDownload?.cancelAll();aiPreviews.clear();summaryDeletePreviews.clear();
+    imageViewer?.closeAll();attachmentViewer?.closeInvalid();attachmentDownload?.cancelAll();aiPreviews.clear();summaryDeletePreviews.clear();
   }});
   const all=store.accounts();if(!all.length)store.seedDemo();const saved=preferences().activeId;setActive(store.accounts().some(a=>a.id===saved)?saved:store.accounts()[0].id);
    protocol.handle('app',request=>{
@@ -536,8 +557,9 @@ async function start(){
   win=new BrowserWindow({width:1440,height:930,minWidth:1000,minHeight:680,title:'微阅 · '+buildIdentity.label+' '+buildIdentity.version,backgroundColor:'#f6f5f0',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,spellcheck:false}});
   imageViewer=createImageViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,
     getWorkArea:()=>screen.getDisplayMatching(win.getBounds()).workAreaSize,
+    getGallery:imageGalleryContext,
     readImage:async source=>{const image=await serveImage({method:'GET'},new URL(source),true);if(image instanceof Response)throw new Error('原图加载失败，请重试。');return image;}});
-  attachmentViewer=createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment,decodeVideo:(value,options)=>{videoDecoder ||= createVideoDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return videoDecoder.decode(value,options);},decodeAudio:(value,options)=>{audioDecoder ||= createAudioDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return audioDecoder.decode(value,options);}});
+  attachmentViewer=createAttachmentViewer({BrowserWindow,ipcMain,dialog,appRoot:__dirname,getParent:()=>win,getOwner:()=>activeId+'|'+accountEpoch,getSourceIdentity:attachmentIdentity,readAttachment:readStoredAttachment,decodeVideo:(value,options)=>{videoDecoder ||= createVideoDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return videoDecoder.decode(value,options);},decodeAudio:(value,options)=>{audioDecoder ||= createAudioDecoder({BrowserWindow,ipcMain,session,appRoot:__dirname});return audioDecoder.decode(value,options);}});
   attachmentDownload=createAttachmentDownload({dialog,getParent:()=>win,getOwner:aiOwner,readAttachment:readStoredAttachment});
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));win.webContents.on('will-navigate',e=>e.preventDefault());win.webContents.on('will-attach-webview',e=>e.preventDefault());
   win.on('close',event=>{if(closeReady)return;event.preventDefault();if(closing())return;autoSync?.stop();autoCleanup?.stop();activeSync?.controller.abort();clearMedia();closeTimer=setTimeout(()=>void finishClose(),2000);win.webContents.send('weiyue:before-close');});

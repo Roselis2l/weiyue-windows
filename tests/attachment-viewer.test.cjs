@@ -18,7 +18,7 @@ function fixture(options={}){
     isMaximized(){return !!this.maximized;}maximize(){this.maximized=true;}unmaximize(){this.maximized=false;}minimize(){this.minimized=true;}
   }
   const manager=createAttachmentViewer({BrowserWindow:Window,ipcMain:{handle:(c,h)=>handlers.set(c,h),removeHandler:c=>handlers.delete(c)},
-    appRoot:path.resolve(__dirname,'../app'),getOwner:()=>owner,readTimeoutMs:options.timeout||120000,
+    appRoot:path.resolve(__dirname,'../app'),getOwner:()=>owner,getSourceIdentity:options.identity,readTimeoutMs:options.timeout||120000,
     readAttachment:(src,opts)=>{reads++;return options.read?options.read(src,opts):{bytes:pdf,mime:'application/pdf',kind:'pdf',name:'test.pdf'};},
     dialog:{showSaveDialog:async(w,config)=>{dialogs.push(config);return options.dialog?options.dialog():{canceled:true};}},
     writeFile:async(file,bytes)=>writes.push({file,bytes:Buffer.from(bytes)})});
@@ -133,4 +133,29 @@ test('viewer never instantiates PDF activities or enables automatic video playba
   assert.match(source,/video\.autoplay=false/);assert.doesNotMatch(source,/getJSActions|PDFScriptingManager|AnnotationLayer|innerHTML/);
   const html=fs.readFileSync(path.join(__dirname,'../app/renderer/attachment-viewer.html'),'utf8');
   assert.match(html,/object-src 'none'/);assert.match(html,/frame-src 'none'/);assert.doesNotMatch(html,/unsafe-eval|unsafe-inline/);
+});
+
+
+test('stable attachment identity survives unrelated content refresh and metadata resolution',async()=>{
+ let identity='fid:123'; const f=fixture({identity:()=>identity});await f.manager.open({source,kind:'file'});
+ assert.equal((await f.call('load')).ok,true); f.manager.closeInvalid();
+ assert.equal(f.windows[0].destroyed,false);assert.equal((await f.call('load')).ok,true); assert.equal(f.reads(),1);f.manager.dispose();
+});
+test('source deletion or replacement invalidates cached attachment and closes only invalid window',async()=>{
+ for(const next of [null,'fid:456']){let identity='fid:123';const f=fixture({identity:()=>identity});await f.manager.open({source,kind:'pdf'});await f.call('load');identity=next;
+ assert.equal((await f.call('save')).error,ERRORS.expired);f.manager.closeInvalid();assert.equal(f.windows[0].destroyed,true);assert.equal(f.writes.length,0);f.manager.dispose();}
+});
+test('account epoch change closes attachment even when source identity matches',async()=>{
+ const f=fixture({identity:()=> 'fid:123'});await f.manager.open({source,kind:'pdf'});f.setOwner('two|2');f.manager.closeInvalid();assert.equal(f.windows[0].destroyed,true);f.manager.dispose();
+});
+test('source invalidation aborts pending read and rejects late bytes',async()=>{
+ let identity='fid:123',signal;const gate=deferred();const f=fixture({identity:()=>identity,read:(_s,o)=>{signal=o.signal;return gate.promise;}});await f.manager.open({source,kind:'pdf'});const result=f.call('load');await Promise.resolve();identity=null;f.manager.closeInvalid();assert.equal(signal.aborted,true);gate.resolve({bytes:pdf,mime:'application/pdf',kind:'pdf'});assert.equal((await result).error,ERRORS.expired);f.manager.dispose();
+});
+test('attachment main lifecycle binds ownership to account and validates visible source identity',()=>{
+ const main=fs.readFileSync(path.join(__dirname,'../app/main.cjs'),'utf8');
+ assert.ok(main.includes("getOwner:()=>activeId+'|'+accountEpoch,getSourceIdentity:attachmentIdentity"));
+ assert.ok(main.includes('epoch!==accountEpoch||closing()'));
+ assert.ok(main.includes('attachmentViewer?.closeInvalid()'));
+ assert.ok(main.includes('avatars.clear();imageViewer?.closeAll();attachmentViewer?.closeAll()'));
+ assert.ok(main.includes('store.getVisibleSnapshot(activeId).messages.find'));
 });

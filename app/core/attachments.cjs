@@ -7,6 +7,7 @@ const {types} = require('node:util');
 const {MIME:DOCUMENT_MIME,LIMITS:DOCUMENT_LIMITS,isDocumentBytes}=require('./document-preview.cjs');
 const {MAX_AUDIO_BYTES,AUDIO_FORMATS,audioFormat,detectedAudioMime}=require('./audio-format.cjs');
 const DOCUMENT_FORMATS=Object.freeze({
+ docx:Object.freeze({mime:DOCUMENT_MIME.docx,limit:DOCUMENT_LIMITS.xlsxBytes,aliases:Object.freeze(['application/zip','application/x-zip-compressed'])}),
  xlsx:Object.freeze({mime:DOCUMENT_MIME.xlsx,limit:DOCUMENT_LIMITS.xlsxBytes,aliases:Object.freeze(['application/zip','application/x-zip-compressed'])}),
  md:Object.freeze({mime:DOCUMENT_MIME.md,limit:DOCUMENT_LIMITS.textBytes,aliases:Object.freeze(['text/plain','text/x-markdown'])}),
  csv:Object.freeze({mime:DOCUMENT_MIME.csv,limit:DOCUMENT_LIMITS.textBytes,aliases:Object.freeze(['text/plain','application/csv','application/vnd.ms-excel'])}),

@@ -243,3 +243,24 @@ test('a group changed by group selection settings can load despite the previous 
   await h.run('loadReading(true)');assert.equal(h.model.renderedReading.groupId,'group-b');
   assert.equal(h.queries.at(-1).groupId,'group-b');assert.equal(h.run('isSearchEditorCurrent(model.searchEditor)'),true);
 });
+
+test('segmented date changes stay draft until blur and preserve the last query',async()=>{
+  const h=harness();
+  h.run("globalThis.date=model.searchEditor.filter.querySelector('#reading-start');date.focus();date.value='0002-11-12T00:00';date.dispatch('input');date.dispatch('change')");
+  await h.tick(500);assert.equal(h.queries.length,0);assert.equal(h.run('searchEditing()'),true);
+  assert.equal(h.run("model.searchEditor.filter.querySelector('#reading-filter-error').hidden"),true);
+  h.run("date.value='2026-11-12T00:00';date.dispatch('input');date.dispatch('blur')");
+  await h.settle();assert.equal(h.queries.length,1);
+  assert.equal(h.queries[0].start,Date.parse('2026-11-12T00:00:00+08:00'));
+});
+test('incomplete native date is not treated as an empty unbounded filter',async()=>{
+  const h=harness();h.run("globalThis.date=model.searchEditor.filter.querySelector('#reading-start');date.value='';date.validity={badInput:true};date.dispatch('input');date.dispatch('blur')");
+  await h.settle();assert.equal(h.queries.length,0);assert.equal(h.model.searchEditor.invalidRange,true);
+  assert.equal(h.run("model.searchEditor.filter.querySelector('#reading-filter-error').hidden"),false);
+  h.run("date.validity={badInput:false};date.value='2026-11-12T00:00';date.dispatch('input');date.dispatch('keydown',{key:'Enter'})");
+  await h.settle();assert.equal(h.queries.length,1);assert.equal(h.model.searchEditor.invalidRange,false);
+});
+test('clear all cancels unfinished date editing',async()=>{
+  const h=harness();h.run("const date=model.searchEditor.filter.querySelector('#reading-start');date.value='0002-11-12T00:00';date.dispatch('change')");
+  await h.run('clearReadingFilters()');assert.equal(h.model.searchEditor.dateEditing,false);assert.equal(h.model.filters.start,'');
+});

@@ -39,7 +39,7 @@ function fixture(options = {}) {
   const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler), removeHandler: channel => handlers.delete(channel) };
   const manager = createImageViewer({
     BrowserWindow: Window, ipcMain, appRoot: path.join(__dirname, '../app'), getOwner: () => owner,
-    getWorkArea: options.getWorkArea,
+    getWorkArea: options.getWorkArea, getGallery:options.getGallery,
     dialog: { showSaveDialog: async (win, config) => { dialogs.push({ win, config }); return options.dialog ? options.dialog(win, config) : { canceled: true }; } },
     readImage: input => { readCount++; return options.readImage ? options.readImage(input) : { bytes: png, mime: 'image/png' }; },
     writeFile: options.writeFile || (async (file, bytes) => { writes.push({ file, bytes: Buffer.from(bytes) }); }),
@@ -321,4 +321,44 @@ test('pan clamps to image edges and resizing preserves center while enforcing bo
   assert.equal((400 - resized.x) / resized.scale, 1000);
   assert.equal((200 - resized.y) / resized.scale, 600);
   assert.equal(geometry.zoom(original, 100).scale, 16);
+});
+
+
+test('gallery navigation is bounded and uses only same-message original proxies',async()=>{
+ const sources=[source,source.replace('/0/','/1/'),source.replace('/0/','/2/')];
+ const f=fixture({getGallery:()=>({sources,identity:'images-v1'})});await f.manager.open({source});
+ assert.equal((await f.call('load')).value.total,3);assert.equal((await f.call('previous')).ok,false);
+ assert.equal((await f.call('next')).value.index,1);assert.equal((await f.call('next')).value.index,2);
+ assert.equal((await f.call('next')).ok,false);assert.equal((await f.call('previous')).value.index,1);f.manager.dispose();
+});
+test('gallery rejects cross-message, cross-scope, external and oversized sources',async()=>{
+ for(const sources of [[source,source.replace('/123/','/456/')],[source,source.replace('/message/','/post/')],[source,'https://example.invalid/image.gif'],Array(101).fill(source)]){
+ const f=fixture({getGallery:()=>({sources,identity:'x'})});await assert.rejects(()=>f.manager.open({source}));assert.equal(f.windows.length,0);f.manager.dispose();
+ }
+});
+test('changed gallery identity or recall revokes cached load navigation and pending saves',async()=>{
+ let identity='v1';const sources=[source,source.replace('/0/','/1/')],gate=deferred();
+ const f=fixture({getGallery:()=>({sources,identity}),dialog:()=>gate.promise});await f.manager.open({source});await f.call('load');
+ const save=f.call('save');identity='withdrawn';gate.resolve({canceled:false,filePath:path.resolve(os.tmpdir(),'old.png')});
+ assert.equal((await save).ok,false);assert.equal(f.writes.length,0);assert.equal((await f.call('load')).ok,false);assert.equal((await f.call('next')).ok,false);f.manager.dispose();
+});
+test('repeated navigation while loading cannot skip images or publish stale bytes',async()=>{
+ const gate=deferred(),sources=[source,source.replace('/0/','/1/'),source.replace('/0/','/2/')];let identity='v1';
+ const f=fixture({getGallery:()=>({sources,identity}),readImage:url=>url===source?{bytes:png,mime:'image/png'}:gate.promise});
+ await f.manager.open({source});await f.call('load');const pending=f.call('next');assert.equal((await f.call('next')).ok,false);
+ identity='v2';gate.resolve({bytes:png,mime:'image/png'});assert.equal((await pending).ok,false);f.manager.dispose();
+});
+test('static GIF warning is fixed metadata and actual JPEG bytes remain unchanged',async()=>{
+ const bytes=Buffer.from([255,216,255,224,1,2,3]);const f=fixture({readImage:()=>({bytes,mime:'image/jpeg',staticGif:true})});
+ await f.manager.open({source});const value=(await f.call('load')).value;assert.equal(value.mime,'image/jpeg');assert.equal(value.staticGif,true);assert.equal(value.dataUrl,'data:image/jpeg;base64,'+bytes.toString('base64'));f.manager.dispose();
+ assert.equal(validateImage({bytes:png,mime:'image/png',staticGif:true}).staticGif,undefined);
+});
+
+test('stale gallery does not block trusted window controls and reopening rebuilds it',async()=>{
+ let identity='v1';const f=fixture({getGallery:()=>({sources:[source],identity})});
+ await f.manager.open({source});await f.call('load');identity='v2';
+ assert.equal((await f.call('maximize')).ok,true);assert.equal((await f.call('minimize')).ok,true);
+ assert.equal((await f.call('load')).ok,false);
+ await f.manager.open({source});assert.equal(f.windows.length,2);assert.equal(f.windows[0].destroyed,true);
+ assert.equal((await f.call('load')).ok,true);identity='v3';assert.equal((await f.call('close')).ok,true);assert.equal(f.windows[1].destroyed,true);f.manager.dispose();
 });

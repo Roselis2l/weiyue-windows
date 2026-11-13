@@ -26,7 +26,7 @@ function fixture({ kind = 'import', accountSession, fetchImage, fetchAttachment=
     store: { get: () => state, getSnapshot: () => state,getVisibleSnapshot:()=>editionPolicy.projectAccount(state),contentEpoch:()=>editionPolicy.contentEpoch(state) }, Response, URL, AbortController,
     safeImageUrl, session: { defaultSession: {} }, imageCache: new Map(), imageJobs: new Map(),
     attachmentCache:new BoundedMediaCache(64*1024*1024),normalizeAttachmentSource,resolveAttachment:async value=>value,fetchAttachment,
-    imageViewer:{closeAll:()=>closed.images++},attachmentViewer:{closeAll:()=>closed.attachments++},attachmentDownload:{cancelAll:()=>closed.downloads++},activeAi:null,aiPreviews:new Map(),summaryDeletePreviews:new Map(),
+    imageViewer:{closeAll:()=>closed.images++},attachmentViewer:{closeAll:()=>closed.attachments++,closeInvalid:()=>closed.attachments++},attachmentDownload:{cancelAll:()=>closed.downloads++},activeAi:null,aiPreviews:new Map(),summaryDeletePreviews:new Map(),
     cachedImageBytes: 0, activeImages: 0, imageWaiters: [], fetchImage, accountSession, imageRequest() {}, closing: () => false,
     heifDecoder: null, createHeifDecoder, BrowserWindow: class {}, ipcMain: {}, __dirname: path.resolve(__dirname, '../app'),
     mediaToken: id => crypto.createHash('sha256').update(id).digest('hex').slice(0, 32),

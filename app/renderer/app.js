@@ -638,7 +638,7 @@ function isSearchEditorCurrent(editor) {
 }
 function searchEditing() {
   const editor=model.searchEditor;
-  return isSearchEditorCurrent(editor) && (editor.composing || editor.invalidRange || editor.timer!==null || editor.applying ||
+  return isSearchEditorCurrent(editor) && (editor.composing || editor.dateEditing || editor.invalidRange || editor.timer!==null || editor.applying ||
     editor.draft!==model.filters.keyword);
 }
 function cancelSearchWork(editor=model.searchEditor) {
@@ -692,7 +692,7 @@ function updateSearchMembers(editor) {
   editor.memberPicker.setMembers(model.members);editor.members=signature;
 }
 function resetFilterControls(editor) {
-  editor.input.value='';editor.draft='';editor.composing=false;
+  editor.input.value='';editor.draft='';editor.composing=false;editor.dateEditing=false;
   editor.filters=emptyFilters();
   editor.memberPicker?.setSelected([]);
   editor.filter.querySelectorAll('input[type="datetime-local"]').forEach(input=>input.value='');
@@ -704,6 +704,18 @@ async function clearReadingFilters() {
   cancelSearchWork(editor);resetFilterControls(editor);
   await applyFilters(null,{editor,revision:editor.revision});
 }
+function editReadingDate(event,key,commit=false) {
+  const editor=model.searchEditor;if(!isSearchEditorCurrent(editor))return;
+  const input=event.target;
+  rememberUnfilteredViewport();cancelSearchWork(editor);invalidateReadingIntent();
+  // Native datetime controls emit change for individual year/month segments.
+  // Keep the previous query until blur or Enter, including incomplete empty values.
+  editor.dateEditing=!commit;
+  editor.filters={...editor.filters,[key]:input.validity?.badInput?'incomplete':input.value};
+  const error=editor.filter.querySelector('#reading-filter-error');
+  if(!commit){if(error){error.hidden=true;error.textContent='';}return;}
+  void applyFilters(null,{editor,revision:editor.revision});
+}
 function renderReading() {
   model.renderedReading=null;
   const host=$('workspace-content');
@@ -713,7 +725,7 @@ function renderReading() {
   disposeSearchEditor();
   const search=node('input',{type:'search',id:'message-search',class:'search-input',placeholder:'搜索当前群的消息…',value:model.filters.keyword,'aria-label':'搜索消息'});
   const member=node('div',{id:'member-filter'});
-  const advanced=node('div',{class:'filter-extra',hidden:!model.advanced},field('开始时间 · 北京时间',node('input',{type:'datetime-local',step:60,id:'reading-start',value:model.filters.start,'aria-label':'阅读开始时间（北京时间）',onchange:e=>{void applyFilters({start:e.target.value});}})),field('结束时间 · 含整分钟',node('input',{type:'datetime-local',step:60,id:'reading-end',value:model.filters.end,'aria-label':'阅读结束时间（北京时间）',onchange:e=>{void applyFilters({end:e.target.value});}})),node('div',{class:'filter-check'},check('只看重点成员',model.filters.importantOnly,v=>{void applyFilters({importantOnly:v});},{id:'important-filter'})));
+  const advanced=node('div',{class:'filter-extra',hidden:!model.advanced},field('开始时间 · 北京时间',node('input',{type:'datetime-local',step:60,id:'reading-start',value:model.filters.start,'aria-label':'阅读开始时间（北京时间）',oninput:e=>editReadingDate(e,'start'),onchange:e=>editReadingDate(e,'start'),onblur:e=>editReadingDate(e,'start',true),onkeydown:e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();editReadingDate(e,'start',true);}}})),field('结束时间 · 含整分钟',node('input',{type:'datetime-local',step:60,id:'reading-end',value:model.filters.end,'aria-label':'阅读结束时间（北京时间）',oninput:e=>editReadingDate(e,'end'),onchange:e=>editReadingDate(e,'end'),onblur:e=>editReadingDate(e,'end',true),onkeydown:e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();editReadingDate(e,'end',true);}}})),node('div',{class:'filter-check'},check('只看重点成员',model.filters.importantOnly,v=>{void applyFilters({importantOnly:v});},{id:'important-filter'})));
   filter=node('div',{class:'filter-area',id:'reading-filters'},node('div',{class:'filter-row'},node('div',{class:'search-wrap'},node('span',{class:'search-symbol','aria-hidden':'true'},'⌕'),search),member,button(model.advanced?'收起筛选':'更多筛选',()=>{model.advanced=!model.advanced;advanced.hidden=!model.advanced;const btn=$('filter-toggle');btn.textContent=model.advanced?'收起筛选':'更多筛选';},'text small',{id:'filter-toggle'})),advanced,node('p',{id:'reading-filter-error',class:'filter-error',role:'alert',hidden:true}));
   const editor=bindSearchEditor(search,filter);
   editor.memberPicker=filters.createMemberPicker({container:member,members:model.members,selectedIds:model.filters.senderIds,onChange:ids=>{if(isSearchEditorCurrent(editor))void applyFilters({senderIds:ids});},onInteraction:active=>{if(active)invalidateReadingIntent();else scheduleReadingRefresh();}});
@@ -1264,7 +1276,7 @@ async function pollUpdates() {
       document.querySelectorAll('#message-scroll .message-content,#message-scroll .system-notice-preview,.bookmark-card,.summary-document,.summary-list-card,#inspector .quote-preview').forEach(element=>element.classList.add('content-stale'));
       model.messageSignatures.clear();window.getSelection()?.removeAllRanges();
       if($('modal').open&&$('modal').dataset.contentSensitive==='true')closeModal();
-      toast('消息状态已更新，相关内容预览已失效。');
+      toast('消息状态已更新。');
     }
     model.syncStatus=status;if(readingBusy())queueReadingRefresh();else renderSyncStatus();
     if(changed){

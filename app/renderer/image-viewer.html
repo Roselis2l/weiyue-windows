@@ -18,6 +18,7 @@
     </div>
   </header>
   <main id="viewport" tabindex="0" aria-label="原图，滚轮缩放，拖动平移，Esc 关闭">
+    <p id="image-warning" role="status" hidden></p>
     <img id="image" alt="" hidden draggable="false">
     <div id="status-panel"><p id="status" role="status" aria-live="polite">正在加载原图…</p><button id="retry" hidden>重新加载</button></div>
   </main>
@@ -29,6 +30,7 @@
       <button id="fit" disabled>适应窗口</button>
       <button id="actual" disabled>原始大小</button>
     </div>
+    <button id="previous-image" disabled aria-label="上一张图片">上一张</button><output id="image-position"></output><button id="next-image" disabled aria-label="下一张图片">下一张</button>
     <span id="image-info" class="image-info">滚轮缩放 · 拖动平移 · Esc 关闭</span>
     <button id="save" class="primary" disabled>另存为…</button>
   </footer>

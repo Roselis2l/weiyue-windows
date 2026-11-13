@@ -64,23 +64,28 @@ if (typeof window === 'object' && typeof document === 'object') {
   }
   async function load(retry = false) {
     const epoch = ++loadEpoch;
+    $('previous-image').disabled=true;$('next-image').disabled=true;$('image-warning').hidden=true;
     image.hidden = true; imageData = null; state = null; dragging = null;
     viewport.classList.remove('pannable', 'dragging');
     controls.forEach(button => { button.disabled = true; });
     panel.hidden = false; status.textContent = '正在加载原图…'; $('retry').hidden = true;
     try {
-      const data = await window.imageViewer.call(retry ? 'retry' : 'load');
+      const data = await window.imageViewer.call(typeof retry==='string'?retry:retry ? 'retry' : 'load');
       if (epoch !== loadEpoch) return;
       if (!/^data:image\/(?:jpeg|png|gif|webp);base64,[A-Za-z0-9+/]+=*$/.test(data.dataUrl || '')) throw new Error('图片内容或格式不受支持。');
       $('image-title').textContent = data.title; $('image-caption').textContent = data.caption;
       image.alt = data.title;
+      $('image-warning').textContent=data.staticGif?'GIF 地址返回的是静态 JPEG；当前只能保存静态图，未恢复原动画。':'';
+      $('image-warning').hidden=!data.staticGif;
       image.onload = () => {
         if (epoch !== loadEpoch) return;
         if (!image.naturalWidth || !image.naturalHeight) { error('图片解码失败，请重新加载。'); return; }
         imageData = data; image.hidden = false; panel.hidden = true;
         controls.forEach(button => { button.disabled = false; });
         $('save').disabled = saving;
-        $('image-info').textContent = `${image.naturalWidth} × ${image.naturalHeight} · ${(data.byteLength / 1024 / 1024).toFixed(2)} MB · 滚轮缩放 / 拖动平移`;
+        $('previous-image').disabled=saving||!(data.index>0);$('next-image').disabled=saving||!(data.index+1<data.total);
+        $('image-position').textContent=data.total>1?`${data.index+1} / ${data.total}`:'';
+        $('image-info').textContent = `${image.naturalWidth} × ${image.naturalHeight} · ${(data.byteLength / 1024 / 1024).toFixed(2)} MB · ${(data.originalMime||data.mime).replace('image/','').toUpperCase()}${data.staticGif?' · GIF 地址返回静态 JPEG，动画不可用':''} · 滚轮缩放 / 拖动平移`;
         fit(); viewport.focus();
       };
       image.onerror = () => { if (epoch === loadEpoch) error('图片无法解码或格式不受支持，请重新加载或在微博官方页面查看。'); };
@@ -92,6 +97,8 @@ if (typeof window === 'object' && typeof document === 'object') {
   $('minimize').addEventListener('click', () => action('minimize'));
   $('maximize').addEventListener('click', () => action('maximize'));
   $('retry').addEventListener('click', () => load(true));
+  $('previous-image').addEventListener('click',()=>load('previous'));
+  $('next-image').addEventListener('click',()=>load('next'));
   $('fit').addEventListener('click', fit);
   $('actual').addEventListener('click', () => zoom(1));
   $('zoom-in').addEventListener('click', () => { if (state) zoom(state.scale * 1.25); });
@@ -127,6 +134,7 @@ if (typeof window === 'object' && typeof document === 'object') {
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); action('close'); return; }
     if (!state || event.ctrlKey || event.metaKey || event.altKey) return;
+    if(!event.shiftKey&&['ArrowLeft','ArrowRight'].includes(event.key)&&imageData?.total>1){event.preventDefault();const target=event.key==='ArrowLeft'?'previous-image':'next-image';if(!$(target).disabled)void load(event.key==='ArrowLeft'?'previous':'next');return;}
     if (event.key === '+' || event.key === '=') { event.preventDefault(); zoom(state.scale * 1.25); }
     else if (event.key === '-') { event.preventDefault(); zoom(state.scale / 1.25); }
     else if (event.key === '0') { event.preventDefault(); fit(); }
@@ -139,13 +147,13 @@ if (typeof window === 'object' && typeof document === 'object') {
   });
   $('save').addEventListener('click', async () => {
     if (saving || !imageData) return;
-    saving = true; $('save').disabled = true; $('save').textContent = '选择保存位置…';
+    saving = true; $('previous-image').disabled=true;$('next-image').disabled=true; $('save').disabled = true; $('save').textContent = '选择保存位置…';
     try {
       const result = await window.imageViewer.call('save');
       if (result.canceled) notify('已取消，未保存图片。');
       else if (result.saved) notify(`已保存原图：${result.name}`);
     } catch (err) { notify(err.message || '图片保存失败。'); }
-    finally { saving = false; $('save').disabled = !imageData; $('save').textContent = '另存为…'; }
+    finally { saving = false; $('previous-image').disabled=!(imageData?.index>0);$('next-image').disabled=!(imageData?.index+1<imageData?.total); $('save').disabled = !imageData; $('save').textContent = '另存为…'; }
   });
   load();
 }
