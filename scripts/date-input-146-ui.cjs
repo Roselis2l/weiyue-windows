@@ -1,0 +1,24 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict');
+const {_electron}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const {packagedInput,validatePackaged,closePackaged,verifyPackaged}=require('./lib/packaged-ui-support.cjs');
+const root=path.resolve(__dirname,'..'),packed=packagedInput(),appRoot=packed?.appSource||path.join(root,'app');
+const exe=packed?.executablePath||path.join(root,'vendor/runtime/electron.exe');
+const temp=fs.mkdtempSync(path.join(os.tmpdir(),'weiyue-date146-')),data=path.join(temp,'data');
+const out=path.join(root,'artifacts','date-146-'+(packed?'packaged-':'source-')+Date.now());fs.mkdirSync(out,{recursive:true});
+const {Store}=require(path.join(appRoot,'core/store.cjs')),store=new Store(path.join(data,'accounts'));
+store.ensureAccount({id:'synthetic-date146',kind:'import',name:'Synthetic date test'});
+store.mergeMessages('synthetic-date146',[{id:'g',name:'Synthetic dates',selected:true}],[11,12,13].map(day=>({id:String(day),groupId:'g',senderId:'s',senderName:'Synthetic',time:Date.parse('2026-11-'+day+'T12:00:00+08:00'),text:'Synthetic '+day})),{history:true});
+store.update('synthetic-date146',s=>s.settings.autoSyncEnabled=false);fs.writeFileSync(path.join(data,'preferences.json'),JSON.stringify({activeId:'synthetic-date146'}));
+(async()=>{let app;const checks=[],errors=[];try{const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+ app=await _electron.launch({executablePath:exe,args:packed?['--data-dir='+data]:[root,'--data-dir='+data],env});if(packed)await validatePackaged(app,packed,data);
+ const page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));await page.waitForSelector('article[data-message-id]');
+ await page.locator('#filter-toggle').click();const start=page.locator('#reading-start'),end=page.locator('#reading-end'),rows=page.locator('article[data-message-id]');
+ await start.fill('0002-11-12T00:00');await page.waitForTimeout(700);assert.equal(await rows.count(),3);assert.equal(await page.locator('#reading-filter-error').isVisible(),false);assert(await start.evaluate(e=>document.activeElement===e));checks.push('Segmented year stays a draft without invalid timestamp request');
+ await start.fill('2026-11-12T00:00');await page.locator('#message-search').click();await page.waitForFunction(()=>document.querySelectorAll('article[data-message-id]').length===2);checks.push('Blur commits final date and applies bounded range');
+ await end.fill('2026-11-11T23:59');await page.locator('#message-search').click();await page.waitForSelector('#reading-filter-error:visible');assert.equal(await rows.count(),2);checks.push('Invalid completed range reports inline and preserves previous results');
+ await end.fill('2026-11-12T23:59');await end.press('Enter');await page.waitForFunction(()=>document.querySelectorAll('article[data-message-id]').length===1);assert.equal(await rows.first().getAttribute('data-message-id'),'12');checks.push('Enter corrects range without focus loss or duplicate results');
+ await page.screenshot({path:path.join(out,'synthetic-date.png')});assert.deepEqual(errors,[]);
+ await closePackaged(app);app=null;const unchanged=verifyPackaged(packed);if(unchanged){assert(unchanged.programUnchanged);assert(unchanged.installDataUnchanged);}
+ fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({passed:true,checks,errors,unchanged},null,2));console.log(JSON.stringify({passed:true,checks:checks.length,out}));
+ }finally{if(app)await app.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

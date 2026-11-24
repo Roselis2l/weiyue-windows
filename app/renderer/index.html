@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' app://media app://avatar data:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>微阅</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="message-cleanup.css">
+  <link rel="stylesheet" href="interface-theme.css">
+  <link rel="stylesheet" href="layout-controls.css">
+  <script src="reading-state.js" defer></script>
+  <script src="drag-scroll.js" defer></script>
+  <script src="auto-page.js" defer></script>
+  <script src="filter-controls.js" defer></script>
+  <script src="sync-status.js" defer></script>
+  <script src="linkify.js" defer></script>
+  <script src="emoticon-manifest.js" defer></script>
+  <script src="emoticons.js" defer></script>
+  <script src="message-references.js" defer></script>
+  <script src="cleanup-progress.js" defer></script>
+  <script src="message-cleanup.js" defer></script>
+  <script src="appearance.js" defer></script>
+  <script src="interface-theme.js" defer></script>
+  <script src="appearance-settings.js" defer></script>
+  <script src="layout-controls.js" defer></script>
+  <script src="startup-toggle.js" defer></script>
+  <script src="browser-settings.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <aside id="sidebar" class="sidebar" aria-label="工作区与群聊">
+      <div id="account-area" class="account-area"></div>
+      <nav id="navigation" class="navigation" aria-label="主导航"></nav>
+      <div class="sidebar-section-heading"><span>我的群聊</span><button id="manage-groups" class="icon-button" title="选择同步群聊" aria-label="选择同步群聊">＋</button></div>
+      <div id="group-list" class="group-list"></div>
+      <div class="sidebar-bottom"><button id="settings-button" class="settings-button">⚙<span>设置与连接</span><span class="trailing">↗</span></button></div>
+    </aside>
+    <main id="workspace" class="workspace" aria-label="群聊阅读工作台">
+      <div class="layout-toolbar" role="group" aria-label="阅读栏位布局">
+        <button id="toggle-left-panel" class="layout-toggle" type="button" aria-controls="sidebar" aria-expanded="true" title="收起左栏" aria-label="收起左栏">&lt;</button>
+        <div id="layout-sync-controls" class="layout-sync-controls"></div>
+        <button id="toggle-right-panel" class="layout-toggle" type="button" aria-controls="inspector" aria-expanded="true" title="收起右栏" aria-label="收起右栏">&gt;</button>
+      </div>
+      <header id="workspace-header" class="workspace-header"></header>
+      <section id="cleanup-progress" class="cleanup-progress" role="status" aria-live="polite" aria-atomic="true" hidden></section>
+      <div id="workspace-content" class="workspace-content"></div>
+    </main>
+    <aside id="inspector" class="inspector" aria-label="收藏与摘要工具"></aside>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="modal" class="modal" aria-labelledby="modal-title"></dialog>
+</body>
+</html>

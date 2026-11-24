@@ -1,0 +1,112 @@
+name: emscripten
+
+on:
+  push:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  emscripten:
+    strategy:
+      matrix:
+        target: [js, wasm]
+    env:
+      EMSCRIPTEN_VERSION: 3.1.61
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+    - name: Install typescript
+      run: npm install -g typescript@5
+    - name: Install emscripten
+      working-directory: libheif
+      run: |
+        ./scripts/install-ci-linux.sh
+    - name: Prepare CI
+      working-directory: libheif
+      run: |
+        ./scripts/prepare-ci.sh
+    - name: Run build and tests (JS)
+      if: ${{ matrix.target=='js' }}
+      working-directory: libheif
+      run: |
+        sed -e 's/USE_WASM=0/USE_WASM=0 USE_UNSAFE_EVAL=0/g' -e 's/USE_TYPESCRIPT=0/USE_TYPESCRIPT=1/g' ./scripts/run-ci.sh > ./scripts/run-ci-js.sh
+        chmod +x ./scripts/run-ci-js.sh
+        ./scripts/run-ci-js.sh
+        ls -la
+    - name: Run build and tests (WASM)
+      if: ${{ matrix.target=='wasm' }}
+      working-directory: libheif
+      run: |
+        sed -e 's/USE_WASM=0/USE_WASM=1 USE_UNSAFE_EVAL=0/g' -e 's/USE_TYPESCRIPT=0/USE_TYPESCRIPT=1/g' ./scripts/run-ci.sh > ./scripts/run-ci-wasm.sh
+        chmod +x ./scripts/run-ci-wasm.sh
+        ./scripts/run-ci-wasm.sh
+        ls -la
+    - name: Dist prep
+      run: ./dist-prep.sh ${{ matrix.target }}
+    - name: Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.target }}
+        path: dist
+  release:
+    runs-on: ubuntu-22.04
+    needs: [emscripten]
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./
+    - name: Arrange artifacts
+      run: |
+        mv js libheif
+        mv wasm libheif-wasm
+        touch libheif.tar.gz
+        tar -czf libheif.tar.gz libheif libheif-wasm
+        ls -lR
+    - name: Publish grouped artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: libheif-dist
+        path: '.'
+    - name: Release
+      if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'pull_request'
+      uses: actions/github-script@v2
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const fs = require('fs').promises;
+          const path = require('path');
+          console.log('environment', process.versions);
+          
+          const { repo: { owner, repo }, sha, ref } = context;
+          console.log({ owner, repo, sha, ref });
+          
+          const name = ref.replace('refs/tags/', '');
+          const release = await github.repos.createRelease({
+            owner, repo, name,
+            tag_name: name,
+            draft: true,
+            target_commitish: sha
+          });
+
+          console.log('created release', { release });
+          
+          for (let file of [
+            './libheif.tar.gz',
+            './libheif/libheif.js',
+            './libheif/LICENSE'
+          ]) {
+            console.log('uploading', file);
+            await github.repos.uploadReleaseAsset({
+              owner, repo,
+              release_id: release.data.id,
+              name: path.basename(file),
+              data: await fs.readFile(file)
+            });
+          }

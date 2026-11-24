@@ -1,0 +1,79 @@
+# 1.1.48 source validation
+
+The core suite passed 1515/1515 checks in each edition, including manual long-HEVC admission, memory refusal, no-queue policy, cancellation, output progress/metadata and local retry. Final packaged-EXE playback results are recorded separately in the delivery report; source tests alone do not prove playback.
+
+# 1.1.47 candidate validation
+
+The final source core suite passed 1496/1496 checks. The new HEVC boundary cases include size, declared/sample duration, dimensions, frames, unknown formats and unchanged conversion admission. Final packaged-EXE acceptance and SHA256 values are recorded in the separate delivery report; building alone does not assert those passed.
+
+# 测试与构建
+
+## 1.1.46 验证
+
+- 核心回归：1491 项通过；图片真实 Electron 专项 17 项通过，外部请求为 0。
+- DOCX 正文与原字节保存：隔离 Electron 合成文档流程 14 项通过，无外部网络请求。
+- 日期分段输入、失焦提交、无效范围与回车修正：隔离界面 4 项通过。
+- 图片导航、静态 GIF 提示及附件失效窗口行为使用合成数据验证；真实服务仍受账号权限和返回内容限制。
+
+## 1.1.45 验证
+
+- 核心回归：1468 项通过，包含 8 项离线补扫进度专项测试。
+- 覆盖日期补扫、最新页检查、重复页、真实截止完成、空页未完成、过期/停用状态和阻塞提示。
+
+
+## 1.1.44 验证
+
+- 公共核心回归：1460 项通过。私有账号修复脚本及其专用测试不包含在公开发行材料中。
+- 隔离合成账号 UI：双向连续分页、640 卡片窗口、锚点保持、未读保护、筛选尾页、日期焦点与浏览器选择通过。Windows 便携包启动单独验证。
+
+
+## 1.1.41 验证
+
+- 核心测试：1422/1422 通过。
+- 隔离 Electron 界面检查：7/7 通过，涵盖完整未读数、恢复阅读、程序滚动保护、分群阅读、同步新消息、切群与重启、显式标记已读。
+- 测试使用合成数据。
+
+## 核心测试
+
+使用 Node.js 22+，在源码目录运行：
+
+```powershell
+.\scripts\test.ps1
+```
+
+1.1.40 核心测试：1416/1416 通过；侧栏合成数据 UI 验证：5/5 通过。这些结果不代表外部服务或全部窗口场景均已验收。
+
+1.1.40 重点复验：
+
+- 图片链接签名更新后保持去重，保留最新下载地址与图片信息；不同图片、路径和其他参数不误合并。
+- 消息、分享微博和引用内容的旧重复图片可正常合并；连续 150 次模拟签名刷新不累积重复图片。
+- 真正超过 100 张图片时拒绝本次保存并保留原有数据；图片超限、本地失败和网络失败的提示可区分。
+- 侧栏按本地最新消息时间显示；阅读进度不改变时间，清理、重启与同步后保持正确，空群显示“暂无消息”。
+
+1.1.39 功能回归检查项：
+
+- 自动清理默认关闭、1–3650 天边界、北京时间自然日截止点、账号与群隔离。
+- 预览确认、取消与过期、修改策略后重新确认、关闭策略，以及未读、收藏、摘要完整时段与可追溯导出引用保护。
+- 空闲调度、同群一小时间隔、失败退避、并发互斥、退出等待，以及删除起点和续扫边界联动。
+- 设置页开机自启动即时保存、失败回退、防重复切换、重开窗口读取、系统禁用状态及程序路径变更。
+- 历史状态提示保留起点和待补缺口，重新获取任务状态仍可区分。
+
+既有功能回归：
+
+- 前缀删除推进群起点，中段删除不推进；续扫、导入、模式切换及并发响应尊重删除范围。
+- 未读选择、阅读位置重定位、关联保护、预览取消与失效确认、格式5重启和重新获取时段。
+- MOV/MP4真实容器识别、HEVC 100 MiB／60秒边界、取消与重试。
+- 开机启动默认关闭，关闭设置窗口不撤销已经保存的开关。
+- 工具栏、左右栏、键盘与鼠标分页、主题、收藏摘要、附件及账号隔离。
+
+删除和重新获取使用隔离合成数据。实际EXE测试需核对版本、GitHub版标识、源码哈希及sandbox、contextIsolation、webSecurity，并分别记录核心测试、窗口验收和外部服务测试结果。
+
+## 构建
+
+将核验过的Electron 44.9.0 Windows x64归档及其SHASUMS256.txt放入干净副本的vendor目录：
+
+```powershell
+.\scripts\package.ps1 -ElectronVersion 44.9.0 -OutputDirectory dist-1.1.40-github
+```
+
+产物核验包括源码与便携文件哈希、公开版撤回显示行为、第三方许可及对应源码。账号数据、凭据、真实媒体、私有诊断和备份不得进入发行材料。

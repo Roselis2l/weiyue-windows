@@ -1,0 +1,27 @@
+{
+  "url": "https://registry.npmjs.org/libheif-js/-/libheif-js-1.23.5.tgz",
+  "integrity": "sha512-umXZPthnWZtF3iG/5mQG+AZ2V6i0UeYpo3z2CkggTEgL8dKmIIwJT6TDuAMuabXa1yTW8uJ1ZAgR+CxNTklYYw==",
+  "tarSha256": "d0bfe7198bd624c524cef8ccf78e15ceb42683c87598c64c2e13ced0d8680932",
+  "files": [
+    {
+      "name": "LICENSE",
+      "bytes": 7652,
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+    },
+    {
+      "name": "libheif-bundle.js",
+      "bytes": 2044206,
+      "sha256": "074b2b55ef3de477ba9f794ca381f3f0324c1cba8c91b4af07395f39c22d54cc"
+    },
+    {
+      "name": "package.json",
+      "bytes": 1470,
+      "sha256": "a1cf01c3130e5ee02546c26e33d7ab930b3c9c03192f3a52385bac7ccbf5adc3"
+    },
+    {
+      "name": "README.md",
+      "bytes": 4922,
+      "sha256": "266d7f7ce755d45186464af41d0bd2954dcd36a58506525f2601ee35fb3497f5"
+    }
+  ]
+}

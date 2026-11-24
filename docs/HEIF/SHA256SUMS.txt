@@ -1,0 +1,13 @@
+db9c0c25b15c5c351ac5b045b01009cc446f5712091300656902f9e40a2934db  sources/libheif-js-1.23.5-d8ec4bc.tar.gz
+5e524ec5746bb0676c5865c9ce76d40cee871def4a9d437d0a96595830cd235a  sources/libheif-emscripten-v1.23.5-5c8968a.tar.gz
+ef8e86a4e5670b7338a58b17553e306b8be88e506587b265dfdfe44495896999  sources/libheif-1.23.5-413e2a8.tar.gz
+00251986c29d34d3af7117ed05874950c875dd9292d016be29d3b3762666511d  sources/libde265-1.0.15.tar.gz
+e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118  licenses/LICENSE-libheif-js-LGPL-3.0.txt
+fa81ce652315b013359d6e8e4744335f31a50c7c192907176d3632f78a3b4596  licenses/COPYING-libheif-LGPL-3.0-GPL-3.0-MIT.txt
+02cc1585a20677992e0ba578fa692635dc193735f2691dc81de924b51c4e8020  licenses/COPYING-libde265.txt
+a11b09520bf0af55dd522cfe81d3b1cb556e19ca0e87b0fd923f637d8ed40fe7  build-materials/emscripten.yml
+73cc977340ecbdb25ea1f4c4f4883757da837df68a6f48e2d9cd3f2bf71cf6dd  build-materials/dist-prep.sh
+30bb603cea13ecb9fe05883f16b85a3d22e9b418fe6b961e89042ef80a536087  build-materials/build-emscripten.sh
+544a3fe9fc953294f3db075f6258dc57e2bc4ed6a513e7c3ecd15ef66ce5d37d  build-materials/install.js
+8a689c0ac9c9ba26a003a19c72bf64652b8d8dcb6a60df057f7e093a58bee89a  build-materials/bundle.js
+620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86  licenses/LICENSE-Emscripten-3.1.61.txt

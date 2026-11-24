@@ -1,0 +1,8 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const src=fs.readFileSync(require.resolve('../app/main.cjs'),'utf8');
+const code=src.slice(src.indexOf('function imageGalleryContext('),src.indexOf('function attachmentRecord('));
+const token='a'.repeat(32),base='app://media/'+token+'/group/id/';
+function fixture(){const images=[{url:'https://wx1.sinaimg.cn/large/a.jpg'},{url:'https://wx1.sinaimg.cn/large/b.gif'}];const message={groupId:'group',id:'id',images,sharedPost:{images},references:[{images}]};const context={URL,activeId:'account',store:{getVisibleSnapshot:()=>({messages:[message]})},mediaToken:()=>token,safeImageUrl:require('../app/core/media.cjs').safeImageUrl};vm.createContext(context);vm.runInContext(code,context);return {message,read:context.imageGalleryContext};}
+test('main resolves only current visible original image siblings in each explicit scope',()=>{const f=fixture();for(const scope of ['message','post','reference-0']){const result=f.read(base+scope+'/0/original');assert.deepEqual(Array.from(result.sources),[base+scope+'/0/original',base+scope+'/1/original']);}assert.throws(()=>f.read(base+'message/2/original'));assert.throws(()=>f.read(base.replace(token,'b'.repeat(32))+'message/0/original'));f.message.localDeletion=true;assert.throws(()=>f.read(base+'message/0/original'));});
+test('main identity changes with withdrawal or descriptor replacement',()=>{const f=fixture(),source=base+'message/0/original',identity=f.read(source).identity;f.message.recall={originalAvailable:false};assert.notEqual(f.read(source).identity,identity);f.message.images=[];assert.throws(()=>f.read(source));});

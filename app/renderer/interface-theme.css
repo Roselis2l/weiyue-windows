@@ -1,0 +1,34 @@
+/* Application chrome only. Independent message appearance variables remain intact. */
+body[data-interface-theme]{--green:var(--ui-accent);--text:var(--ui-text);--line:var(--ui-line);--muted:var(--ui-muted);background:var(--ui-shell);color:var(--ui-text)}
+body[data-interface-theme] :is(.sidebar,.inspector,.modal,.modal-footer):not(:where(.message *, .bookmark-message *, .appearance-preview *)){background:var(--ui-panel);border-color:var(--ui-line)}
+body[data-interface-theme] :is(.workspace,.workspace-header,.filter-area,.view-toolbar,.reading-footer,.bookmark-selection-toolbar,.selection-bar,.tool-card,.bookmark-card,.summary-list-card,.toast,.preview-blocks):not(:where(.message *, .bookmark-message *, .appearance-preview *)){background:var(--ui-surface);border-color:var(--ui-line)}
+body[data-interface-theme] :is(.brand-name,.header-title-row h1,.tool-card-heading,.form-section h3,.modal-head h2,.empty-state h2,.document-title,.summary-list-card h3,.card-group,.preview-stat strong):not(:where(.message *, .bookmark-message *, .appearance-preview *)){color:var(--ui-accent)}
+body[data-interface-theme] :is(.sidebar-section-heading,.sidebar-bottom,.sidebar-bottom p,.group-meta,.nav-count,.account-meta small,.local-status,.settings-button,.group-name,.group-last-message,.group-choice-copy,.navigation,.header-subtitle,.read-meta,.pagination,.new-messages-notice,.sync-status-line,.sync-gap-line,.field>label,.field-label,.filter-check,.tool-card p,.muted-copy,.caption,.form-description,.inline-help,.source-note,.session-strip,.connection-status,.login-step p,.loading-state,.empty-state p,.empty-sidebar,.document-meta,.document-overline,.summary-excerpt,.bookmark-note,.summary-body,.card-meta,.quote-preview,.reference-copy p,.reference-copy small,.group-choice-copy small,.preview-stat span,.welcome-steps,.appearance-status):not(:where(.message *, .bookmark-message *, .appearance-preview *)){color:var(--ui-muted)}
+body[data-interface-theme] :is(.button,.icon-button,.chip,.group-choice-copy,.settings-button,.navigation button,.group-item,.account-select,.filter-input,.filter-select):not(:where(.message *, .bookmark-message *, .appearance-preview *)){color:var(--ui-text)}
+body[data-interface-theme] :is(input:not([type=color]):not([type=checkbox]):not([type=radio]),select,textarea):not(:where(.message *, .bookmark-message *, .appearance-preview *)){background:var(--ui-surface);color:var(--ui-text);border-color:var(--ui-line);accent-color:var(--ui-accent)}
+body[data-interface-theme] :is(input,textarea)::placeholder{color:var(--ui-muted);opacity:1}
+body[data-interface-theme] :is(.navigation button:hover,.group-item:hover,.settings-button:hover,.icon-button:hover,.chip:hover,.button:hover,.reference-item:hover):not(:where(.message *, .bookmark-message *, .appearance-preview *)){background:var(--ui-hover);color:var(--ui-accent)}
+body[data-interface-theme] :is(.navigation button.active,.group-item.active,.group-item.selected,.button.active):not(:where(.message *, .bookmark-message *, .appearance-preview *)){background:var(--ui-selected);color:var(--ui-accent);border-color:var(--ui-line)}
+body[data-interface-theme] :is(.button.primary,.button.primary:hover):not(:where(.message *, .bookmark-message *, .appearance-preview *)){background:var(--ui-accent);border-color:var(--ui-accent);color:var(--ui-accent-text)}
+body[data-interface-theme] :is(.source-note,.session-strip,.empty-icon,.step-number,.welcome-label,.tag,.live-badge):not(:where(.message *, .bookmark-message *, .appearance-preview *)){background:var(--ui-hover);color:var(--ui-accent);border-color:var(--ui-line)}
+body[data-interface-theme] .status-dot{background:var(--ui-accent)}
+body[data-interface-theme] :is(.sidebar-bottom,.sidebar-section-heading,.inspector-divider,.filter-extra,.modal-head,.modal-footer,.form-section):not(:where(.message *, .bookmark-message *, .appearance-preview *)){border-color:var(--ui-line)}
+body[data-interface-theme] :is(.summary-delete:hover,.button.danger,.button.danger:hover,.error-note,.toast.error,.danger-hint,.sync-status-line.has-error,.sync-gap-line.has-error):not(:where(.message *, .bookmark-message *, .appearance-preview *)){color:var(--danger)}
+/* Safety/severity and message/media semantics have their own colors. */
+
+
+.interface-theme-section{margin-bottom:22px;padding-bottom:20px;border-bottom:1px solid var(--line)}
+.interface-theme-section h3{font-size:14px;margin-bottom:8px;color:var(--ui-accent,var(--green))}
+.interface-theme-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}
+.interface-theme-option{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:7px;padding:9px 10px;cursor:pointer;font-size:12px;min-width:0}
+.interface-theme-option:has(input:checked){outline:2px solid var(--ui-accent,var(--green));outline-offset:1px}
+.interface-theme-option:focus-within{outline:3px solid var(--ui-accent,var(--green));outline-offset:2px}
+.interface-theme-swatch{width:18px;height:18px;border:1px solid #6d7280;border-radius:50%;flex:none;background:var(--ui-shell)}
+.interface-theme-preview{display:grid;grid-template-columns:80px minmax(0,1fr);border:1px solid var(--ui-line);border-radius:8px;overflow:hidden;background:var(--ui-surface);color:var(--ui-text);min-height:94px;font-size:12px}
+.interface-theme-preview aside{padding:12px 9px;background:var(--ui-panel);color:var(--ui-accent);font-weight:600;border-right:1px solid var(--ui-line)}
+.interface-theme-preview section{padding:10px 13px;min-width:0}
+.interface-theme-preview strong{color:var(--ui-accent);display:block;margin-bottom:7px}
+.interface-theme-preview p{color:var(--ui-muted);line-height:1.6}
+.interface-theme-preview span{display:inline-block;background:var(--ui-accent);color:var(--ui-accent-text);padding:3px 8px;border-radius:4px;margin-top:7px}
+.interface-theme-reset{margin-top:9px}
+@media(max-width:600px){.interface-theme-options{grid-template-columns:1fr}}

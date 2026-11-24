@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "fetchedAt": "2026-10-20T14:27:54.921Z",
+  "note": "Official source/license artifacts; upstream build scripts are supplied as source and were not executed.",
+  "files": [
+    {
+      "path": "sources/libheif-js-1.23.5-d8ec4bc.tar.gz",
+      "component": "libheif-js",
+      "version": "1.23.5",
+      "commit": "d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d",
+      "source": "https://codeload.github.com/catdad-experiments/libheif-js/tar.gz/d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d",
+      "bytes": 10267,
+      "sha256": "db9c0c25b15c5c351ac5b045b01009cc446f5712091300656902f9e40a2934db"
+    },
+    {
+      "path": "sources/libheif-emscripten-v1.23.5-5c8968a.tar.gz",
+      "component": "libheif-emscripten",
+      "version": "v1.23.5",
+      "commit": "5c8968a44e9c68ae677e24790d77d001ed7fe7cc",
+      "source": "https://codeload.github.com/catdad-experiments/libheif-emscripten/tar.gz/5c8968a44e9c68ae677e24790d77d001ed7fe7cc",
+      "bytes": 3122,
+      "sha256": "5e524ec5746bb0676c5865c9ce76d40cee871def4a9d437d0a96595830cd235a"
+    },
+    {
+      "path": "sources/libheif-1.23.5-413e2a8.tar.gz",
+      "component": "libheif",
+      "version": "1.23.5",
+      "commit": "413e2a87e6a70b3eccc3a3adc5801179dd2d9e00",
+      "source": "https://codeload.github.com/strukturag/libheif/tar.gz/413e2a87e6a70b3eccc3a3adc5801179dd2d9e00",
+      "bytes": 2220554,
+      "sha256": "ef8e86a4e5670b7338a58b17553e306b8be88e506587b265dfdfe44495896999"
+    },
+    {
+      "path": "sources/libde265-1.0.15.tar.gz",
+      "component": "libde265",
+      "version": "1.0.15",
+      "commit": null,
+      "source": "https://github.com/strukturag/libde265/releases/download/v1.0.15/libde265-1.0.15.tar.gz",
+      "bytes": 846016,
+      "sha256": "00251986c29d34d3af7117ed05874950c875dd9292d016be29d3b3762666511d"
+    },
+    {
+      "path": "licenses/LICENSE-libheif-js-LGPL-3.0.txt",
+      "component": "libheif-js",
+      "version": "1.23.5",
+      "commit": "d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d",
+      "source": "https://raw.githubusercontent.com/catdad-experiments/libheif-js/d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d/LICENSE",
+      "bytes": 7652,
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+    },
+    {
+      "path": "licenses/COPYING-libheif-LGPL-3.0-GPL-3.0-MIT.txt",
+      "component": "libheif",
+      "version": "1.23.5",
+      "commit": "413e2a87e6a70b3eccc3a3adc5801179dd2d9e00",
+      "source": "https://raw.githubusercontent.com/strukturag/libheif/413e2a87e6a70b3eccc3a3adc5801179dd2d9e00/COPYING",
+      "bytes": 44366,
+      "sha256": "fa81ce652315b013359d6e8e4744335f31a50c7c192907176d3632f78a3b4596"
+    },
+    {
+      "path": "licenses/COPYING-libde265.txt",
+      "component": "libde265",
+      "version": "1.0.15",
+      "commit": null,
+      "source": "https://raw.githubusercontent.com/strukturag/libde265/v1.0.15/COPYING",
+      "bytes": 44339,
+      "sha256": "02cc1585a20677992e0ba578fa692635dc193735f2691dc81de924b51c4e8020"
+    },
+    {
+      "path": "build-materials/emscripten.yml",
+      "component": "libheif-emscripten",
+      "version": "v1.23.5",
+      "commit": "5c8968a44e9c68ae677e24790d77d001ed7fe7cc",
+      "source": "https://raw.githubusercontent.com/catdad-experiments/libheif-emscripten/5c8968a44e9c68ae677e24790d77d001ed7fe7cc/.github/workflows/emscripten.yml",
+      "bytes": 3339,
+      "sha256": "a11b09520bf0af55dd522cfe81d3b1cb556e19ca0e87b0fd923f637d8ed40fe7"
+    },
+    {
+      "path": "build-materials/dist-prep.sh",
+      "component": "libheif-emscripten",
+      "version": "v1.23.5",
+      "commit": "5c8968a44e9c68ae677e24790d77d001ed7fe7cc",
+      "source": "https://raw.githubusercontent.com/catdad-experiments/libheif-emscripten/5c8968a44e9c68ae677e24790d77d001ed7fe7cc/dist-prep.sh",
+      "bytes": 804,
+      "sha256": "73cc977340ecbdb25ea1f4c4f4883757da837df68a6f48e2d9cd3f2bf71cf6dd"
+    },
+    {
+      "path": "build-materials/build-emscripten.sh",
+      "component": "libheif",
+      "version": "1.23.5",
+      "commit": "413e2a87e6a70b3eccc3a3adc5801179dd2d9e00",
+      "source": "https://raw.githubusercontent.com/strukturag/libheif/413e2a87e6a70b3eccc3a3adc5801179dd2d9e00/build-emscripten.sh",
+      "bytes": 6975,
+      "sha256": "30bb603cea13ecb9fe05883f16b85a3d22e9b418fe6b961e89042ef80a536087"
+    },
+    {
+      "path": "build-materials/install.js",
+      "component": "libheif-js",
+      "version": "1.23.5",
+      "commit": "d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d",
+      "source": "https://raw.githubusercontent.com/catdad-experiments/libheif-js/d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d/scripts/install.js",
+      "bytes": 3562,
+      "sha256": "544a3fe9fc953294f3db075f6258dc57e2bc4ed6a513e7c3ecd15ef66ce5d37d"
+    },
+    {
+      "path": "build-materials/bundle.js",
+      "component": "libheif-js",
+      "version": "1.23.5",
+      "commit": "d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d",
+      "source": "https://raw.githubusercontent.com/catdad-experiments/libheif-js/d8ec4bc3bc5bf8055975577bccbbc7e1d7313c2d/scripts/bundle.js",
+      "bytes": 170,
+      "sha256": "8a689c0ac9c9ba26a003a19c72bf64652b8d8dcb6a60df057f7e093a58bee89a"
+    },
+    {
+      "path": "licenses/LICENSE-Emscripten-3.1.61.txt",
+      "component": "Emscripten runtime notices",
+      "version": "3.1.61",
+      "source": "https://raw.githubusercontent.com/emscripten-core/emscripten/3.1.61/LICENSE",
+      "bytes": 5093,
+      "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86"
+    }
+  ]
+}

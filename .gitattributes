@@ -1,0 +1,7 @@
+# Preserve the audited release bytes: Git must not normalize line endings.
+# Application, tests, scripts and packaged source are compared by file hash.
+* -text
+*.png binary
+*.zip binary
+*.gz binary
+*.wasm binary
